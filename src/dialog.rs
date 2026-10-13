@@ -2540,11 +2540,14 @@ impl State {
         // A colour row's hex well, while it is being typed into, has the
         // keyboard ahead of everything — Escape and Enter included, which
         // end the edit rather than the dialog.
-        if let Some(sel) = self.ui_context[self.slots.dialog].editing_color() {
-            let ptr = sel as *mut cce_ui::widget::Adapted<ColorSelector>;
-            unsafe {
-                (*ptr).keyboard_input(event, &mut self.ui_context);
-            }
+        // The selector is the dialog's own, held by value, so the dialog is
+        // lent for the call: the selector and the context are both in hand.
+        if self.ui_context[self.slots.dialog].editing_color().is_some() {
+            self.ui_context.lend_h(self.slots.dialog, |d, ui| {
+                if let Some(sel) = d.editing_color() {
+                    sel.keyboard_input(event, ui);
+                }
+            });
             self.drain_dialog_clicks();
             return true;
         }
@@ -3150,8 +3153,7 @@ impl State {
         if matches!(ev, cce_ui::widget::Event::MouseWheel { .. }) {
             self.ui_context.note_scroll_event();
         }
-        let ptr = self.slots.get_dyn_mut(&mut self.ui_context, idx) as *mut (dyn cce_ui::widget::WidgetHost + 'static);
-        let taken = unsafe { (*ptr).handle_event(ev, &mut self.ui_context) };
+        let taken = self.deliver_to_slot(idx, ev);
         self.ui_context[self.slots.dialog].set_occluding(true);
         self.ui_context.invalidate_coverage_cache();
         taken

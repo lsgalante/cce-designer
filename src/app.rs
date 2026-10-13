@@ -1880,12 +1880,40 @@ impl State {
                 };
             let (tx, ty) = if inside { (cx, cy) } else { (-9999.0, -9999.0) };
             let mv = cce_ui::widget::Event::PointerMove { x: tx, y: ty, local_x: tx, local_y: ty };
-            let ptr = self.slots.get_dyn_mut(&mut self.ui_context, i) as *mut (dyn WidgetHost + 'static);
-            if unsafe { (*ptr).handle_event(&mv, &mut self.ui_context) } {
+            if self.deliver_to_slot(i, &mv) {
                 changed = true;
             }
         }
         changed
+    }
+
+    /// Hand `ev` to slot `idx`'s widget, lent out of the context for the
+    /// call (`UiContext::lend`), and return whether it took it. Every
+    /// dispatch the app makes into a slot comes through here, as every one
+    /// the context makes comes through `lend`: while the widget is out
+    /// nothing in the context resolves it, so whatever it does with the
+    /// context mid-event cannot reach it a second time. (These were raw
+    /// `*mut dyn WidgetHost` casts until 2026-10-12, which held the widget
+    /// and the context mutably at once.)
+    ///
+    /// Two things differ from a direct call, and neither is visible:
+    ///
+    /// - The slot is not marked dirty here. `UiContext::deliver` does that;
+    ///   the app's own `changed` answer is what asks for a frame.
+    /// - The coverage memo (`is_coordinate_covered`) is built from the
+    ///   widgets the context can see, which leaves out one that is lent. A
+    ///   query made during the lend therefore leaves this slot's popover
+    ///   out, and the memo would serve that answer to the next query at the
+    ///   same point — the next slot of `broadcast_pointer`, which hands
+    ///   them all one point. So a slot that has a popover drops the memo
+    ///   when it comes back.
+    pub(crate) fn deliver_to_slot(&mut self, idx: usize, ev: &cce_ui::widget::Event) -> bool {
+        let taken = self.ui_context.lend(self.slots.id(idx), |w, ui| w.handle_event(ev, ui));
+        debug_assert!(taken.is_some(), "slot {idx} is not in the context, or is already lent");
+        if self.slots.get_dyn(&self.ui_context, idx).popover_rect().is_some() {
+            self.ui_context.invalidate_coverage_cache();
+        }
+        taken.unwrap_or(false)
     }
 
     /// Slide the camera across its own view by a pointer delta, in logical
@@ -8697,8 +8725,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                         self.slots.get_dyn_mut(&mut self.ui_context, idx).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
                         if {
                             let ev = cce_ui::widget::Event::DragUpdate { dx: 0.0, dy: 0.0, x: self.cursor_x, y: self.cursor_y, local_x: self.cursor_x, local_y: self.cursor_y };
-                            let ptr = self.slots.get_dyn_mut(&mut self.ui_context, idx) as *mut (dyn WidgetHost + 'static);
-                            unsafe { (*ptr).handle_event(&ev, &mut self.ui_context) }
+                            self.deliver_to_slot(idx, &ev)
                         } {
                             changed = true;
                             if idx == CONTENT_IDX && self.node_drag_group.is_some() {
@@ -9301,8 +9328,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                             // motion the rubber-band line is drawn from.
                             let widget_took = {
                                 let ev = cce_ui::widget::Event::MouseButton { button: *button, state: *btn_state, x: self.cursor_x, y: self.cursor_y, local_x: self.cursor_x, local_y: self.cursor_y };
-                                let ptr = self.slots.get_dyn_mut(&mut self.ui_context, i) as *mut (dyn WidgetHost + 'static);
-                                unsafe { (*ptr).handle_event(&ev, &mut self.ui_context) }
+                                self.deliver_to_slot(i, &ev)
                             };
                             if widget_took {
                                 changed = true;
@@ -9320,8 +9346,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                                 self.slots.get_dyn_mut(&mut self.ui_context, i).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
                                 {
                                     let ev = cce_ui::widget::Event::DragStart { start_x: self.cursor_x, start_y: self.cursor_y };
-                                    let ptr = self.slots.get_dyn_mut(&mut self.ui_context, i) as *mut (dyn WidgetHost + 'static);
-                                    unsafe { (*ptr).handle_event(&ev, &mut self.ui_context); }
+                                    self.deliver_to_slot(i, &ev);
                                 }
                                 self.drag_widget = Some(i);
                                 self.drag_press_cursor = Some((self.cursor_x, self.cursor_y));
@@ -9429,8 +9454,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                                 AppDrag::SpreadsheetResize { .. } => SPREADSHEET_IDX,
                             };
                             {
-                                let ptr = self.slots.get_dyn_mut(&mut self.ui_context, idx) as *mut (dyn WidgetHost + 'static);
-                                unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
+                                self.deliver_to_slot(idx, &cce_ui::widget::Event::DragEnd);
                             }
                             self.sync_layout();
                             changed = true;
@@ -9439,20 +9463,17 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                             let idx = self.drag_widget.unwrap();
                             if idx == PARAM_IDX {
                                 {
-                                    let ptr = self.slots.get_dyn_mut(&mut self.ui_context, idx) as *mut (dyn WidgetHost + 'static);
-                                    unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
+                                    self.deliver_to_slot(idx, &cce_ui::widget::Event::DragEnd);
                                 }
                                 self.sync_layout();
                             } else if idx == SPREADSHEET_IDX {
                                 {
-                                    let ptr = self.slots.get_dyn_mut(&mut self.ui_context, idx) as *mut (dyn WidgetHost + 'static);
-                                    unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
+                                    self.deliver_to_slot(idx, &cce_ui::widget::Event::DragEnd);
                                 }
                                 self.sync_layout();
                             } else if idx == CONTENT_IDX {
                                 {
-                                    let ptr = self.slots.get_dyn_mut(&mut self.ui_context, idx) as *mut (dyn WidgetHost + 'static);
-                                    unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
+                                    self.deliver_to_slot(idx, &cce_ui::widget::Event::DragEnd);
                                 }
                                 let updated_nodes = self.graph().get_nodes();
                                 let dir = self.current_dir_mut();
@@ -9490,8 +9511,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                                 self.update_panel_bounds();
                             } else {
                                 {
-                                    let ptr = self.slots.get_dyn_mut(&mut self.ui_context, idx) as *mut (dyn WidgetHost + 'static);
-                                    unsafe { (*ptr).handle_event(&cce_ui::widget::Event::DragEnd, &mut self.ui_context); }
+                                    self.deliver_to_slot(idx, &cce_ui::widget::Event::DragEnd);
                                 }
                             }
                             self.drag_widget = None;
@@ -9509,11 +9529,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                             let (ctrl, shift, alt) = (self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
                             let ev = cce_ui::widget::Event::MouseButton { button: *button, state: *btn_state, x: self.cursor_x, y: self.cursor_y, local_x: self.cursor_x, local_y: self.cursor_y };
                             for i in 0..WIDGET_COUNT {
-                                let handled = self.ui_context.lend(self.slots.id(i), |w, ui| {
-                                    w.set_modifiers(ctrl, shift, alt);
-                                    w.handle_event(&ev, ui)
-                                });
-                                if handled == Some(true) {
+                                self.slots.get_dyn_mut(&mut self.ui_context, i).set_modifiers(ctrl, shift, alt);
+                                if self.deliver_to_slot(i, &ev) {
                                     changed = true;
                                     if i == PARAM_IDX {
                                         sync_params = true;
@@ -9815,8 +9832,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 } else if let Some(idx) = self.focused_widget {
                     {
                     let kev = cce_ui::widget::Event::KeyInput(event.clone());
-                    let ptr = self.slots.get_dyn_mut(&mut self.ui_context, idx) as *mut (dyn WidgetHost + 'static);
-                    unsafe { (*ptr).handle_event(&kev, &mut self.ui_context) }
+                    self.deliver_to_slot(idx, &kev)
                 }
                 } else { false }
             }
@@ -10143,8 +10159,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 self.slots.get_dyn_mut(&mut self.ui_context, idx).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
                 {
                                 let ev = cce_ui::widget::Event::DragUpdate { dx: 0.0, dy: 0.0, x: self.cursor_x, y: self.cursor_y, local_x: self.cursor_x, local_y: self.cursor_y };
-                                let ptr = self.slots.get_dyn_mut(&mut self.ui_context, idx) as *mut (dyn WidgetHost + 'static);
-                                unsafe { (*ptr).handle_event(&ev, &mut self.ui_context) }
+                                self.deliver_to_slot(idx, &ev)
                             };
             }
             self.sync_layout();

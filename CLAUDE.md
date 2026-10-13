@@ -240,7 +240,11 @@ gone from cce-ui with the wgpu path).
   `WidgetSlots` addressed by `*_IDX` constants (`VIEWPORT_IDX`, `PARAM_IDX`,
   `NETWORK_PANEL_IDX`, … up to `WIDGET_COUNT`) rather than a dynamic tree; every slot
   is statically typed, and index-driven paths (draw order, focus cycling, broadcast
-  loops) go through `get_dyn`/`get_dyn_mut`. The roster is declared once, as one line
+  loops) go through `get_dyn`/`get_dyn_mut`. An EVENT the app hands a slot goes
+  through `State::deliver_to_slot`, which lends the widget out of the context by id
+  for the call (`UiContext::lend`, as the context's own dispatch does) — never a raw
+  `*mut dyn WidgetHost`, which held the widget and the context at once (the last of
+  those went on 2026-10-12). The roster is declared once, as one line
   per slot in the `widget_roster!` macro invocation (`INDEX_CONST: field: WidgetType`),
   which generates the constants, `WIDGET_COUNT`, the struct fields and all four
   dispatch matches — adding a pane is that one line. The typed accessors that assert a
