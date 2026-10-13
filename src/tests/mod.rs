@@ -67,8 +67,10 @@ fn a_default_project_that_is_missing_is_not_forgotten() {
 /// json_to_kdl_string / parse_kdl_to_json drop or retype the field.
 #[test]
 fn test_default_project_setting_survives_the_kdl_round_trip() {
-    let mut settings = DesignSettings::default();
-    settings.default_project = Some("/home/user/projects/gears".to_string());
+    let settings = DesignSettings {
+        default_project: Some("/home/user/projects/gears".to_string()),
+        ..DesignSettings::default()
+    };
     let kdl = settings.to_kdl_str().expect("settings serialize");
     let back = DesignSettings::from_kdl_str(&kdl);
     assert_eq!(back.default_project.as_deref(), Some("/home/user/projects/gears"));

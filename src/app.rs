@@ -431,7 +431,7 @@ pub fn float2_row(span: f32) -> String {
 /// node (`fit` in `apply_attribute`), so the controls show it as it acts.
 /// `None` — a text box, as before — for a width it does not fit.
 pub fn value_row_control(text: &str, width: usize, ball: bool, kept: Option<f32>, hold: bool) -> Option<(String, String, f32)> {
-    let parts: Vec<&str> = text.split(|c| c == ':' || c == ',' || c == ' ').filter(|s| !s.is_empty()).collect();
+    let parts: Vec<&str> = text.split([':', ',', ' ']).filter(|s| !s.is_empty()).collect();
     if !(1..=4).contains(&width) || parts.iter().any(|p| p.parse::<f32>().is_err()) {
         return None;
     }
@@ -460,7 +460,7 @@ pub fn value_row_control(text: &str, width: usize, ball: bool, kept: Option<f32>
 /// rewriting `1.00` as `1.00:1.00:1.00` the first time the pane syncs.
 pub fn same_value_row_text(kept: &str, shown: &str) -> bool {
     let nums = |t: &str| -> Option<Vec<f32>> {
-        t.split(|c| c == ':' || c == ',' || c == ' ').filter(|s| !s.is_empty()).map(|s| s.parse::<f32>().ok()).collect()
+        t.split([':', ',', ' ']).filter(|s| !s.is_empty()).map(|s| s.parse::<f32>().ok()).collect()
     };
     let (Some(a), Some(b)) = (nums(kept), nums(shown)) else { return false };
     if a.is_empty() || b.is_empty() {
@@ -1147,7 +1147,7 @@ impl State {
             || self.camera.pan_drag.is_some()
             || self.net.is_panning
             || self.net.grid_cursor_drag.is_some()
-            || self.camera.viewer_tool.as_ref().map_or(false, |t| t.drag.is_some())
+            || self.camera.viewer_tool.as_ref().is_some_and(|t| t.drag.is_some())
             || (self.slider_menu_open() && cce_ui::widget::context_menu::slider_dragging())
             || self.dialog_visible()
     }
@@ -2474,7 +2474,7 @@ impl State {
             }
             "Close Pane" => {
                 let mut parent_name = "";
-                if self.doc.current_path.len() >= 1 {
+                if !self.doc.current_path.is_empty() {
                     let root_idx = self.doc.current_path[0];
                     if let Some(r_node) = self.doc.fs_root.children.get(root_idx) {
                         parent_name = r_node.name.as_str();
@@ -2762,11 +2762,11 @@ impl State {
         }
         let comps = p
             .text()
-            .split(|c| c == ':' || c == ',' || c == ' ')
+            .split([':', ',', ' '])
             .filter(|s| !s.is_empty())
             .filter_map(|s| s.parse::<f32>().ok())
             .count();
-        let raw = p.text().split(|c| c == ':' || c == ',' || c == ' ').filter(|s| !s.is_empty()).count();
+        let raw = p.text().split([':', ',', ' ']).filter(|s| !s.is_empty()).count();
         if comps == 0 || comps > 4 || raw != comps {
             return None;
         }
@@ -3178,7 +3178,7 @@ impl State {
                 framed_node = true;
                 let parse3 = |s: &str| -> Option<Vec3> {
                     let parts: Vec<&str> = s
-                        .split(|c| c == ':' || c == ',' || c == ' ')
+                        .split([':', ',', ' '])
                         .filter(|s| !s.is_empty())
                         .collect();
                     if parts.len() >= 3 {
@@ -3274,7 +3274,7 @@ impl State {
                 fitted_node = true;
                 let parse3 = |s: &str| -> Option<Vec3> {
                     let parts: Vec<&str> = s
-                        .split(|c| c == ':' || c == ',' || c == ' ')
+                        .split([':', ',', ' '])
                         .filter(|s| !s.is_empty())
                         .collect();
                     if parts.len() >= 3 {
@@ -3670,11 +3670,8 @@ impl State {
     }
 
     pub(crate) fn run_playbar_menu_action(&mut self, action: PlaybarMenuAction) {
-        match action {
-            PlaybarMenuAction::Command(id) => {
-                self.run_command(id);
-            }
-            _ => {}
+        if let PlaybarMenuAction::Command(id) = action {
+            self.run_command(id);
         }
     }
 
@@ -4382,11 +4379,8 @@ impl State {
             // The rows that turn the menu (Add Node, Plate) were taken by
             // the press's page turn ahead of this.
             self.close_network_menu();
-            match picked {
-                Some(NetworkMenuAction::Command(id)) => {
-                    self.run_command(id);
-                }
-                _ => {}
+            if let Some(NetworkMenuAction::Command(id)) = picked {
+                self.run_command(id);
             }
             return true;
         }
@@ -4488,7 +4482,7 @@ impl State {
             // pitch0 + rx composition.
             let parse3 = |s: &str| -> Option<Vec3> {
                 let parts: Vec<&str> = s
-                    .split(|c| c == ':' || c == ',' || c == ' ')
+                    .split([':', ',', ' '])
                     .filter(|s| !s.is_empty())
                     .collect();
                 if parts.len() >= 3 {
@@ -6595,7 +6589,7 @@ impl State {
             let streamed = self.ui_context[self.slots.param]
                 .as_any_mut()
                 .downcast_mut::<cce_ui::widget::ParametersBg>()
-                .map_or(false, |p| p.take_tick_value_change());
+                .is_some_and(|p| p.take_tick_value_change());
             if streamed {
                 self.sync_parameters_to_project();
             }
@@ -6639,11 +6633,6 @@ impl State {
                 self.update_panel_bounds();
                 tick_changed = true;
             }
-        }
-
-
-
-        if tick_changed {
         }
 
         // Edge-panning waits for a real drag gesture: the pointer must stray
@@ -6874,7 +6863,7 @@ impl State {
                 for p in &node.params {
                     if p.name == "position" {
                         let parts: Vec<&str> = p.text()
-                            .split(|c| c == ':' || c == ',' || c == ' ')
+                            .split([':', ',', ' '])
                             .filter(|s| !s.is_empty())
                             .collect();
                         if parts.len() >= 3 {
@@ -6886,7 +6875,7 @@ impl State {
                         }
                     } else if p.name == "rotation" {
                         let parts: Vec<&str> = p.text()
-                            .split(|c| c == ':' || c == ',' || c == ' ')
+                            .split([':', ',', ' '])
                             .filter(|s| !s.is_empty())
                             .collect();
                         if parts.len() >= 3 {
@@ -6898,7 +6887,7 @@ impl State {
                         }
                     } else if p.name == "pivot" {
                         let parts: Vec<&str> = p.text()
-                            .split(|c| c == ':' || c == ',' || c == ' ')
+                            .split([':', ',', ' '])
                             .filter(|s| !s.is_empty())
                             .collect();
                         if parts.len() >= 3 {

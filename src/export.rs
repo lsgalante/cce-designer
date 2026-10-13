@@ -39,7 +39,7 @@ use glam::Vec3;
 /// and the path tracer draw — so what is exported is what was on screen.
 fn triangles(d: &Detail, scale: f32) -> Vec<([Vec3; 3], Vec3)> {
     d.triangulate(|pos, _| Vec3::from(pos) * scale)
-        .chunks_exact(3)
+        .as_chunks::<3>().0.iter()
         .map(|t| {
             let n = (t[1] - t[0]).cross(t[2] - t[0]).normalize_or_zero();
             ([t[0], t[1], t[2]], n)

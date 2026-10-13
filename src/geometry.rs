@@ -41,7 +41,7 @@ pub fn rt_scene_from_verts(
     let mut tris: Vec<cce_ui::vk::RtTriangle> = Vec::new();
     let mut mats: Vec<cce_ui::vk::RtMaterial> = Vec::new();
     let mut by_color: std::collections::HashMap<[u8; 3], u32> = std::collections::HashMap::new();
-    for tri in verts.chunks_exact(3) {
+    for tri in verts.as_chunks::<3>().0 {
         let key = [
             (tri[0].color[0].clamp(0.0, 1.0) * 255.0) as u8,
             (tri[0].color[1].clamp(0.0, 1.0) * 255.0) as u8,
@@ -489,7 +489,7 @@ pub fn box_detail(start: Vec3, end: Vec3, thickness: f32) -> Detail {
 
     let mut norms = Vec::with_capacity(d.num_verts());
     for (_, normal) in &faces {
-        norms.extend(std::iter::repeat(normal.to_array()).take(4));
+        norms.extend(std::iter::repeat_n(normal.to_array(), 4));
     }
     let (num_verts, num_points) = (d.num_verts(), d.num_points());
     let _ = d.verts_mut().insert("N", AttribData::Float3(norms));
@@ -1792,7 +1792,7 @@ pub fn resolve_group_geometry_with_errors(
     };
 
     let (member, prim_member) =
-        select_elements(&geom, &etype, target, |p| inside(p), invert);
+        select_elements(&geom, &etype, target, inside, invert);
 
     apply_group(
         &mut geom,
@@ -2079,7 +2079,7 @@ pub fn resolve_collision_geometry_with_errors(
     // rather than each routine growing an n-gon case.
     let tris: Vec<[Vec3; 3]> = collider
         .triangulate(|pos, _| Vec3::from(pos))
-        .chunks_exact(3)
+        .as_chunks::<3>().0.iter()
         .map(|t| [t[0], t[1], t[2]])
         .collect();
 
@@ -3033,7 +3033,7 @@ pub(crate) fn transfer_onto(
     };
     let group_names: Vec<String> = match groups {
         None => Vec::new(),
-        Some(wanted) if wanted.is_empty() => source.points().group_names().iter().map(|s| s.to_string()).collect(),
+        Some([]) => source.points().group_names().iter().map(|s| s.to_string()).collect(),
         Some(wanted) => wanted.iter().filter(|g| source.points().has_group(g)).cloned().collect(),
     };
     if names.is_empty() && group_names.is_empty() {
@@ -5234,7 +5234,7 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
     // the edit outright when any component fails to parse.
     let value_str = node_param_str(target, "value", "");
     let raw: Vec<&str> = value_str
-        .split(|c| c == ':' || c == ',' || c == ' ')
+        .split([':', ',', ' '])
         .filter(|p| !p.is_empty())
         .collect();
     let comps: Vec<f32> = raw.iter().filter_map(|p| p.parse::<f32>().ok()).collect();
@@ -5506,12 +5506,9 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
             let a_ty = geom.points().get(&name).map(|a| a.ty());
             if let Some((label, n)) = sources.iter().find(|(_, n)| !geom.points().has(n)) {
                 fail = format!("{label} '{n}' is not a point attribute");
-            } else if a_ty.is_none() {
-                fail = format!("'{}' is missing", name);
-            } else if ["Pos", "Col", "P", "Cd"].iter().any(|b| b.eq_ignore_ascii_case(&result)) {
+            } else if a_ty.is_some() && ["Pos", "Col", "P", "Cd"].iter().any(|b| b.eq_ignore_ascii_case(&result)) {
                 fail = format!("Result '{}' is built-in; Modify writes the position and the colour", result);
-            } else {
-                let a_ty = a_ty.unwrap();
+            } else if let Some(a_ty) = a_ty {
                 // A Result that does not exist yet is as wide as the widest
                 // operand — Name's own type when that is it, so an Int stays
                 // an Int — or one number when the operation reduces to one.
@@ -5547,6 +5544,8 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
                 for (&p, out) in affected.iter().zip(&outs) {
                     let _ = geom.points_mut().set_value(&result, p, components_attrib(ty, out));
                 }
+            } else {
+                fail = format!("'{}' is missing", name);
             }
         }
         // Move an attribute between classes. Point to Detail is the reduction
@@ -5845,7 +5844,7 @@ pub fn resolve_scatter_geometry_with_errors(
     let mut min_pos = Vec3::splat(f32::MAX);
     let mut max_pos = Vec3::splat(f32::MIN);
 
-    for chunk in geom.triangulate(|pos, _| Vec3::from(pos)).chunks_exact(3) {
+    for chunk in geom.triangulate(|pos, _| Vec3::from(pos)).as_chunks::<3>().0 {
         let (v0, v1, v2) = (chunk[0], chunk[1], chunk[2]);
 
         min_pos = min_pos.min(v0).min(v1).min(v2);
@@ -7134,7 +7133,7 @@ mod tests {
             ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
         };
         let kept: Vec<[f32; 3]> = before
-            .chunks_exact(3)
+            .as_chunks::<3>().0.iter()
             .filter(|t| d(t[0], t[1]) > 1e-6 && d(t[1], t[2]) > 1e-6 && d(t[0], t[2]) > 1e-6)
             .flatten()
             .copied()
@@ -7154,7 +7153,7 @@ mod tests {
         // the point: the soup computed its seam corner at phi = TAU and its
         // south pole once per longitude, so the surface had a ~1e-7 crack down
         // it, which is also why the key rounds before it sorts.
-        let key = |t: &[[f32; 3]]| {
+        let key = |t: &[[f32; 3]; 3]| {
             let mut c: Vec<[i64; 3]> = t
                 .iter()
                 .map(|p| {
@@ -7168,8 +7167,8 @@ mod tests {
             c.sort_unstable();
             c
         };
-        let mut want: Vec<Vec<[i64; 3]>> = kept.chunks_exact(3).map(key).collect();
-        let mut got: Vec<Vec<[i64; 3]>> = after.chunks_exact(3).map(key).collect();
+        let mut want: Vec<Vec<[i64; 3]>> = kept.as_chunks::<3>().0.iter().map(key).collect();
+        let mut got: Vec<Vec<[i64; 3]>> = after.as_chunks::<3>().0.iter().map(key).collect();
         want.sort();
         got.sort();
         assert_eq!(got, want, "the welded sphere is not the same set of triangles");
@@ -7523,7 +7522,7 @@ mod tests {
         // Each marker is a lat=6, lon=8 sphere: two poles plus five rings of
         // eight, and merge lays them down one after another.
         const MARKER_POINTS: usize = 2 + (6 - 1) * 8;
-        for chunk in geom.positions().chunks_exact(MARKER_POINTS) {
+        for chunk in geom.positions().as_chunks::<MARKER_POINTS>().0 {
             let mut sum = Vec3::ZERO;
             for p in chunk {
                 sum += Vec3::from_array(*p);
@@ -7830,7 +7829,7 @@ fn write_sim_cache_at(path: &std::path::Path, key: u64, frame: i32, state: &Deta
     // app dies is never read as a whole one.
     let tmp = path.with_extension("simcache.tmp");
     if std::fs::write(&tmp, &blob).is_ok() {
-        let _ = std::fs::rename(&tmp, &path);
+        let _ = std::fs::rename(&tmp, path);
     }
 }
 

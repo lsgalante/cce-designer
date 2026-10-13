@@ -50,7 +50,7 @@ impl State {
         }
         
         if self.has_unsaved_changes() {
-            title.push_str("*");
+            title.push('*');
         }
 
         // The engine polls `Application::settings` and applies title changes.
@@ -219,7 +219,7 @@ impl State {
         if !self.detached.is_detached_network && self.detached.detached_pane.is_none() {
             self.migrate_meta_settings_node();
         }
-        if path.file_name().map_or(false, |n| n == "default_project.json") {
+        if path.file_name().is_some_and(|n| n == "default_project.json") {
             let view_state = if self.detached.is_detached_network || self.detached.detached_pane.is_some() {
                 self.detached_view_state(path)
             } else {
@@ -302,7 +302,7 @@ impl State {
         // every pane open rather than inheriting this session's collapses.
         for &idx in crate::plate_menu::PLATE_SLOTS.iter() {
             let desired = crate::plate_menu::pane_name_from_slot(idx)
-                .map_or(false, |n| vs.collapsed_panes.iter().any(|c| c == n));
+                .is_some_and(|n| vs.collapsed_panes.iter().any(|c| c == n));
             self.set_pane_collapsed(idx, desired);
         }
         if let Some((f1, f2)) = vs.splitters {
@@ -414,18 +414,14 @@ impl State {
     }
 
     pub(crate) fn load_from_file(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-        if path.file_name().map_or(false, |n| n == "default_project.json") {
+        if path.file_name().is_some_and(|n| n == "default_project.json") {
             return self.load_sync_channel(path, false);
         }
 
         let (state_file_path, project_dir) = if path.is_dir() {
             (path.join("state.json"), path.to_path_buf())
         } else {
-            if path.file_name().map_or(false, |name| name == "state.json") {
-                (path.to_path_buf(), path.parent().unwrap_or(path).to_path_buf())
-            } else {
-                (path.to_path_buf(), path.parent().unwrap_or(path).to_path_buf())
-            }
+            (path.to_path_buf(), path.parent().unwrap_or(path).to_path_buf())
         };
 
         let content = fs::read_to_string(&state_file_path)?;

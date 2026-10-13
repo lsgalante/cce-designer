@@ -1562,7 +1562,7 @@ impl State {
             base
         };
 
-        let verts = crate::geometry::detail_vertices(&geom);
+        let verts = crate::geometry::detail_vertices(geom);
         self.stage.vertex_count_spheres = verts.len() as u32;
         // Smooth shading bakes the light into a raster copy of the fill;
         // `verts` stays unlit for the path tracer, whose materials are
@@ -1571,7 +1571,7 @@ impl State {
         // Lit by the environment's sun, which the flat shader is handed too.
         self.scene.environment = crate::environment::Environment::of_scene(&self.doc.fs_root, self.sim_frame());
         self.scene.scene_smooth_verts = if self.render.smooth_shading {
-            crate::geometry::smooth_lit_vertices(&geom, self.scene.environment.sun_direction)
+            crate::geometry::smooth_lit_vertices(geom, self.scene.environment.sun_direction)
         } else {
             Vec::new()
         };
@@ -1599,7 +1599,7 @@ impl State {
         // they annotate what is on screen, and what is on screen is exactly
         // this Detail.
         let (markers, labels, normals) = scene_point_overlays(
-            &geom,
+            geom,
             self.view.show_point_markers,
             self.view.show_point_numbers,
             self.view.show_point_normals,
@@ -1621,7 +1621,7 @@ impl State {
         self.markers.overlay_number_alpha.clear();
         self.markers.overlay_normals.verts = normals;
         let elements = scene_element_overlays(
-            &geom,
+            geom,
             ElementOverlays {
                 prim_numbers: self.view.show_prim_numbers,
                 prim_normals: self.view.show_prim_normals,
@@ -1644,12 +1644,12 @@ impl State {
         // The wire pass's edges, likewise — topological, and only while the
         // wireframe is actually on.
         self.scene.scene_edge_verts =
-            if self.render.wireframe { scene_edge_verts(&geom) } else { Vec::new() };
+            if self.render.wireframe { scene_edge_verts(geom) } else { Vec::new() };
 
         // Visualize's vector markers — a node's or a visualizer's — ride the
         // same LINE_LIST channel as the normal whiskers.
         self.markers.overlay_normals.verts.extend(crate::geometry::vis_marker_vertices(
-            &geom,
+            geom,
             cce_ui::color::to_linear_rgb,
         ));
         self.mark_overlay_dirty();
@@ -1947,7 +1947,7 @@ pub(crate) fn scene_edge_verts(geom: &crate::detail::Detail) -> Vec<crate::geome
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(edges.len() / PIECE).max(1);
     let per = edges.len().div_ceil(threads).max(1);
     let fill = |out: &mut [Vertex3D], edges: &[[u32; 2]]| {
-        for (pair, e) in out.chunks_exact_mut(2).zip(edges) {
+        for (pair, e) in out.as_chunks_mut::<2>().0.iter_mut().zip(edges) {
             pair[0] = vertex(e[0]);
             pair[1] = vertex(e[1]);
         }

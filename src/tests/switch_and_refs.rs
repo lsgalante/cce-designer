@@ -107,7 +107,7 @@ fn expressions_parse_and_evaluate() {
             })
         }
         fn var(&self, name: &str) -> Option<Value> {
-            (name == "F").then(|| Value::Num(self.0 as f64))
+            (name == "F").then_some(Value::Num(self.0 as f64))
         }
     }
     let ev = |src: &str| parse(src).unwrap_or_else(|e| panic!("{src}: {e}")).eval(&mut Table(12)).unwrap_or_else(|e| panic!("{src}: {e}"));

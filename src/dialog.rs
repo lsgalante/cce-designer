@@ -734,9 +734,8 @@ impl Dialog {
     /// Say what row `i`'s sliders now hold, for the app to land.
     fn note_slider_change(&mut self, i: usize) {
         let Some(row) = self.rows.get(i) else { return };
-        match row.control {
-            Some(Control::Slider { value, .. }) => self.slider_change = Some((row.id.clone(), value)),
-            _ => {}
+        if let Some(Control::Slider { value, .. }) = row.control {
+            self.slider_change = Some((row.id.clone(), value));
         }
     }
 
@@ -2474,9 +2473,8 @@ impl State {
         match ctl {
             Ctl::Toggle => {
                 let on = value == "true";
-                match key {
-                    "wire_single_color" => self.render.wire_single_color = on,
-                    _ => {}
+                if key == "wire_single_color" {
+                    self.render.wire_single_color = on;
                 }
             }
             Ctl::Color => {
@@ -3252,12 +3250,8 @@ impl State {
                         return true;
                     }
                 }
-                Some(cce_ui::widget::SwipeDir::Back) => {
-                    if self.dialog_back() {
-                        return true;
-                    }
-                }
-                None => {}
+                Some(cce_ui::widget::SwipeDir::Back) if self.dialog_back() => return true,
+                _ => {}
             }
             let taken = self.dispatch_uncovered(DIALOG_IDX, &ev);
             // A wheel over a slider row moved it: land the value.

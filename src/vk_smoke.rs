@@ -228,7 +228,7 @@ fn rt_demo_scene() -> (Vec<RtTriangle>, Vec<RtMaterial>) {
     };
 
     // The cube, from the same triangle list the raster pass draws.
-    for tri in cube_verts().chunks_exact(3) {
+    for tri in cube_verts().as_chunks::<3>().0 {
         let material = mat(&mut mats, tri[0].color, [0.0; 3]);
         tris.push(RtTriangle { p0: tri[0].position, p1: tri[1].position, p2: tri[2].position, material });
     }

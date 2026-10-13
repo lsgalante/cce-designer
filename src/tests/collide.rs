@@ -7,7 +7,7 @@ fn collision_fixture(rows: usize, cols: usize, queries: usize) -> (Vec<Vec3>, Ve
     let collider = crate::geometry::sphere_detail(Vec3::new(0.1, 0.55, -0.05), 0.7, rows, cols);
     let tris: Vec<[Vec3; 3]> = collider
         .triangulate(|pos, _| Vec3::from(pos))
-        .chunks_exact(3)
+        .as_chunks::<3>().0.iter()
         .map(|t| [t[0], t[1], t[2]])
         .collect();
     let pts: Vec<Vec3> = (0..queries)
@@ -81,7 +81,7 @@ fn collision_gpu_matches_cpu() {
             }
         }
         println!("collision {test:?}: {} queries x {} triangles, {disagreements} knife-edge disagreements", pts.len(), tris.len());
-        assert!(cpu.iter().any(|&h| h == 1) && cpu.iter().any(|&h| h == 0));
+        assert!(cpu.contains(&1) && cpu.contains(&0));
     }
 }
 

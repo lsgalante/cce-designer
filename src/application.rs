@@ -314,7 +314,7 @@ impl Application for State {
         self.sync_modifiers_from_ctx();
         self.cursor_x = pos.x;
         self.cursor_y = pos.y;
-        let ev = WindowEvent::MouseWheel { delta: delta.clone() };
+        let ev = WindowEvent::MouseWheel { delta: *delta };
         if self.process_window_event(ev) {
             *needs_rebuild = true;
         }

@@ -83,7 +83,7 @@ impl Surface {
         let cross = |a: [f64; 3], b: [f64; 3]| {
             [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
         };
-        for t in tris.chunks_exact(3) {
+        for t in tris.as_chunks::<3>().0 {
             let idx = [t[0] as usize, t[1] as usize, t[2] as usize];
             if idx[0] == idx[1] || idx[1] == idx[2] || idx[0] == idx[2] {
                 continue;
@@ -92,7 +92,7 @@ impl Surface {
             let twice_area = dot(cross(sub(b, a), sub(c, a)), cross(sub(b, a), sub(c, a))).sqrt();
             // A sliver with no area has no angles worth the name: its
             // cotangents are a division by nothing.
-            if !(twice_area > 1e-14) {
+            if twice_area.is_nan() || twice_area <= 1e-14 {
                 continue;
             }
             for &i in &idx {
@@ -143,6 +143,10 @@ impl Surface {
 
     pub fn len(&self) -> usize {
         self.mass.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.mass.is_empty()
     }
 
     /// Every edge of `i` as (neighbour, weight).
@@ -219,7 +223,7 @@ pub fn diffuse(s: &Surface, rate: &[f64], free: &[bool], u: &mut [f64]) -> usize
         }
         apply(&p, &mut ap);
         let pap: f64 = p.iter().zip(&ap).map(|(a, b)| a * b).sum();
-        if !(pap > 0.0) {
+        if pap.is_nan() || pap <= 0.0 {
             break;
         }
         let alpha = rz / pap;
@@ -287,7 +291,7 @@ pub fn concentrate(s: &Surface, rate: &[f64], free: &[bool], u: &mut [f64], sign
         .fold(0.0f64, f64::max)
         * scale;
     // With every value on the floor no point has anything to give.
-    if !(stiffness > 0.0) || !stiffness.is_finite() || !(top > floor) {
+    if stiffness <= 0.0 || !stiffness.is_finite() || top.is_nan() || floor.is_nan() || top <= floor {
         return 0;
     }
     let steps = ((stiffness / 0.5).ceil() as usize).clamp(1, CONCENTRATE_STEPS_MAX);

@@ -40,7 +40,7 @@ impl Rng {
 /// The surface's triangles, fanned from its primitives.
 fn triangles(d: &Detail) -> Vec<[Vec3; 3]> {
     d.triangulate(|pos, _| Vec3::from(pos))
-        .chunks_exact(3)
+        .as_chunks::<3>().0.iter()
         .map(|t| [t[0], t[1], t[2]])
         .collect()
 }

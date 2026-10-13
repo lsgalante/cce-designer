@@ -411,7 +411,7 @@ impl Volume {
         // inside to outside, so that the plain cross points away from the
         // solid like every other generator in the app.
         let quad = |a: u32, b: u32, c: u32, e: u32, flip: bool, d: &mut Detail| {
-            if [a, b, c, e].iter().any(|&v| v == u32::MAX) {
+            if [a, b, c, e].contains(&u32::MAX) {
                 return;
             }
             if flip {

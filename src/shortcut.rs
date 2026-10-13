@@ -266,3 +266,9 @@ impl ShortcutManager {
         self.bindings.iter().find(|(_, c)| *c == command).map(|(s, _)| s)
     }
 }
+
+impl Default for ShortcutManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}

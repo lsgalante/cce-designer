@@ -165,7 +165,7 @@ impl Playbar {
     fn track_rect(&self, rect: Rect) -> Rect {
         let b = self.button_rects(rect).last().expect("the play button").1;
         let x = b.x + b.width + PAD;
-        let h = (rect.height - 2.0 * PAD).max(8.0).min(16.0);
+        let h = (rect.height - 2.0 * PAD).clamp(8.0, 16.0);
         Rect {
             x,
             y: rect.y + (rect.height - h) * 0.5,
@@ -396,14 +396,10 @@ impl Input for Playbar {
                 }
                 ElementState::Released => std::mem::take(&mut self.dragging),
             },
-            Event::PointerMove { x, .. } => {
-                if self.dragging {
-                    let t = self.track_rect(rect);
-                    self.scrub_to(*x, t);
-                    true
-                } else {
-                    false
-                }
+            Event::PointerMove { x, .. } if self.dragging => {
+                let t = self.track_rect(rect);
+                self.scrub_to(*x, t);
+                true
             }
             _ => false,
         }

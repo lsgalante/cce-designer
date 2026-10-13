@@ -648,7 +648,7 @@ fn build_engine(ctx: &Shared) -> Engine {
         // call and keyed by radius; a script that moves points and asks
         // again reads the earlier layout, which is what a per-element pass
         // should see anyway.
-        if c.grid.as_ref().map_or(true, |(r, _)| (*r - radius).abs() > 1e-6) {
+        if c.grid.as_ref().is_none_or(|(r, _)| (*r - radius).abs() > 1e-6) {
             let pts: Vec<Vec3> = (0..c.d.num_points()).map(|p| c.d.pos(p)).collect();
             c.grid = Some((radius, PointGrid::build(&pts, radius)));
         }
@@ -813,7 +813,7 @@ pub fn run_wrangle(
     let ticks = Cell::new(0u32);
     engine.on_progress(move |_| {
         ticks.set(ticks.get().wrapping_add(1));
-        if ticks.get() % 4096 == 0 && started.elapsed() > RUN_BUDGET {
+        if ticks.get().is_multiple_of(4096) && started.elapsed() > RUN_BUDGET {
             Some(Dynamic::from(format!("the script ran for more than {} s and was stopped", RUN_BUDGET.as_secs())))
         } else {
             None
@@ -855,7 +855,7 @@ pub fn run_wrangle(
     drop(scope);
     drop(engine);
     let mut c = ctx.borrow_mut();
-    let mut d = std::mem::replace(&mut c.d, Detail::new());
+    let mut d = std::mem::take(&mut c.d);
     let adds = std::mem::take(&mut c.adds);
     let prim_adds = std::mem::take(&mut c.prim_adds);
     let removes = std::mem::take(&mut c.removes);

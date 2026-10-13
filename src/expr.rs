@@ -1,12 +1,12 @@
 //! Parameter expressions — Houdini's channel references, with arithmetic.
 //!
 //! A parameter whose `expr` flag is set holds an EXPRESSION rather than a
-//! value, and is evaluated every time the node is: `ch("../sphere1/radius")
-//! * 2 + 1`, `$F / 24`, `chs("../text1/font")`. The flag is the model, not a
-//! guess about the text: a kernel's Code contains `chf(`, a node name is an
-//! identifier and `0.5` is an expression too, so anything that decided by
-//! looking at the string would be wrong somewhere. Houdini makes the same
-//! choice — a parm has an expression or it has a value.
+//! value, and is evaluated every time the node is:
+//! `ch("../sphere1/radius") * 2 + 1`, `$F / 24`, `chs("../text1/font")`. The
+//! flag is the model, not a guess about the text: a kernel's Code contains
+//! `chf(`, a node name is an identifier and `0.5` is an expression too, so
+//! anything that decided by looking at the string would be wrong somewhere.
+//! Houdini makes the same choice — a parm has an expression or it has a value.
 //!
 //! The language is deliberately small. Numbers and strings; `+ - * / % ^`,
 //! comparisons, `&& || !`; a fixed set of functions; the `$F` / `$FF` frame
@@ -510,7 +510,7 @@ fn eval_node(n: &Node, scope: &mut dyn Scope) -> Result<Value, String> {
                 }
                 Op::Or => {
                     let l = eval_node(a, scope)?;
-                    return Ok(Num(if l.truthy() { 1.0 } else if eval_node(b, scope)?.truthy() { 1.0 } else { 0.0 }));
+                    return Ok(Num(if l.truthy() || eval_node(b, scope)?.truthy() { 1.0 } else { 0.0 }));
                 }
                 _ => {}
             }
@@ -711,10 +711,9 @@ pub fn parse_legacy_ref(value: &str) -> Option<(&'static str, String)> {
         ("chi", r)
     } else if let Some(r) = v.strip_prefix("chb(") {
         ("chb", r)
-    } else if let Some(r) = v.strip_prefix("ch(") {
-        ("ch", r)
     } else {
-        return None;
+        let r = v.strip_prefix("ch(")?;
+        ("ch", r)
     };
     let inner = rest.strip_suffix(')')?.trim();
     let quote = inner.chars().next()?;

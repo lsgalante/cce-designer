@@ -1263,7 +1263,7 @@ pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
                         }
                     }
                     for (switch, pass) in crate::geometry::REMESH_PASS_SWITCHES {
-                        let on = c.params.iter().find(|p| p.name == *switch).map_or(true, |p| {
+                        let on = c.params.iter().find(|p| p.name == *switch).is_none_or(|p| {
                             !["false", "0", "off"].contains(&p.text().trim().to_ascii_lowercase().as_str())
                         });
                         if !on {

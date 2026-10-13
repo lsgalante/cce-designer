@@ -103,10 +103,11 @@ impl State {
         if self.open_menu_origin().is_some()
             && cce_ui::widget::context_menu::hit_test(self.cursor_x, self.cursor_y)
         {
-            if cce_ui::widget::context_menu::mouse_wheel(delta, self.cursor_x, self.cursor_y) {
-                if !self.take_menu_turn() && self.slider_menu_open() {
-                    self.drain_menu_slider(true);
-                }
+            if cce_ui::widget::context_menu::mouse_wheel(delta, self.cursor_x, self.cursor_y)
+                && !self.take_menu_turn()
+                && self.slider_menu_open()
+            {
+                self.drain_menu_slider(true);
             }
             return Some(true);
         }
@@ -483,10 +484,8 @@ impl State {
     fn widget_drag_motion(&mut self, idx: usize) -> bool {
         let mut changed = false;
         self.slots.get_dyn_mut(&mut self.ui_context, idx).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());
-        if {
-            let ev = cce_ui::widget::Event::DragUpdate { dx: 0.0, dy: 0.0, x: self.cursor_x, y: self.cursor_y, local_x: self.cursor_x, local_y: self.cursor_y };
-            self.deliver_to_slot(idx, &ev)
-        } {
+        let ev = cce_ui::widget::Event::DragUpdate { dx: 0.0, dy: 0.0, x: self.cursor_x, y: self.cursor_y, local_x: self.cursor_x, local_y: self.cursor_y };
+        if self.deliver_to_slot(idx, &ev) {
             changed = true;
             if idx == CONTENT_IDX && self.net.node_drag_group.is_some() {
                 // The companions follow in whole cells, from
@@ -1400,12 +1399,7 @@ impl State {
         let mut changed = false;
         if self.drag_widget.is_some() {
             let idx = self.drag_widget.unwrap();
-            if idx == PARAM_IDX {
-                {
-                    self.deliver_to_slot(idx, &cce_ui::widget::Event::DragEnd);
-                }
-                self.sync_layout();
-            } else if idx == SPREADSHEET_IDX {
+            if idx == PARAM_IDX || idx == SPREADSHEET_IDX {
                 {
                     self.deliver_to_slot(idx, &cce_ui::widget::Event::DragEnd);
                 }
@@ -1738,22 +1732,16 @@ impl State {
                             }
                         }
                     }
-                    "u" | "U" => {
-                        if self.focused_pane == LEFT_MENUBAR_IDX {
-                            if self.move_up() {
-                                changed = true;
-                            }
-                        }
+                    "u" | "U" if self.focused_pane == LEFT_MENUBAR_IDX => {
+                        changed |= self.move_up();
                     }
-                    "i" | "I" => {
-                        if self.focused_pane == LEFT_MENUBAR_IDX {
-                            if let Some(slot_idx) = self.graph().selected_node() {
-                                let dir = self.current_dir();
-                                 if slot_idx < dir.children.len() && dir.children[slot_idx].is_enterable() {
-                                     self.doc.current_path.push(slot_idx);
-                                     self.on_path_changed();
-                                     changed = true;
-                                 }
+                    "i" | "I" if self.focused_pane == LEFT_MENUBAR_IDX => {
+                        if let Some(slot_idx) = self.graph().selected_node() {
+                            let dir = self.current_dir();
+                            if slot_idx < dir.children.len() && dir.children[slot_idx].is_enterable() {
+                                self.doc.current_path.push(slot_idx);
+                                self.on_path_changed();
+                                changed = true;
                             }
                         }
                     }
@@ -1775,9 +1763,7 @@ impl State {
                         }
                     }
                     "v" | "V" => {
-                        if self.paste_nodes() {
-                            changed = true;
-                        }
+                        changed |= self.paste_nodes();
                     }
                     _ => {}
                 }
@@ -1793,18 +1779,16 @@ impl State {
         if let Key::Character(s) = &event.logical_key {
             if is_plain_key {
                 match s.as_str() {
-                    "r" | "R" => {
-                        if self.focused_pane == RIGHT_MENUBAR_IDX {
-                            if self.camera.active_camera != "Default Camera" {
-                                self.update_active_camera_rotation_reset();
-                            } else {
-                                self.viewport_mut().rotation_y = 0.0;
-                                self.viewport_mut().rotation_x = 0.0;
-                            }
-                            self.viewport_mut().zoom = 1.0;
-                            self.viewport_mut().reset_velocity();
-                            changed = true;
+                    "r" | "R" if self.focused_pane == RIGHT_MENUBAR_IDX => {
+                        if self.camera.active_camera != "Default Camera" {
+                            self.update_active_camera_rotation_reset();
+                        } else {
+                            self.viewport_mut().rotation_y = 0.0;
+                            self.viewport_mut().rotation_x = 0.0;
                         }
+                        self.viewport_mut().zoom = 1.0;
+                        self.viewport_mut().reset_velocity();
+                        changed = true;
                     }
                     _ => {}
                 }

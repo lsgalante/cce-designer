@@ -248,7 +248,7 @@ impl TriGrid {
     pub fn build(d: &Detail) -> TriGrid {
         let tris: Vec<[Vec3; 3]> = d
             .triangulate(|pos, _| Vec3::from(pos))
-            .chunks_exact(3)
+            .as_chunks::<3>().0.iter()
             .map(|t| [t[0], t[1], t[2]])
             .collect();
         let (min, max) = d.bounds().unwrap_or((Vec3::ZERO, Vec3::ZERO));

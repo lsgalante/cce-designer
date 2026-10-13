@@ -250,11 +250,7 @@ impl cce_ui::widget::Paint for PassivePlate {
     }
 
     fn solid_border(&self) -> Option<([f32; 4], f32)> {
-        if let Some(bc) = cce_ui::color::plate_border_color() {
-            Some((bc, cce_ui::color::plate_border_thickness()))
-        } else {
-            None
-        }
+        cce_ui::color::plate_border_color().map(|bc| (bc, cce_ui::color::plate_border_thickness()))
     }
 }
 

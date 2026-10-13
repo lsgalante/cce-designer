@@ -1231,7 +1231,7 @@ fn a_point_number_under_a_plate_is_not_drawn() {
     state.slots.get_dyn_mut(&mut state.ui_context, crate::slots::PARAM_IDX).set_rect(800.0, 200.0, 200.0, 690.0);
     let plate = state.params_claim();
     assert!(plate.1 == 200.0 && plate.3 > 100.0 && plate.3 < 690.0, "the plate fits the rows: {plate:?}");
-    let in_plate = |x: f32, y: f32| x >= 800.0 && x < 1000.0 && y + 6.0 >= plate.1 && y + 6.0 < plate.1 + plate.3;
+    let in_plate = |x: f32, y: f32| (800.0..1000.0).contains(&x) && y + 6.0 >= plate.1 && y + 6.0 < plate.1 + plate.3;
     let fewer = state.point_number_labels();
     assert!(fewer.len() < all.len(), "{} of {} are left", fewer.len(), all.len());
     assert!(!fewer.is_empty());
@@ -1275,10 +1275,8 @@ fn the_playbar_is_attached_to_the_bottom_edge() {
     assert!(prev.x >= lip, "clear of the left lip: {prev:?}");
     assert!(prev.y + prev.height <= 900.0 - STATUS_H - lip, "clear of the bottom lip: {prev:?}");
     // (The network has no plate: it spans the window, under the shelf.)
-    for idx in [SPREADSHEET_IDX] {
-        let (_, y, _, h) = state.positions[idx];
-        assert_eq!(y + h, pb.1 - 18.0, "the {idx} plate stops a gap above it");
-    }
+    let (_, y, _, h) = state.positions[SPREADSHEET_IDX];
+    assert_eq!(y + h, pb.1 - 18.0, "the {SPREADSHEET_IDX} plate stops a gap above it");
     assert_eq!(state.scene_text_floor(900.0), pb.1, "the viewport's bottom text stands on it");
     state.execute_menu_action("Show Playbar Pane");
     assert!(!state.show_playbar);
@@ -4488,7 +4486,7 @@ fn test_point_overlays_are_a_global_view_setting() {
     // (center (0, 0.55, 0)) — this pins the winding/negation convention,
     // not just the count.
     assert_eq!(normals.len(), points * 2);
-    for pair in normals.chunks_exact(2) {
+    for pair in normals.as_chunks::<2>().0 {
         let d = |p: &[f32; 3]| {
             let (dx, dy, dz) = (p[0], p[1] - 0.55, p[2]);
             (dx * dx + dy * dy + dz * dz).sqrt()
@@ -4646,7 +4644,9 @@ fn params_serialize_as_they_always_did() {
     };
     fn walk(v: &Value, f: &mut dyn FnMut(&Value)) {
         if let Some(ps) = v.get("params").and_then(|p| p.as_array()) {
-            ps.iter().for_each(|p| f(p));
+            for p in ps {
+                f(p);
+            }
         }
         if let Some(cs) = v.get("children").and_then(|c| c.as_array()) {
             cs.iter().for_each(|c| walk(c, f));
@@ -5750,7 +5750,7 @@ fn test_design_settings_serialization_roundtrip() {
         "#;
     
     let settings: DesignSettings = serde_json::from_str(json_without_pivot).unwrap();
-    assert_eq!(settings.viewport.show_camera_pivot_enabled, false);
+    assert!(!settings.viewport.show_camera_pivot_enabled);
     assert_eq!(settings.viewport.camera_pivot_size, 1.0);
     assert_eq!(settings.viewport.grid_color, [0.35, 0.35, 0.40]);
     
@@ -5766,7 +5766,7 @@ fn test_design_settings_serialization_roundtrip() {
 
     let serialized = serde_json::to_string(&settings).unwrap();
     let settings_roundtrip: DesignSettings = serde_json::from_str(&serialized).unwrap();
-    assert_eq!(settings_roundtrip.viewport.show_camera_pivot_enabled, false);
+    assert!(!settings_roundtrip.viewport.show_camera_pivot_enabled);
     assert_eq!(settings_roundtrip.viewport.camera_pivot_size, 1.0);
     assert_eq!(settings_roundtrip.viewport.grid_color, [0.35, 0.35, 0.40]);
 }
@@ -5815,7 +5815,7 @@ fn test_get_next_visible_pane() {
 fn test_inertial_settings_fallback_and_ranges() {
     let friction_raw = 90_u16;
     let friction_f32 = (friction_raw as f32 / 100.0).clamp(0.5, 0.99);
-    assert!(friction_f32 >= 0.5 && friction_f32 <= 0.99);
+    assert!((0.5..=0.99).contains(&friction_f32));
     
     let friction_raw_low = 30_u16;
     let friction_f32_low = (friction_raw_low as f32 / 100.0).clamp(0.5, 0.99);
@@ -6092,18 +6092,18 @@ fn dialog_list_scrolls_by_trackpad_and_by_wheel() {
 fn test_keyboard_shortcut_system() {
     // Test parsing simple shortcut
     let ctrl_g = Shortcut::parse("Ctrl+g").unwrap();
-    assert_eq!(ctrl_g.ctrl, true);
-    assert_eq!(ctrl_g.shift, false);
-    assert_eq!(ctrl_g.alt, false);
-    assert_eq!(ctrl_g.logo, false);
+    assert!(ctrl_g.ctrl);
+    assert!(!ctrl_g.shift);
+    assert!(!ctrl_g.alt);
+    assert!(!ctrl_g.logo);
     assert_eq!(ctrl_g.key, Key::Character("g".to_string()));
 
     // Test parsing complex shortcut
     let complex = Shortcut::parse("Ctrl+Shift+Alt+Logo+s").unwrap();
-    assert_eq!(complex.ctrl, true);
-    assert_eq!(complex.shift, true);
-    assert_eq!(complex.alt, true);
-    assert_eq!(complex.logo, true);
+    assert!(complex.ctrl);
+    assert!(complex.shift);
+    assert!(complex.alt);
+    assert!(complex.logo);
     assert_eq!(complex.key, Key::Character("s".to_string()));
 
     // Test parsing named keys
@@ -6112,8 +6112,8 @@ fn test_keyboard_shortcut_system() {
 
     // Test parsing case insensitivity
     let case_sc = Shortcut::parse("cTrL+sHiFt+ArrowDown").unwrap();
-    assert_eq!(case_sc.ctrl, true);
-    assert_eq!(case_sc.shift, true);
+    assert!(case_sc.ctrl);
+    assert!(case_sc.shift);
     assert_eq!(case_sc.key, Key::Named(NamedKey::ArrowDown));
 
     // Test register and match

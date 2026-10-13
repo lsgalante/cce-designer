@@ -813,13 +813,13 @@ impl AttribStore {
                     match ty {
                         AttribType::Float => AttribData::Float(flat),
                         AttribType::Float2 => {
-                            AttribData::Float2(flat.chunks_exact(2).map(|c| [c[0], c[1]]).collect())
+                            AttribData::Float2(flat.as_chunks::<2>().0.iter().map(|c| [c[0], c[1]]).collect())
                         }
                         AttribType::Float3 => AttribData::Float3(
-                            flat.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
+                            flat.as_chunks::<3>().0.iter().map(|c| [c[0], c[1], c[2]]).collect(),
                         ),
                         _ => AttribData::Float4(
-                            flat.chunks_exact(4).map(|c| [c[0], c[1], c[2], c[3]]).collect(),
+                            flat.as_chunks::<4>().0.iter().map(|c| [c[0], c[1], c[2], c[3]]).collect(),
                         ),
                     }
                 }
@@ -1903,7 +1903,7 @@ impl Detail {
             point_of.push(idx);
         }
 
-        for tri in point_of.chunks_exact(3) {
+        for tri in point_of.as_chunks::<3>().0 {
             detail.add_prim(tri);
         }
 

@@ -23,7 +23,7 @@ use std::collections::HashMap;
 
 /// The golden ratio: the icosahedron's corners sit on three orthogonal
 /// golden rectangles.
-const T: f32 = 1.618_034;
+const T: f32 = std::f32::consts::GOLDEN_RATIO;
 
 /// Points welded by quantized position, so a corner two faces share is one
 /// point whichever face names it first.
@@ -249,7 +249,7 @@ pub fn cuboid_detail(center: Vec3, half: Vec3, color: [f32; 3]) -> Detail {
     let mut norms = Vec::with_capacity(24);
     for (quad, normal) in &faces {
         d.add_prim(quad);
-        norms.extend(std::iter::repeat(normal.to_array()).take(4));
+        norms.extend(std::iter::repeat_n(normal.to_array(), 4));
     }
     let _ = d.verts_mut().insert("N", AttribData::Float3(norms));
     let _ = d.verts_mut().insert("uv", AttribData::Float2(vec![[0.0, 0.0]; 24]));

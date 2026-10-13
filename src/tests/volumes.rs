@@ -426,7 +426,7 @@ fn frame_all_frames_the_root_camera_from_inside_a_subnet() {
     let c = [3.0f32, 0.5, -2.0];
     state.scene.rt_sphere_verts = (0..12)
         .map(|i| {
-            let a = i as f32 * 0.5236;
+            let a = i as f32 * std::f32::consts::FRAC_PI_6;
             Vertex3D { position: [c[0] + 0.25 * a.cos(), c[1] + 0.25 * a.sin(), c[2] + 0.1 * (i % 3) as f32], color: [1.0; 3] }
         })
         .collect();

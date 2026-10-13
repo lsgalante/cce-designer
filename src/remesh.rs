@@ -257,7 +257,7 @@ impl Mesh {
                 continue;
             }
             let mapped = [remap[tri[0] as usize], remap[tri[1] as usize], remap[tri[2] as usize]];
-            if mapped.iter().any(|&m| m == u32::MAX) || mapped[0] == mapped[1] || mapped[1] == mapped[2] || mapped[0] == mapped[2] {
+            if mapped.contains(&u32::MAX) || mapped[0] == mapped[1] || mapped[1] == mapped[2] || mapped[0] == mapped[2] {
                 continue;
             }
             d.add_prim(&mapped);

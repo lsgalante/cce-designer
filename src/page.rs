@@ -256,9 +256,7 @@ impl Page {
 
     /// Paint the whole sheet.
     pub fn fill(&mut self, color: [f32; 4]) {
-        for p in &mut self.pixels {
-            *p = color;
-        }
+        self.pixels.fill(color);
     }
 
     /// An axis-aligned rectangle in INCHES from the top-left corner.
@@ -364,7 +362,7 @@ impl Page {
         // clamp to 0..=1 then gave, and leaves the loop free to vectorize.
         // The push-and-clamp version was ~40 ms for Letter at 300 DPI.
         let mut out = vec![0u8; self.pixels.len() * 4];
-        for (o, p) in out.chunks_exact_mut(4).zip(&self.pixels) {
+        for (o, p) in out.as_chunks_mut::<4>().0.iter_mut().zip(&self.pixels) {
             for c in 0..4 {
                 o[c] = (p[c] * 255.0 + 0.5) as u8;
             }
@@ -1105,9 +1103,7 @@ pub fn displayed_page(root: &FsNode, level: &FsNode) -> Option<Page> {
 pub fn displayed_page_node(level: &FsNode) -> Option<&FsNode> {
     level
         .children
-        .iter()
-        .filter(|c| is_page_node(&c.node_type) && c.geometry_visible)
-        .next_back()
+        .iter().rfind(|c| is_page_node(&c.node_type) && c.geometry_visible)
 }
 
 /// The font stack, for tests that draw text without a node behind them.

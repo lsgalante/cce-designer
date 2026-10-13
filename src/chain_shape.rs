@@ -34,7 +34,7 @@ impl ChainShape {
     pub fn wrap(rects: &[Span]) -> Self {
         let rects: Vec<Span> = rects.iter().copied().filter(|r| r.2 - r.0 > MERGE && r.3 - r.1 > MERGE).collect();
         let edges = |pick: &dyn Fn(&Span) -> [f32; 2]| {
-            let mut v: Vec<f32> = rects.iter().flat_map(|r| pick(r)).collect();
+            let mut v: Vec<f32> = rects.iter().flat_map(pick).collect();
             v.sort_by(f32::total_cmp);
             v.dedup_by(|a, b| (*a - *b).abs() < MERGE);
             v
@@ -180,10 +180,10 @@ impl ChainShape {
                 let above = (k > 0 && bands[k - 1].1 == y0).then(|| bands[k - 1]);
                 let below = (k + 1 < bands.len() && bands[k + 1].0 == y1).then(|| bands[k + 1]);
                 let corners = (
-                    above.map_or(true, |a| a.2 > l),
-                    above.map_or(true, |a| a.3 < r),
-                    below.map_or(true, |b| b.3 < r),
-                    below.map_or(true, |b| b.2 > l),
+                    above.is_none_or(|a| a.2 > l),
+                    above.is_none_or(|a| a.3 < r),
+                    below.is_none_or(|b| b.3 < r),
+                    below.is_none_or(|b| b.2 > l),
                 );
                 ((l, y0, r, y1), corners)
             })

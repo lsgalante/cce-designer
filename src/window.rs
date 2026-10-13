@@ -96,38 +96,30 @@ impl State {
                         state.focused_pane = target_pane;
                         // Make sure the switched pane is visible!
                         match target_pane {
-                            LEFT_MENUBAR_IDX => {
-                                if !state.show_network {
-                                    state.show_network = true;
-                                    state.ui_context[state.slots.content].set_visible(true);
-                                    state.ui_context[state.slots.left_menubar].set_visible(true);
-                                    state.ui_context[state.slots.breadcrumb].set_visible(true);
-                                    state.menu_mut(HEADER_IDX).set_item_checked(2, 4, true);
-                                }
+                            LEFT_MENUBAR_IDX if !state.show_network => {
+                                state.show_network = true;
+                                state.ui_context[state.slots.content].set_visible(true);
+                                state.ui_context[state.slots.left_menubar].set_visible(true);
+                                state.ui_context[state.slots.breadcrumb].set_visible(true);
+                                state.menu_mut(HEADER_IDX).set_item_checked(2, 4, true);
                             }
-                            RIGHT_MENUBAR_IDX => {
-                                if !state.show_viewport {
-                                    state.show_viewport = true;
-                                    state.ui_context[state.slots.viewport].set_visible(true);
-                                    state.ui_context[state.slots.right_menubar].set_visible(true);
-                                    state.menu_mut(HEADER_IDX).set_item_checked(2, 5, true);
-                                }
+                            RIGHT_MENUBAR_IDX if !state.show_viewport => {
+                                state.show_viewport = true;
+                                state.ui_context[state.slots.viewport].set_visible(true);
+                                state.ui_context[state.slots.right_menubar].set_visible(true);
+                                state.menu_mut(HEADER_IDX).set_item_checked(2, 5, true);
                             }
-                            PARAM_MENUBAR_IDX => {
-                                if !state.show_parameters {
-                                    state.show_parameters = true;
-                                    state.ui_context[state.slots.param].set_visible(true);
-                                    state.ui_context[state.slots.param_menubar].set_visible(true);
-                                    state.menu_mut(HEADER_IDX).set_item_checked(2, 6, true);
-                                }
+                            PARAM_MENUBAR_IDX if !state.show_parameters => {
+                                state.show_parameters = true;
+                                state.ui_context[state.slots.param].set_visible(true);
+                                state.ui_context[state.slots.param_menubar].set_visible(true);
+                                state.menu_mut(HEADER_IDX).set_item_checked(2, 6, true);
                             }
-                            SPREADSHEET_MENUBAR_IDX => {
-                                if !state.show_spreadsheet {
-                                    state.show_spreadsheet = true;
-                                    state.ui_context[state.slots.spreadsheet].set_visible(true);
-                                    state.ui_context[state.slots.spreadsheet_menubar].set_visible(true);
-                                    state.menu_mut(HEADER_IDX).set_item_checked(2, 7, true);
-                                }
+                            SPREADSHEET_MENUBAR_IDX if !state.show_spreadsheet => {
+                                state.show_spreadsheet = true;
+                                state.ui_context[state.slots.spreadsheet].set_visible(true);
+                                state.ui_context[state.slots.spreadsheet_menubar].set_visible(true);
+                                state.menu_mut(HEADER_IDX).set_item_checked(2, 7, true);
                             }
                             _ => {}
                         }

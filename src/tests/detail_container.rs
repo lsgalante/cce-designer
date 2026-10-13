@@ -365,7 +365,7 @@ fn test_detail_clone_drops_the_derived_topology_but_not_the_geometry() {
     let mut copy = d.clone();
     assert_eq!(copy.num_points(), 9);
     assert_eq!(copy.topology().valence(4), 4);
-    copy.keep_points(&vec![true; 9]);
+    copy.keep_points(&[true; 9]);
     assert_eq!(copy.num_prims(), 4);
     assert_eq!(d.num_prims(), 4, "the original is untouched");
 }

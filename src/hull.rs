@@ -43,7 +43,7 @@ fn hull_faces(points: &[Vec3]) -> Option<Vec<[usize; 3]>> {
         .iter()
         .fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), &p| (lo.min(p), hi.max(p)));
     let diag = (hi - lo).length();
-    if !(diag > 0.0) {
+    if diag.is_nan() || diag <= 0.0 {
         return None;
     }
     // "On the face" and "no volume" are both judged against the cloud's own
