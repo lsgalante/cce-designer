@@ -4624,11 +4624,11 @@ cce-ui's `tokio` dependency, which existed for nothing else.
 Node templates (`nodes/*.json`) and `default_project.json` are located via
 `env!("CARGO_MANIFEST_DIR")` — the installed binary still reads from the source
 checkout. Templates are resolved recursively: a template's children reference other
-templates by `type`, merged with param overrides (`load_fs_tree` in `src/app.rs`).
+templates by `type`, merged with param overrides (`load_fs_tree` in `src/model.rs`).
 Missing referenced templates panic at load.
 
 Saved instances are self-contained copies, but the loader merges template
-evolution into them (`merge_template_defs` in `src/app.rs`, run on every
+evolution into them (`merge_template_defs` in `src/model.rs`, run on every
 project deserialization including thumbnails): missing params are inserted
 where the template puts them (after the last template param the instance
 already has — so the Sphere's Method lands above Radius in an old save, not
@@ -4648,7 +4648,7 @@ injects or deletes children and never rewrites files on disk.
 A node's name is a segment of its path — `/sphere1/opencl1` is how the
 breadcrumb, the MCP tools and every `Input` wire name it — so names are
 lowercase, as Houdini's are, and carry no spaces (since 2026-09-21).
-`sanitize_node_name` (src/app.rs) is the rule: the conventional space
+`sanitize_node_name` (src/model.rs) is the rule: the conventional space
 between a template name and its index goes ("Sphere 1" → "sphere1", which
 is also what minting now produces), any other whitespace becomes an
 underscore ("My Region" → "my_region"), the whole thing is lowercased, and
