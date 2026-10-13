@@ -232,8 +232,17 @@ gone from cce-ui with the wgpu path).
   the engine hooks see the renderer.
 - `src/app/input.rs` — `State::handle_event`, the one entry every window event
   takes (from `process_window_event` and the tests), split by the kind of event:
-  `on_wheel`, `on_pointer_moved`, `on_mouse_button`, `on_key`. A child module of
-  `app`, so it reaches `State`'s private fields and methods as `app.rs` does; the
+  `on_wheel`, `on_pointer_moved`, `on_mouse_button`, `on_key`. Each of those is a
+  cascade of named steps in the order they get the event — `on_press` is
+  `press_menus`, `press_network_chrome`, `press_resize_edges`,
+  `press_viewer_tool`, `press_network_box_select`, `press_camera_drag`,
+  `press_right`, then `click_target`, `focus_for_press` and `deliver_press`
+  (`network_after_press` for the graph). A step that can end the event
+  returns `Option<bool>`: `Some(r)` is "return `r` now", skipping what follows
+  — for a button, the graph's drains (`drain_graph_requests`) and the
+  focus-changed tail too, as the inline `return`s they were did. A step that
+  only reports returns whether it changed anything. A child module of `app`,
+  so it reaches `State`'s private fields and methods as `app.rs` does; the
   source scans that list files by name (`nothing_shells_out_to_cce_cloud_any_more`,
   `the_dialog_plate_is_the_menu_plate`) list it beside `app.rs`.
 - `src/model.rs` (~1.6k lines) — the node tree and the project file, with no window or
@@ -353,10 +362,11 @@ gone from cce-ui with the wgpu path).
   rather than slot so renames don't detach it and a vanished node drops the
   state lazily, and write-back through the SetParam resync sequence
   (`sync_nodes` + `rebuild_scene_geometry` + `sync_parameters_pane`).
-  Input hooks live in `handle_event`: presses intercept in the MouseInput arm
-  ahead of the viewport context menu (gated on `cursor_in_viewport() &&
-  !in_network_pane`, so the network keeps its clicks on its nodes),
-  motion at the top of CursorMoved, Escape ahead of connection-cancel.
+  Input hooks live in `handle_event` (`src/app/input.rs`): presses intercept in
+  `press_viewer_tool`, ahead of the viewport context menu (gated on
+  `cursor_in_viewport() && !in_network_pane`, so the network keeps its clicks
+  on its nodes), motion near the top of `on_pointer_moved`, Escape in
+  `on_escape` ahead of connection-cancel.
 
   What differs per tool is the `HandleSource` trait: which node types it
   accepts, where the handles are, how to write them back, whether the pointer
@@ -2891,7 +2901,7 @@ That makes the pane's RECT useless as a hit test, and these route off it:
 
 - **Clicks** ask `in_network_pane`, which in overlay mode narrows to "a node is
   under the cursor, and no floating pane covers it" (`overlay_claims`). The
-  same refinement goes into the press cascade's `hits_widget` closure, where
+  same refinement goes into the press cascade's `State::hits_widget`, where
   the circular pane already refines its own hit test. Without it the graph
   claims every press in the window, including ones landing on a node drawn
   UNDER the params pane.
@@ -3081,10 +3091,10 @@ glyph). The menus' `● ` / `○ ` switch marks are cce-ui's `MARK_ON` /
 
 - **`State::run_menu_turn` is the one dispatch**, reached by a left press
   (`press_menu_turn`, ahead of every menu's own click handler) and by a swipe
-  (`take_menu_turn`, from the wheel arm, which now routes the wheel to ANY
+  (`take_menu_turn`, from `wheel_modal`, which now routes the wheel to ANY
   open menu, not only the slider menus). `MenuOrigin` names the menu a turn
   came from; `reopen_menu` shows it again at a corner (each menu's opener
-  takes an `at`, through `put_up_menu`). The wheel arm first asks cce-ui's
+  takes an `at`, through `put_up_menu`). `wheel_modal` first asks cce-ui's
   `side_swipe::swallow`: what is left of a swipe that turned is dropped,
   so the end of a swipe back from the wide Add Node list does not orbit
   the scene the narrower menu uncovers.
@@ -4159,7 +4169,7 @@ gestures, `pan_drag` beside `orbit_drag`:
   the first cut put it and where it never ran;
 - **shift and the left button**, in the orbit's own arm, so a viewer
   state's handle and a node still take the press first;
-- **shift and a scroll**, at the top of the wheel arm, a notch being
+- **shift and a scroll**, near the top of `on_wheel` (`camera_wheel_pan`), a notch being
   `PAN_PX_PER_LINE` px.
 
 The Default Camera's eye hangs off its pivot, so `Viewport3D::pivot` is
@@ -4554,7 +4564,7 @@ is the test.
 every slot the pointer's position, or an off-screen one while
 `pointer_captured` says a gesture or the dialog owns it — a widget or app
 drag, an orbit, a pan, a grid expansion, a handle grab, a held menu
-slider. It runs from the cursor arm (ahead of the early returns those
+slider. It runs from `on_pointer_moved` (ahead of the early returns those
 gestures take, which is where a pane hovered at the press used to stay lit
 for the whole drag), from the release once the captures are down, and
 from the dialog's open and close, since a modal that let the panes beside
