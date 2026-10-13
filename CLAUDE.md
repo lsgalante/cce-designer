@@ -3234,9 +3234,10 @@ override, left from the cell model. `get_state` over MCP reports `grid`
 and node size), which is the one way to check from outside that a config
 edit reached the lattice.
 
-`State::grid_pitch_x` / `grid_pitch_y` and `node_w` / `node_h` are the
-zoomed geometry — `configured_grid_geometry` at 100%, scaled TOGETHER by
-`scale_grid_geometry`, which is the only relation between them. **A
+`State::grid`, a `GridGeometry` (`pitch_x` / `pitch_y` and `node_w` /
+`node_h`), is the zoomed geometry — `configured_grid_geometry` at 100%,
+scaled TOGETHER by `scale_grid_geometry` (`GridGeometry::scaled`), which is
+the only relation between the pitch and the node. **A
 config.kdl edit to the spacing or node size shows at once** (since
 2026-10-06): `State::grid_base` is the configured geometry the live one is
 a zoom of, and the config reload (`update_graph_settings_from_config`)

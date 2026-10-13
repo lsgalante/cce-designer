@@ -2126,7 +2126,7 @@ impl State {
     pub fn zoom_percent(&self) -> f32 {
         let cfg = crate::app::configured_grid_geometry();
         if cfg.pitch_x > 0.0 {
-            self.grid_pitch_x / cfg.pitch_x * 100.0
+            self.grid.pitch_x / cfg.pitch_x * 100.0
         } else {
             100.0
         }
@@ -2152,8 +2152,8 @@ impl State {
     /// the row is re-read afterwards rather than trusted.
     pub fn set_zoom_percent(&mut self, pct: f32) {
         let cfg = crate::app::configured_grid_geometry();
-        if self.grid_pitch_x > 0.0 {
-            let factor = cfg.pitch_x * pct / 100.0 / self.grid_pitch_x;
+        if self.grid.pitch_x > 0.0 {
+            let factor = cfg.pitch_x * pct / 100.0 / self.grid.pitch_x;
             if (factor - 1.0).abs() > 1e-4 {
                 self.zoom(factor, None);
             }

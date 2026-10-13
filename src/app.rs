@@ -1064,20 +1064,17 @@ pub struct State {
     /// cell it can land on (cce-ui's `Graph::drag_update`). Not read from
     /// `style.surface.graph.grid_snap`.
     pub grid_snap_enabled: bool,
-    /// The network grid's pitch at the current zoom — centre of one grid
-    /// line to the centre of the next, per axis. The grid's one size; a
-    /// node's (col, row) is the intersection its centre sits on.
     /// The configured grid geometry (`configured_grid_geometry`) the live
     /// one is a zoom of — the 100% baseline as it was last read. A config
     /// reload that moves it re-applies the grid at the zoom in hand
     /// (`update_graph_settings_from_config`).
     pub grid_base: GridGeometry,
-    pub grid_pitch_x: f32,
-    pub grid_pitch_y: f32,
-    /// The node body's size at the current zoom — its own, not the pitch's;
-    /// zoom scales the two together and nothing else relates them.
-    pub node_w: f32,
-    pub node_h: f32,
+    /// The network grid at the current zoom. The pitch — centre of one grid
+    /// line to the centre of the next, per axis — is the grid's one size,
+    /// and a node's (col, row) is the intersection its centre sits on. The
+    /// node body's size is its own, not the pitch's; zoom scales the two
+    /// together (`scale_grid_geometry`) and nothing else relates them.
+    pub grid: GridGeometry,
 
     pub pan_x: f32,
     pub pan_y: f32,
@@ -6251,10 +6248,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             square_viewport: settings.viewport.square,
             grid_snap_enabled: true,
             grid_base: cfg_grid,
-            grid_pitch_x: cfg_grid.pitch_x,
-            grid_pitch_y: cfg_grid.pitch_y,
-            node_w: cfg_grid.node_w,
-            node_h: cfg_grid.node_h,
+            grid: cfg_grid,
             pan_x,
             pan_y,
             pan_velocity_x: 0.0,
@@ -6470,24 +6464,18 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     /// hands the widget, so the cursor drawn here and the nodes the widget
     /// draws cannot disagree.
     pub fn node_size(&self) -> (f32, f32) {
-        (self.node_w, self.node_h)
+        (self.grid.node_w, self.grid.node_h)
     }
 
     /// Put the grid at a geometry outright (Reset Zoom, Frame All's fit).
     pub fn set_grid_geometry(&mut self, g: GridGeometry) {
-        self.grid_pitch_x = g.pitch_x;
-        self.grid_pitch_y = g.pitch_y;
-        self.node_w = g.node_w;
-        self.node_h = g.node_h;
+        self.grid = g;
     }
 
     /// Scale the grid geometry by one factor — the pitch and the node body
     /// together, which is the only way the two are related.
     pub fn scale_grid_geometry(&mut self, f: f32) {
-        self.grid_pitch_x *= f;
-        self.grid_pitch_y *= f;
-        self.node_w *= f;
-        self.node_h *= f;
+        self.grid = self.grid.scaled(f);
     }
 
     /// The window-space centre of lattice cell (col, row) in the network
@@ -6497,8 +6485,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     pub fn cell_center(&self, col: i32, row: i32) -> (f32, f32) {
         let (px, py, _, _) = self.positions[CONTENT_IDX];
         (
-            px + self.pan_x + col as f32 * self.grid_pitch_x,
-            py + self.pan_y + row as f32 * self.grid_pitch_y,
+            px + self.pan_x + col as f32 * self.grid.pitch_x,
+            py + self.pan_y + row as f32 * self.grid.pitch_y,
         )
     }
 
@@ -6515,8 +6503,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     /// its intersection, so a click between two nodes belongs to the closer.
     pub fn cell_at(&self, x: f32, y: f32) -> (i32, i32) {
         let (px, py, _, _) = self.positions[CONTENT_IDX];
-        let col = if self.grid_pitch_x > 0.0 { ((x - px - self.pan_x) / self.grid_pitch_x).round() } else { 0.0 };
-        let row = if self.grid_pitch_y > 0.0 { ((y - py - self.pan_y) / self.grid_pitch_y).round() } else { 0.0 };
+        let col = if self.grid.pitch_x > 0.0 { ((x - px - self.pan_x) / self.grid.pitch_x).round() } else { 0.0 };
+        let row = if self.grid.pitch_y > 0.0 { ((y - py - self.pan_y) / self.grid.pitch_y).round() } else { 0.0 };
         (col as i32, row as i32)
     }
 
@@ -6611,8 +6599,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         let active_node_area_y = self.positions[CONTENT_IDX].1;
         let active_node_area_x = self.positions[CONTENT_IDX].0;
 
-        let grid_pitch_x = self.grid_pitch_x;
-        let grid_pitch_y = self.grid_pitch_y;
+        let grid_pitch_x = self.grid.pitch_x;
+        let grid_pitch_y = self.grid.pitch_y;
         let (node_w, node_h) = self.node_size();
         let pan_x = self.pan_x;
         let pan_y = self.pan_y;
@@ -6727,13 +6715,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         // after it, so an edit waited for Reset Zoom or a restart.
         let base = configured_grid_geometry();
         if base != self.grid_base {
-            let zoom = if self.grid_base.pitch_x > 0.0 { self.grid_pitch_x / self.grid_base.pitch_x } else { 1.0 };
-            self.set_grid_geometry(GridGeometry {
-                pitch_x: base.pitch_x * zoom,
-                pitch_y: base.pitch_y * zoom,
-                node_w: base.node_w * zoom,
-                node_h: base.node_h * zoom,
-            });
+            let zoom = if self.grid_base.pitch_x > 0.0 { self.grid.pitch_x / self.grid_base.pitch_x } else { 1.0 };
+            self.set_grid_geometry(base.scaled(zoom));
             self.grid_base = base;
             changed = true;
         }
@@ -6752,8 +6735,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     pub fn zoom(&mut self, factor: f32, center: Option<(f32, f32)>) {
         self.pan_velocity_x = 0.0;
         self.pan_velocity_y = 0.0;
-        let old_px = self.grid_pitch_x;
-        let old_py = self.grid_pitch_y;
+        let old_px = self.grid.pitch_x;
+        let old_py = self.grid.pitch_y;
 
         // The x pitch is clamped and the y pitch follows by the SAME factor,
         // so the node body — scaled by that factor too — keeps its shape.
@@ -7724,8 +7707,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         }
         self.pan_velocity_x = 0.0;
         self.pan_velocity_y = 0.0;
-        self.pan_x -= dc as f32 * self.grid_pitch_x;
-        self.pan_y -= dr as f32 * self.grid_pitch_y;
+        self.pan_x -= dc as f32 * self.grid.pitch_x;
+        self.pan_y -= dr as f32 * self.grid.pitch_y;
         self.rebuild_positions();
         self.apply_layout();
         self.update_panel_bounds();
@@ -7752,8 +7735,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         // Pan so the cursor cell's centre — the lattice intersection it names
         // — lands at the pane's centre: the pane's half-extent minus the
         // cell's offset from the origin, which is its column times the pitch.
-        self.pan_x = pw * 0.5 - self.grid_cursor_col as f32 * self.grid_pitch_x;
-        self.pan_y = ph * 0.5 - self.grid_cursor_row as f32 * self.grid_pitch_y;
+        self.pan_x = pw * 0.5 - self.grid_cursor_col as f32 * self.grid.pitch_x;
+        self.pan_y = ph * 0.5 - self.grid_cursor_row as f32 * self.grid.pitch_y;
         self.pan_velocity_x = 0.0;
         self.pan_velocity_y = 0.0;
         self.sync_grid_settings();
@@ -7815,12 +7798,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         // scaled down until everything fits — Frame All never zooms in
         // past 100%.
         let base = configured_grid_geometry();
-        let at = |f: f32| GridGeometry {
-            pitch_x: base.pitch_x * f,
-            pitch_y: base.pitch_y * f,
-            node_w: base.node_w * f,
-            node_h: base.node_h * f,
-        };
+        let at = |f: f32| base.scaled(f);
         let (_px, _py, pw, ph) = self.positions[CONTENT_IDX];
         let padding = 40.0;
         let padded_w = (pw - 2.0 * padding).max(10.0);

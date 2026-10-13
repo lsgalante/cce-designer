@@ -367,6 +367,14 @@ pub struct GridGeometry {
     pub node_h: f32,
 }
 
+impl GridGeometry {
+    /// The geometry at `f` times its size: the pitch and the node body
+    /// together, which is what a zoom is.
+    pub fn scaled(self, f: f32) -> Self {
+        Self { pitch_x: self.pitch_x * f, pitch_y: self.pitch_y * f, node_w: self.node_w * f, node_h: self.node_h * f }
+    }
+}
+
 #[cfg(not(test))]
 pub fn configured_grid_geometry() -> GridGeometry {
     GridGeometry {

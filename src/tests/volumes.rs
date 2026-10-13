@@ -2288,7 +2288,7 @@ fn the_suite_runs_on_a_lattice_of_its_own() {
 
     let state = State::new(false);
     assert_eq!(
-        (state.grid_pitch_x, state.grid_pitch_y, state.node_w, state.node_h),
+        (state.grid.pitch_x, state.grid.pitch_y, state.grid.node_w, state.grid.node_h),
         (140.0, 70.0, 80.0, 40.0),
         "State::new did not start on the pinned lattice"
     );

@@ -239,7 +239,7 @@ fn dialog_zoom_slider_row_belongs_to_the_network_pane() {
     state.set_zoom_percent(150.0);
     assert!((state.zoom_percent() - 150.0).abs() < 0.5);
     state.set_zoom_percent(100_000.0);
-    assert!((state.grid_pitch_x - crate::app::MAX_PITCH_X).abs() < 0.5, "clamped to the max pitch");
+    assert!((state.grid.pitch_x - crate::app::MAX_PITCH_X).abs() < 0.5, "clamped to the max pitch");
     assert!((state.ui_context[state.slots.dialog].rows[0].slider_value().unwrap() - state.zoom_percent()).abs() < 1e-3);
     state.set_zoom_percent(100.0);
 
@@ -1158,12 +1158,12 @@ fn a_grid_spacing_edit_applies_at_the_zoom_in_hand() {
     // The file now says what `cfg` says.
     state.update_graph_settings_from_config();
     assert_eq!(state.grid_base, cfg);
-    assert_eq!(state.grid_pitch_y, cfg.pitch_y * 1.5, "the new spacing, at the same 150%");
-    assert_eq!(state.grid_pitch_x, cfg.pitch_x * 1.5);
-    assert_eq!((state.node_w, state.node_h), (cfg.node_w * 1.5, cfg.node_h * 1.5));
+    assert_eq!(state.grid.pitch_y, cfg.pitch_y * 1.5, "the new spacing, at the same 150%");
+    assert_eq!(state.grid.pitch_x, cfg.pitch_x * 1.5);
+    assert_eq!((state.grid.node_w, state.grid.node_h), (cfg.node_w * 1.5, cfg.node_h * 1.5));
     // A reload that changes nothing leaves the zoom alone.
     state.update_graph_settings_from_config();
-    assert_eq!(state.grid_pitch_x, cfg.pitch_x * 1.5);
+    assert_eq!(state.grid.pitch_x, cfg.pitch_x * 1.5);
 }
 
 /// A node dropped on another node swaps places with it, connections
@@ -2192,18 +2192,18 @@ fn frame_all_keeps_the_node_labels_inside_the_pane() {
         right <= px + pw - padding + 0.5,
         "the long label ends at {right:.1}, past the pane's padded right edge {:.1} (pitch {:.1})",
         px + pw - padding,
-        state.grid_pitch_x
+        state.grid.pitch_x
     );
     let (ax, _, _, _) = state.cell_rect(0, 0);
     assert!(ax >= px + padding - 0.5, "the left-hand body starts at {ax:.1}, inside the padding");
     // The fit is by the labels: the bodies alone would have fitted at
     // 100%, so the zoom had to come down for the name.
-    assert!(state.grid_pitch_x < 140.0, "the zoom stayed at 100% ({}), so the label was not counted", state.grid_pitch_x);
+    assert!(state.grid.pitch_x < 140.0, "the zoom stayed at 100% ({}), so the label was not counted", state.grid.pitch_x);
 
     // And a level whose labels already fit frames at 100% — the label
     // rule must not shrink a level that has room.
     state.apply_action(crate::app::McpAction::RenameNode { slot: long, new_name: "b".into() }, &mut redraw).unwrap();
     state.frame_all_nodes();
-    assert!((state.grid_pitch_x - 140.0).abs() < 0.01, "short labels fit at 100%, got pitch {}", state.grid_pitch_x);
+    assert!((state.grid.pitch_x - 140.0).abs() < 0.01, "short labels fit at 100%, got pitch {}", state.grid.pitch_x);
     assert!(label_right(&state, long) <= px + pw - padding + 0.5);
 }
