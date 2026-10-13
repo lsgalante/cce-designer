@@ -396,7 +396,6 @@ impl State {
             // longer touches — the drag in hand stays in hand.
             self.app_drag = None;
         }
-        self.last_click = None;
 
         self.sync_grid_settings();
         self.sync_nodes();
@@ -469,7 +468,6 @@ impl State {
         }
         self.drag_widget = None;
         self.app_drag = None;
-        self.last_click = None;
 
         self.sync_grid_settings();
         self.sync_nodes();
@@ -579,7 +577,6 @@ impl State {
         self.focused_widget = None;
         self.drag_widget = None;
         self.app_drag = None;
-        self.last_click = None;
 
         self.sync_grid_settings();
         self.sync_nodes();

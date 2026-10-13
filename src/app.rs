@@ -804,7 +804,6 @@ pub struct State {
     /// rather than one node because an expanded cursor selects many, and a
     /// copy that silently took one of them would be a trap.
     pub node_clipboard: Vec<FsNode>,
-    pub last_click: Option<(Instant, usize)>,
 
     pub shortcut_manager: ShortcutManager,
     /// A chord matched this frame, run on the next tick — the command's
@@ -6158,7 +6157,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             current_path,
             param_pane_source: None,
             node_clipboard: Vec::new(),
-            last_click: None,
             shortcut_manager,
             pending_command: None,
             exit_requested: false,
