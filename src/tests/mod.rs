@@ -378,7 +378,7 @@ fn the_plates_have_no_docks() {
     let (bx, _, bw, _) = b.positions[SPREADSHEET_IDX];
     assert_eq!((bx, bw), (18.0, b.floating_spreadsheet_rect().2), "along the bottom");
     assert!((b.params.params_hud_width - 400.0).abs() < 0.5, "an older save's params width is the HUD's: {}", b.params.params_hud_width);
-    assert!((b.floating_spreadsheet_height - 270.0).abs() < 0.5);
+    assert!((b.sheet.floating_spreadsheet_height - 270.0).abs() < 0.5);
     let _ = fs::remove_dir_all(&dir);
 }
 

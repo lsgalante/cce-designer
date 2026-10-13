@@ -167,6 +167,9 @@ pub use markers::SceneMarkers;
 // `State::params`: the params pane's node, plate, spans, pickers, HUD.
 mod params;
 pub use params::ParamsPane;
+// `State::sheet`: what the spreadsheet's rows were read from, its height.
+mod sheet;
+pub use sheet::SheetPane;
 
 /// Which node the params pane is showing: the editor's level, the slot
 /// there, and the node's id. All three, because no one of them is an
@@ -840,10 +843,9 @@ pub struct State {
     pub show_parameters: bool,
     pub show_spreadsheet: bool,
     pub show_playbar: bool,
-    pub last_spreadsheet_node_name: Option<String>,
-    pub last_spreadsheet_node_params: Option<Vec<(String, String)>>,
-    /// The frame and geometry version the spreadsheet's rows were read at.
-    pub last_spreadsheet_read_at: (i32, u64),
+    /// The spreadsheet's own state: what its rows were last read from, where
+    /// their points stand, its plate's height (`src/app/sheet.rs`).
+    pub sheet: SheetPane,
     pub focused_pane: usize,
     pub last_config_read: Instant,
     pub circular_network_pane: bool,
@@ -876,7 +878,6 @@ pub struct State {
     pub last_config_mod_time: Option<std::time::SystemTime>,
     /// The active app-mode drag (pane edge resize), if any. See [`AppDrag`].
     pub app_drag: Option<AppDrag>,
-    pub floating_spreadsheet_height: f32,
     /// Whether the compositor has told us the window's size yet. Until it
     /// has, `width`/`height` are `State::new`'s 1280x800 placeholder.
     pub window_configured: bool,
@@ -909,12 +910,6 @@ pub struct State {
     /// What is drawn ON the scene: the marker instances, the pull arrows, the
     /// element overlays' numbers and whiskers (`src/app/markers.rs`).
     pub markers: SceneMarkers,
-    /// The spreadsheet's selected rows, shown in the scene: a marker on the
-    /// point each row is. `spreadsheet_points` is where the rows' points
-    /// were when the table was last filled, kept so a selection stages its
-    /// markers without an evaluation; the markers are staged by
-    /// `rebuild_row_markers` and flushed to `meshes.row_points`.
-    pub spreadsheet_points: Vec<[f32; 3]>,
     pub ui_context: cce_ui::context::UiContext,
 }
 
@@ -995,7 +990,7 @@ impl State {
     pub fn pane_layout_json(&self) -> String {
         let vs = self.project_view_state();
         let splitters = vs.splitters.map(|(a, b)| ((a * 1000.0).round(), (b * 1000.0).round()));
-        let plates = (self.params.params_hud_width.round(), self.floating_spreadsheet_height.round());
+        let plates = (self.params.params_hud_width.round(), self.sheet.floating_spreadsheet_height.round());
         // The display settings ride the file now, so changing one is an
         // edit the title's asterisk should show.
         let display = serde_json::to_string(&vs.display).unwrap_or_default();
@@ -2005,7 +2000,7 @@ impl State {
         // stops a gap short of its top, the gap the bottom edge gives it.
         let pb_off = if self.show_playbar { playbar_shelf_h() } else { 0.0 };
         let ss_y_end = self.height - STATUS_H - pb_off - gap;
-        let ss_h = self.floating_spreadsheet_height.clamp(100.0, (ss_y_end - gap).max(100.0));
+        let ss_h = self.sheet.floating_spreadsheet_height.clamp(100.0, (ss_y_end - gap).max(100.0));
         let room = (self.width - 2.0 * gap).max(Self::SPREADSHEET_MIN_W);
         let w = self.slots.spreadsheet(&self.ui_context).content_width().ceil().clamp(Self::SPREADSHEET_MIN_W, room);
         (gap, ss_y_end - ss_h, w, ss_h)
@@ -4909,14 +4904,14 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         if let Some(node) = selected_node {
             current_name = Some(node.id.clone());
             current_params = Some(node.params.iter().map(|p| (p.name.clone(), p.text().to_string())).collect::<Vec<_>>());
-            if self.last_spreadsheet_node_name == current_name
-                && self.last_spreadsheet_node_params == current_params
-                && self.last_spreadsheet_read_at == read_at
+            if self.sheet.last_spreadsheet_node_name == current_name
+                && self.sheet.last_spreadsheet_node_params == current_params
+                && self.sheet.last_spreadsheet_read_at == read_at
             {
                 cache_hit = true;
             }
         } else {
-            if self.last_spreadsheet_node_name.is_none() {
+            if self.sheet.last_spreadsheet_node_name.is_none() {
                 cache_hit = true;
             }
         }
@@ -4977,15 +4972,15 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             // The selection is of rows by index, which are points of ONE
             // node's output: it stands across a frame or an edit, and goes
             // when the table becomes another node's.
-            if current_name != self.last_spreadsheet_node_name {
+            if current_name != self.sheet.last_spreadsheet_node_name {
                 self.spreadsheet_mut().set_selected_rows(&[]);
             }
             self.spreadsheet_mut().set_spreadsheet_columns(headers, columns);
-            self.spreadsheet_points = points;
+            self.sheet.spreadsheet_points = points;
             self.rebuild_row_markers();
-            self.last_spreadsheet_node_name = current_name;
-            self.last_spreadsheet_node_params = current_params;
-            self.last_spreadsheet_read_at = read_at;
+            self.sheet.last_spreadsheet_node_name = current_name;
+            self.sheet.last_spreadsheet_node_params = current_params;
+            self.sheet.last_spreadsheet_read_at = read_at;
         }
         if let Some(members) = group_update {
             self.markers.group_members = members;
@@ -5185,7 +5180,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         let rows = self.spreadsheet_mut().selected_rows();
         let at: Vec<Vertex3D> = rows
             .iter()
-            .filter_map(|&r| self.spreadsheet_points.get(r))
+            .filter_map(|&r| self.sheet.spreadsheet_points.get(r))
             .map(|&position| Vertex3D { position, color: [0.0; 3] })
             .collect();
         let [r, g, b, _] = cce_ui::color::highlight_primary_color();
@@ -5600,9 +5595,13 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             show_parameters: true,
             show_spreadsheet: false,
             show_playbar: false,
-            last_spreadsheet_node_name: None,
-            last_spreadsheet_node_params: None,
-            last_spreadsheet_read_at: (i32::MIN, 0),
+            sheet: SheetPane {
+                last_spreadsheet_node_name: None,
+                last_spreadsheet_node_params: None,
+                last_spreadsheet_read_at: (i32::MIN, 0),
+                spreadsheet_points: Vec::new(),
+                floating_spreadsheet_height: 250.0,
+            },
             focused_pane: LEFT_MENUBAR_IDX,
             // Config-owned; update_inertial_settings overwrites these from
             // config.kdl's input.inertial right after construction. They
@@ -5645,7 +5644,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 mod_time
             },
             app_drag: None,
-            floating_spreadsheet_height: 250.0,
             window_configured: false,
             pending_plates: None,
             default_project_setting: settings.default_project.clone(),
@@ -5694,7 +5692,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 overlay_vertex_labels: Vec::new(),
                 overlay_vertex_alpha: Vec::new(),
             },
-            spreadsheet_points: Vec::new(),
             ui_context,
         };
 

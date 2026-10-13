@@ -2363,7 +2363,7 @@ selects one, ctrl toggles one, shift extends a run. Each selected row's
 point wears a marker in the viewport, in the highlight colour the row
 wears and at Group Marker Size.
 
-- **Nothing is evaluated by a selection.** `State::spreadsheet_points` is
+- **Nothing is evaluated by a selection.** `State::sheet.spreadsheet_points` is
   where the rows' points were when the table was last filled, kept from
   that evaluation; `rebuild_row_markers` builds the markers from it,
   and runs from the press, from every refill of the table and from a

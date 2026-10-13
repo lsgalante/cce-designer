@@ -119,7 +119,7 @@ impl State {
         // with it the whole block), so a save caps each at the full window.
         let plates = if self.width > 1.0 && self.height > 1.0 {
             Some(PlateGeometry {
-                spreadsheet_height: (self.floating_spreadsheet_height / self.height).min(1.0),
+                spreadsheet_height: (self.sheet.floating_spreadsheet_height / self.height).min(1.0),
                 hud_width: Some((self.params.params_hud_width / self.width).min(1.0)),
                 params_width: None,
             })
@@ -331,7 +331,7 @@ impl State {
         let all = [pg.spreadsheet_height, hud];
         if self.width > 1.0 && self.height > 1.0 && all.iter().all(|&f| sane(f)) {
             self.params.params_hud_width = hud * self.width;
-            self.floating_spreadsheet_height = pg.spreadsheet_height * self.height;
+            self.sheet.floating_spreadsheet_height = pg.spreadsheet_height * self.height;
             self.rebuild_positions();
             self.apply_layout();
         }

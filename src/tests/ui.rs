@@ -838,7 +838,7 @@ fn test_plate_geometry_round_trips_through_save() {
     a.execute_menu_action("Show Spreadsheet Pane");
     assert!(a.show_spreadsheet);
     a.params.params_hud_width = 420.0;
-    a.floating_spreadsheet_height = 300.0;
+    a.sheet.floating_spreadsheet_height = 300.0;
     a.rebuild_positions();
     a.save_to_file(&dir).expect("save");
 
@@ -850,14 +850,14 @@ fn test_plate_geometry_round_trips_through_save() {
     b.resize(1600.0, 900.0, 1.0);
     b.load_from_file(&dir).expect("load");
     assert!((b.params.params_hud_width - 420.0).abs() < 0.5, "HUD width: {}", b.params.params_hud_width);
-    assert!((b.floating_spreadsheet_height - 300.0).abs() < 0.5, "spreadsheet height: {}", b.floating_spreadsheet_height);
+    assert!((b.sheet.floating_spreadsheet_height - 300.0).abs() < 0.5, "spreadsheet height: {}", b.sheet.floating_spreadsheet_height);
 
     // Half the window: the same fractions land at half the pixels.
     let mut c = State::new(false);
     c.resize(800.0, 450.0, 1.0);
     c.load_from_file(&dir).expect("load half-size");
     assert!((c.params.params_hud_width - 210.0).abs() < 0.5, "scaled HUD width: {}", c.params.params_hud_width);
-    assert!((c.floating_spreadsheet_height - 150.0).abs() < 0.5, "scaled spreadsheet height: {}", c.floating_spreadsheet_height);
+    assert!((c.sheet.floating_spreadsheet_height - 150.0).abs() < 0.5, "scaled spreadsheet height: {}", c.sheet.floating_spreadsheet_height);
 
     // A detached pane window keeps its own plates.
     let mut d = State::new(true);
@@ -882,7 +882,7 @@ fn plates_loaded_before_the_first_configure_fit_the_real_window() {
     a.resize(1400.0, 1080.0, 1.0);
     a.execute_menu_action("Show Spreadsheet Pane");
     a.params.params_hud_width = 310.0;
-    a.floating_spreadsheet_height = 100.0;
+    a.sheet.floating_spreadsheet_height = 100.0;
     a.rebuild_positions();
     a.save_to_file(&dir).expect("save");
 
@@ -892,7 +892,7 @@ fn plates_loaded_before_the_first_configure_fit_the_real_window() {
     b.load_from_file(&dir).expect("load");
     b.resize(1400.0, 1080.0, 1.0);
     assert!((b.params.params_hud_width - 310.0).abs() < 0.5, "HUD width: {}", b.params.params_hud_width);
-    assert!((b.floating_spreadsheet_height - 100.0).abs() < 0.5, "spreadsheet height: {}", b.floating_spreadsheet_height);
+    assert!((b.sheet.floating_spreadsheet_height - 100.0).abs() < 0.5, "spreadsheet height: {}", b.sheet.floating_spreadsheet_height);
     let pg = b.project_view_state().plates.expect("plates");
     assert!((pg.hud_width.unwrap() - 310.0 / 1400.0).abs() < 1e-4, "a save writes back what was loaded: {:?}", pg);
 
@@ -916,7 +916,7 @@ fn a_project_loaded_before_the_first_configure_opens_clean() {
     let mut a = State::new(false);
     a.resize(1400.0, 1080.0, 1.0);
     a.params.params_hud_width = 310.0;
-    a.floating_spreadsheet_height = 180.0;
+    a.sheet.floating_spreadsheet_height = 180.0;
     a.rebuild_positions();
     a.save_to_file(&dir).expect("save");
 
@@ -946,7 +946,7 @@ fn a_shrunk_window_does_not_shrink_the_plates_for_good() {
     s.resize(1600.0, 900.0, 1.0);
     s.execute_menu_action("Show Spreadsheet Pane");
     s.params.params_hud_width = 650.0;
-    s.floating_spreadsheet_height = 600.0;
+    s.sheet.floating_spreadsheet_height = 600.0;
     s.rebuild_positions();
 
     s.resize(400.0, 300.0, 1.0);
@@ -977,7 +977,7 @@ fn a_detached_windows_save_does_not_reset_the_main_layout() {
     let mut main = State::new(false);
     main.resize(1600.0, 900.0, 1.0);
     main.params.params_hud_width = 650.0;
-    main.floating_spreadsheet_height = 420.0;
+    main.sheet.floating_spreadsheet_height = 420.0;
     main.viewport_mut().rotation_x = 0.7;
     main.rebuild_positions();
 
@@ -993,7 +993,7 @@ fn a_detached_windows_save_does_not_reset_the_main_layout() {
 
     assert!(main.doc.fs_root.children.iter().any(|c| c.name == "synced_edit"), "the tree edit must sync");
     assert!((main.params.params_hud_width - 650.0).abs() < 0.5, "HUD width: {}", main.params.params_hud_width);
-    assert!((main.floating_spreadsheet_height - 420.0).abs() < 0.5, "spreadsheet height: {}", main.floating_spreadsheet_height);
+    assert!((main.sheet.floating_spreadsheet_height - 420.0).abs() < 0.5, "spreadsheet height: {}", main.sheet.floating_spreadsheet_height);
     assert!((main.viewport().rotation_x - 0.7).abs() < 1e-6, "camera: {}", main.viewport().rotation_x);
     assert!(main.app_drag.is_some(), "a plate drag in progress survives the reload");
 
@@ -1062,7 +1062,7 @@ fn test_plate_resize_dirties_the_title_until_saved() {
     state.resize(1600.0, 900.0, 1.0);
     assert!(!state.has_unsaved_changes(), "a window resize is not an edit");
 
-    state.floating_spreadsheet_height += 60.0;
+    state.sheet.floating_spreadsheet_height += 60.0;
     state.rebuild_positions();
     state.update_window_title();
     assert!(state.has_unsaved_changes(), "a plate resize must dirty the title");
@@ -1306,7 +1306,7 @@ fn the_params_hud_is_under_the_plates_and_stops_above_the_bottom_ones() {
     // one, along the left, is not under the HUD and leaves it be.
     state.execute_menu_action("Show Spreadsheet Pane");
     state.execute_menu_action("Show Playbar Pane");
-    state.floating_spreadsheet_height = 500.0;
+    state.sheet.floating_spreadsheet_height = 500.0;
     state.spreadsheet_mut().set_spreadsheet_data(vec!["a".into()], vec![vec!["1".into()]]);
     state.rebuild_positions();
     state.apply_layout();
@@ -2679,7 +2679,7 @@ fn the_dialog_plate_is_the_menu_plate() {
     let r = cce_ui::layout::menu_corner_radius();
     let rect = cce_ui::scene::layout::Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 };
     assert_eq!(dialog.corner_style(rect).map(|(r, _)| r), (r > 0.0).then_some(r));
-    for file in ["src/dialog.rs", "src/render.rs", "src/app.rs", "src/app/input.rs", "src/app/document.rs", "src/app/network.rs", "src/app/camera.rs", "src/app/view.rs", "src/app/scene.rs", "src/app/stage.rs", "src/app/markers.rs", "src/app/params.rs"] {
+    for file in ["src/dialog.rs", "src/render.rs", "src/app.rs", "src/app/input.rs", "src/app/document.rs", "src/app/network.rs", "src/app/camera.rs", "src/app/view.rs", "src/app/scene.rs", "src/app/stage.rs", "src/app/markers.rs", "src/app/params.rs", "src/app/sheet.rs"] {
         let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(file)).unwrap();
         assert!(!src.contains("dialog/compression") && !src.contains("DIALOG_COMPRESSION"), "{file} overrides the menu material");
     }

@@ -460,8 +460,8 @@ impl State {
             AppDrag::SpreadsheetResize { start_h, start_mouse_y } => {
                 let dy = self.cursor_y - start_mouse_y;
                 let new_h = (start_h - dy).max(100.0);
-                self.floating_spreadsheet_height = new_h;
-                self.floating_spreadsheet_height = self.floating_spreadsheet_rect().3;
+                self.sheet.floating_spreadsheet_height = new_h;
+                self.sheet.floating_spreadsheet_height = self.floating_spreadsheet_rect().3;
                 self.rebuild_positions();
                 self.apply_layout();
             }

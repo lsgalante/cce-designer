@@ -1092,7 +1092,7 @@ fn selected_spreadsheet_rows_are_marked_in_the_scene() {
     let (a, b) = (slot_of(&state, "rows_a"), slot_of(&state, "rows_b"));
     state.apply_action(McpAction::Select { slot: a }, &mut redraw).unwrap();
     state.sync_nodes();
-    assert_eq!(state.spreadsheet_points.len(), 8, "a box has eight points, a row each");
+    assert_eq!(state.sheet.spreadsheet_points.len(), 8, "a box has eight points, a row each");
     assert!(state.markers.row_markers.verts.is_empty());
 
     let (sx, sy, sw, sh) = state.positions[SPREADSHEET_IDX];
@@ -1110,7 +1110,7 @@ fn selected_spreadsheet_rows_are_marked_in_the_scene() {
     assert!(!state.markers.row_markers.verts.is_empty() && state.markers.row_markers.dirty, "the marker is staged");
     let one = state.markers.row_markers.verts.len();
     // The marker stands on the row's point.
-    let p = state.spreadsheet_points[1];
+    let p = state.sheet.spreadsheet_points[1];
     let n = one as f32;
     let mid = state.markers.row_markers.verts.iter().fold([0.0f32; 3], |m, v| [m[0] + v.position[0] / n, m[1] + v.position[1] / n, m[2] + v.position[2] / n]);
     assert!((0..3).all(|k| (mid[k] - p[k]).abs() < 1e-3), "{mid:?} is not at {p:?}");
@@ -1126,9 +1126,9 @@ fn selected_spreadsheet_rows_are_marked_in_the_scene() {
     state.apply_action(McpAction::SetParam { slot: a, name: "center".into(), value: "1.00:0.50:0.25".into() }, &mut redraw).unwrap();
     state.sync_nodes();
     assert_eq!(state.selected_spreadsheet_points(), vec![0, 1]);
-    let moved = state.spreadsheet_points[1];
+    let moved = state.sheet.spreadsheet_points[1];
     let mid = state.markers.row_markers.verts[one..].iter().chain(&state.markers.row_markers.verts[..one]).fold([0.0f32; 3], |m, v| [m[0] + v.position[0], m[1] + v.position[1], m[2] + v.position[2]]);
-    let both = [moved, state.spreadsheet_points[0]];
+    let both = [moved, state.sheet.spreadsheet_points[0]];
     let want = [both[0][0] + both[1][0], both[0][1] + both[1][1], both[0][2] + both[1][2]];
     assert!((0..3).all(|k| (mid[k] / one as f32 - want[k]).abs() < 1e-2), "the markers followed the points");
 
@@ -1174,21 +1174,21 @@ fn rows_selected_inside_a_simnet_follow_the_simulation() {
     state.ui_context[state.slots.playbar].inner_mut().current_frame = 5.0;
     state.tick_frame(1.0 / 60.0);
     state.sync_nodes();
-    assert!(!state.spreadsheet_points.is_empty());
+    assert!(!state.sheet.spreadsheet_points.is_empty());
     state.spreadsheet_mut().set_selected_rows(&[3]);
     state.rebuild_row_markers();
     let middle = |state: &State| {
         let n = state.markers.row_markers.verts.len() as f32;
         state.markers.row_markers.verts.iter().fold(0.0f32, |m, v| m + v.position[0] / n)
     };
-    let (row_at, marker_at) = (state.spreadsheet_points[3][0], middle(&state));
+    let (row_at, marker_at) = (state.sheet.spreadsheet_points[3][0], middle(&state));
     assert!((row_at - marker_at).abs() < 1e-3);
 
     state.ui_context[state.slots.playbar].inner_mut().current_frame = 15.0;
     state.tick_frame(1.0 / 60.0);
-    let moved = state.spreadsheet_points[3][0] - row_at;
+    let moved = state.sheet.spreadsheet_points[3][0] - row_at;
     assert!(moved > 0.3, "ten frames of the pull moved the row's point {moved}");
-    assert!((middle(&state) - state.spreadsheet_points[3][0]).abs() < 1e-3, "and its marker with it");
+    assert!((middle(&state) - state.sheet.spreadsheet_points[3][0]).abs() < 1e-3, "and its marker with it");
     assert_eq!(state.selected_spreadsheet_points(), vec![3]);
 }
 
@@ -1283,16 +1283,16 @@ fn the_spreadsheet_and_markers_follow_the_frame_and_upstream_edits() {
     state.apply_action(McpAction::Select { slot: sphere }, &mut redraw).unwrap();
     state.sync_nodes();
     state.tick_frame(1.0 / 60.0);
-    let opened_at = state.last_spreadsheet_read_at;
+    let opened_at = state.sheet.last_spreadsheet_read_at;
     assert_eq!(opened_at.0, state.sim_frame());
     state.ui_context[state.slots.playbar].inner_mut().current_frame = 7.0;
     state.tick_frame(1.0 / 60.0);
-    assert_eq!(state.last_spreadsheet_read_at.0, 7, "read again at the new frame");
+    assert_eq!(state.sheet.last_spreadsheet_read_at.0, 7, "read again at the new frame");
     // The same frame again reads nothing again.
-    let at = state.last_spreadsheet_read_at;
+    let at = state.sheet.last_spreadsheet_read_at;
     state.tick_frame(1.0 / 60.0);
     state.sync_nodes();
-    assert_eq!(state.last_spreadsheet_read_at, at);
+    assert_eq!(state.sheet.last_spreadsheet_read_at, at);
 
     // An edit UPSTREAM of the selection: the selected node and its own
     // parameters are as they were, and the rows are read again.
@@ -1303,11 +1303,11 @@ fn the_spreadsheet_and_markers_follow_the_frame_and_upstream_edits() {
     }
     state.apply_action(McpAction::Select { slot: tagged }, &mut redraw).unwrap();
     state.sync_nodes();
-    let (before, markers) = (state.last_spreadsheet_read_at, marks(&state));
+    let (before, markers) = (state.sheet.last_spreadsheet_read_at, marks(&state));
     assert_eq!(markers.len(), 5);
     state.apply_action(McpAction::SetParam { slot: sphere, name: "radius".into(), value: "0.9".into() }, &mut redraw).unwrap();
     assert_eq!(state.param_editor_selected(), Some(tagged), "the selection did not move");
-    assert_ne!(state.last_spreadsheet_read_at, before, "the rows were read again");
+    assert_ne!(state.sheet.last_spreadsheet_read_at, before, "the rows were read again");
     assert_ne!(marks(&state), markers, "and the markers moved out with the sphere");
 
     // With a simulation, playback: every frame the playbar arrives at
@@ -1336,7 +1336,7 @@ fn the_spreadsheet_and_markers_follow_the_frame_and_upstream_edits() {
     state.ui_context[state.slots.playbar].inner_mut().fps = 60.0;
     for _ in 0..3 {
         state.tick_frame(1.0 / 60.0);
-        assert_eq!(state.last_spreadsheet_read_at.0, state.sim_frame(), "the rows are this frame's");
+        assert_eq!(state.sheet.last_spreadsheet_read_at.0, state.sim_frame(), "the rows are this frame's");
         assert_ne!(marks(&state), last, "the markers moved with the simulation");
         last = marks(&state);
     }
