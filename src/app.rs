@@ -692,6 +692,75 @@ pub struct ViewportUniforms {
     pub _padding: f32,
 }
 
+/// Everything the raster scene is staged from, as `stage_frame` compares
+/// it frame to frame: the camera's pose, the viewport widget's view and
+/// guides, the pane's size in physical px, and the draw-time render
+/// settings. A frame whose key equals the last one staged (and that
+/// nothing marked `viewport_dirty`) reuses the staged backdrop.
+///
+/// `show_viewport` is false until the first stage and wherever a hidden or
+/// zero-area pane cleared the backdrop, which forces the next stage: the
+/// staging branch only runs while the viewport is shown. The rest stay
+/// readable — Frame All and the image commands read the pane size and the
+/// camera off the last stage.
+#[derive(Clone, PartialEq)]
+pub struct StageKey {
+    pub camera_pos: Vec3,
+    pub camera_rx: f32,
+    pub camera_ry: f32,
+    pub camera_rz: f32,
+    pub pivot: Vec3,
+    pub zoom: f32,
+    pub rotation_x: f32,
+    pub rotation_y: f32,
+    pub bg_color: [f32; 3],
+    pub show_grid: bool,
+    pub show_origin: bool,
+    pub show_camera_pivot: bool,
+    pub width: u32,
+    pub height: u32,
+    pub active_camera: String,
+    pub show_viewport: bool,
+    pub wireframe: bool,
+    pub geo_opacity: f32,
+    pub wire_single_color: bool,
+    pub wire_color: [f32; 3],
+    pub wire_opacity: f32,
+    pub wire_width: f32,
+    pub rt_mode: bool,
+}
+
+impl Default for StageKey {
+    /// Before the first stage: nothing staged, and a key no frame matches.
+    fn default() -> Self {
+        Self {
+            camera_pos: Vec3::ZERO,
+            camera_rx: 0.0,
+            camera_ry: 0.0,
+            camera_rz: 0.0,
+            pivot: Vec3::ZERO,
+            zoom: 0.0,
+            rotation_x: 0.0,
+            rotation_y: 0.0,
+            bg_color: [0.0; 3],
+            show_grid: false,
+            show_origin: false,
+            show_camera_pivot: false,
+            width: 0,
+            height: 0,
+            active_camera: String::new(),
+            show_viewport: false,
+            wireframe: false,
+            geo_opacity: 1.0,
+            wire_single_color: false,
+            wire_color: [1.0, 1.0, 1.0],
+            wire_opacity: 1.0,
+            wire_width: 1.0,
+            rt_mode: false,
+        }
+    }
+}
+
 /// The designer's persistent 3D meshes, created in `renderer_init` once the
 /// engine's renderer exists.
 #[derive(Clone, Copy)]
@@ -1140,27 +1209,14 @@ pub struct State {
     pub recent_files: Vec<std::path::PathBuf>,
     pub viewport_dirty: bool,
     pub last_status_text: String,
-    pub last_viewport_camera_pos: Vec3,
-    pub last_viewport_camera_rx: f32,
-    pub last_viewport_camera_ry: f32,
-    pub last_viewport_camera_rz: f32,
-    pub last_viewport_pivot: Vec3,
-    pub last_viewport_zoom: f32,
-    pub last_viewport_rotation_x: f32,
-    pub last_viewport_rotation_y: f32,
-    pub last_viewport_bg_color: [f32; 3],
-    pub last_viewport_show_grid: bool,
-    pub last_viewport_show_origin: bool,
-    pub last_viewport_show_camera_pivot: bool,
-    pub last_viewport_width: u32,
-    pub last_viewport_height: u32,
-    pub last_viewport_active_camera: String,
-    pub last_viewport_show_viewport: bool,
+    /// What the raster scene was last staged from (`stage_frame`): a
+    /// frame whose `StageKey` is this one, and that nothing marked
+    /// `viewport_dirty`, keeps the staged backdrop.
+    pub last_viewport: StageKey,
     /// Wireframe display of the node geometry (the Render utility node's
     /// "Show Wireframe" toggle): a wire pass drawn IN ADDITION to the filled
     /// geometry, never instead of it.
     pub wireframe: bool,
-    pub last_viewport_wireframe: bool,
     /// "Wire Single Color" toggle: on, the wires draw in `wire_color`; off,
     /// they carry the geometry's vertex colors unlit — brighter than the lit
     /// fill beneath, which is what separates them.
@@ -1172,14 +1228,9 @@ pub struct State {
     pub wire_opacity: f32,
     /// Wire line width in framebuffer pixels ("Wire Thickness" slider).
     pub wire_width: f32,
-    pub last_viewport_wire_single_color: bool,
-    pub last_viewport_wire_color: [f32; 3],
-    pub last_viewport_wire_opacity: f32,
-    pub last_viewport_wire_width: f32,
     /// Opacity of the rendered node geometry (the Render node's "Opacity"
     /// slider): 1.0 opaque, straight-alpha blended toward the viewport bg.
     pub geo_opacity: f32,
-    pub last_viewport_geo_opacity: f32,
     /// Selected-Group marker radius in world units (a setting row of the
     /// dialog and a viewport-menu slider; persisted in the render block).
     pub group_marker_size: f32,
@@ -1379,7 +1430,6 @@ pub struct State {
     pub last_scene_view_rect: (f32, f32, f32, f32),
     /// The active curve viewer state (viewport point editing), if any.
     pub viewer_tool: Option<crate::viewer_state::ViewerTool>,
-    pub last_viewport_rt_mode: bool,
     /// Sphere-geometry cache for the path tracer (a copy of the last
     /// `rebuild_scene_geometry` output, so entering RT mode never re-runs
     /// the node graph / OpenCL kernels).
@@ -3856,7 +3906,7 @@ impl State {
 
         // Fit the bounding sphere inside the narrower frustum axis
         // (get_matrices: vertical FOV 0.9 rad), with a little breathing room.
-        let (w, h) = (self.last_viewport_width.max(1) as f32, self.last_viewport_height.max(1) as f32);
+        let (w, h) = (self.last_viewport.width.max(1) as f32, self.last_viewport.height.max(1) as f32);
         let aspect = if self.square_viewport { 1.0 } else { w / h };
         let half_v = 0.45f32;
         let half_h = (half_v.tan() * aspect).atan();
@@ -3939,7 +3989,7 @@ impl State {
     /// of those px is.
     fn one_to_one_distance(&self) -> f32 {
         let m = cce_ui::units::metric();
-        let vh_logical = (self.last_viewport_height.max(1) as f32) / (self.scale as f32).max(0.001);
+        let vh_logical = (self.last_viewport.height.max(1) as f32) / (self.scale as f32).max(0.001);
         let unit_mm = self.world_unit_mm().max(1e-6);
         m.mm_per_px() * vh_logical / (2.0 * 0.45f32.tan() * unit_mm)
     }
@@ -3948,9 +3998,9 @@ impl State {
     /// one millimetre of screen shows (1.0 = true size, 2.0 = half size).
     pub fn view_scale_ratio(&self) -> f32 {
         let m = cce_ui::units::metric();
-        let vh_logical = (self.last_viewport_height.max(1) as f32) / (self.scale as f32).max(0.001);
-        let base = self.last_viewport_camera_pos - self.last_viewport_pivot;
-        let d = base.length().max(1e-4) * self.last_viewport_zoom;
+        let vh_logical = (self.last_viewport.height.max(1) as f32) / (self.scale as f32).max(0.001);
+        let base = self.last_viewport.camera_pos - self.last_viewport.pivot;
+        let d = base.length().max(1e-4) * self.last_viewport.zoom;
         let world_mm_per_px = 2.0 * d * 0.45f32.tan() / vh_logical.max(1.0) * self.world_unit_mm();
         world_mm_per_px / m.mm_per_px().max(1e-6)
     }
@@ -6345,34 +6395,13 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             recent_files,
             viewport_dirty: true,
             last_status_text: String::new(),
-            last_viewport_camera_pos: Vec3::ZERO,
-            last_viewport_camera_rx: 0.0,
-            last_viewport_camera_ry: 0.0,
-            last_viewport_camera_rz: 0.0,
-            last_viewport_pivot: Vec3::ZERO,
-            last_viewport_zoom: 0.0,
-            last_viewport_rotation_x: 0.0,
-            last_viewport_rotation_y: 0.0,
-            last_viewport_bg_color: [0.0; 3],
-            last_viewport_show_grid: false,
-            last_viewport_show_origin: false,
-            last_viewport_show_camera_pivot: false,
-            last_viewport_width: 0,
-            last_viewport_height: 0,
-            last_viewport_active_camera: String::new(),
-            last_viewport_show_viewport: false,
+            last_viewport: StageKey::default(),
             wireframe: settings.render.wireframe,
-            last_viewport_wireframe: false,
             wire_single_color: settings.render.wire_single_color,
             wire_color: settings.render.wire_color,
             wire_opacity: settings.render.wire_opacity,
             wire_width: settings.render.wire_width,
-            last_viewport_wire_single_color: false,
-            last_viewport_wire_color: [1.0, 1.0, 1.0],
-            last_viewport_wire_opacity: 1.0,
-            last_viewport_wire_width: 1.0,
             geo_opacity: settings.render.geo_opacity,
-            last_viewport_geo_opacity: 1.0,
             group_marker_size: settings.render.group_marker_size,
             pull_arrow_scale: settings.render.pull_arrow_scale,
             pull_arrow_pairs: Vec::new(),
@@ -6442,7 +6471,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             last_scene_eye: Vec3::ZERO,
             last_scene_view_rect: (0.0, 0.0, 0.0, 0.0),
             viewer_tool: None,
-            last_viewport_rt_mode: false,
             rt_sphere_verts: Vec::new(),
             rt_geometry_version: 0,
             last_rt_scene_key: None,
@@ -10502,30 +10530,32 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 trackball_moved = self.sync_trackball_view_from_camera();
 
                 let rt_mode = self.viewport().rt_mode;
-                let viewport_changed = self.viewport_dirty
-                    || self.last_viewport_rt_mode != rt_mode
-                    || self.last_viewport_camera_pos != camera_pos
-                    || self.last_viewport_camera_rx != rx
-                    || self.last_viewport_camera_ry != ry
-                    || self.last_viewport_camera_rz != rz
-                    || self.last_viewport_pivot != pivot
-                    || self.last_viewport_zoom != self.viewport().zoom
-                    || self.last_viewport_rotation_x != self.viewport().rotation_x
-                    || self.last_viewport_rotation_y != self.viewport().rotation_y
-                    || self.last_viewport_bg_color != self.viewport().bg_color
-                    || self.last_viewport_show_grid != self.viewport().show_grid
-                    || self.last_viewport_show_origin != self.viewport().show_origin
-                    || self.last_viewport_show_camera_pivot != self.viewport().show_camera_pivot
-                    || self.last_viewport_width != cw
-                    || self.last_viewport_height != ch
-                    || self.last_viewport_active_camera != self.active_camera
-                    || self.last_viewport_show_viewport != self.show_viewport
-                    || self.last_viewport_wireframe != self.wireframe
-                    || self.last_viewport_geo_opacity != self.geo_opacity
-                    || self.last_viewport_wire_single_color != self.wire_single_color
-                    || self.last_viewport_wire_color != self.wire_color
-                    || self.last_viewport_wire_opacity != self.wire_opacity
-                    || self.last_viewport_wire_width != self.wire_width;
+                let key = StageKey {
+                    camera_pos,
+                    camera_rx: rx,
+                    camera_ry: ry,
+                    camera_rz: rz,
+                    pivot,
+                    zoom: self.viewport().zoom,
+                    rotation_x: self.viewport().rotation_x,
+                    rotation_y: self.viewport().rotation_y,
+                    bg_color: self.viewport().bg_color,
+                    show_grid: self.viewport().show_grid,
+                    show_origin: self.viewport().show_origin,
+                    show_camera_pivot: self.viewport().show_camera_pivot,
+                    width: cw,
+                    height: ch,
+                    active_camera: self.active_camera.clone(),
+                    show_viewport: self.show_viewport,
+                    wireframe: self.wireframe,
+                    geo_opacity: self.geo_opacity,
+                    wire_single_color: self.wire_single_color,
+                    wire_color: self.wire_color,
+                    wire_opacity: self.wire_opacity,
+                    wire_width: self.wire_width,
+                    rt_mode,
+                };
+                let viewport_changed = self.viewport_dirty || self.last_viewport != key;
 
                 if viewport_changed {
                     if !rt_mode {
@@ -10691,29 +10721,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                     }
 
                     // Update viewport cache
-                    self.last_viewport_camera_pos = camera_pos;
-                    self.last_viewport_camera_rx = rx;
-                    self.last_viewport_camera_ry = ry;
-                    self.last_viewport_camera_rz = rz;
-                    self.last_viewport_pivot = pivot;
-                    self.last_viewport_zoom = self.viewport().zoom;
-                    self.last_viewport_rotation_x = self.viewport().rotation_x;
-                    self.last_viewport_rotation_y = self.viewport().rotation_y;
-                    self.last_viewport_bg_color = self.viewport().bg_color;
-                    self.last_viewport_show_grid = self.viewport().show_grid;
-                    self.last_viewport_show_origin = self.viewport().show_origin;
-                    self.last_viewport_show_camera_pivot = self.viewport().show_camera_pivot;
-                    self.last_viewport_width = cw;
-                    self.last_viewport_height = ch;
-                    self.last_viewport_active_camera = self.active_camera.clone();
-                    self.last_viewport_show_viewport = self.show_viewport;
-                    self.last_viewport_wireframe = self.wireframe;
-                    self.last_viewport_geo_opacity = self.geo_opacity;
-                    self.last_viewport_wire_single_color = self.wire_single_color;
-                    self.last_viewport_wire_color = self.wire_color;
-                    self.last_viewport_wire_opacity = self.wire_opacity;
-                    self.last_viewport_wire_width = self.wire_width;
-                    self.last_viewport_rt_mode = rt_mode;
+                    self.last_viewport = key;
                     self.viewport_dirty = false;
                 }
 
@@ -10752,7 +10760,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 // Zero-area pane: clear the backdrop once.
                 renderer
                     .stage_scene((0, 0, self.physical_width, self.physical_height), Vec::new());
-                self.last_viewport_show_viewport = false;
+                self.last_viewport.show_viewport = false;
                 self.viewport_dirty = false;
             }
         } else if !self.is_detached_network && self.viewport_dirty {
@@ -10760,7 +10768,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             // and force a re-stage when it comes back.
             renderer
                 .stage_scene((0, 0, self.physical_width, self.physical_height), Vec::new());
-            self.last_viewport_show_viewport = false;
+            self.last_viewport.show_viewport = false;
             self.viewport_dirty = false;
         }
 

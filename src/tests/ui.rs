@@ -471,21 +471,21 @@ fn view_one_to_one_reaches_true_scale() {
     // render pass (a camera node's Position rewrite is cached by one).
     state.active_camera = "Default Camera".to_string();
     state.scale = 1.0;
-    state.last_viewport_width = 1200;
-    state.last_viewport_height = 800;
-    state.last_viewport_camera_pos = Vec3::new(2.5, 1.8, 2.5);
-    state.last_viewport_pivot = Vec3::ZERO;
-    state.last_viewport_zoom = state.viewport().zoom;
+    state.last_viewport.width = 1200;
+    state.last_viewport.height = 800;
+    state.last_viewport.camera_pos = Vec3::new(2.5, 1.8, 2.5);
+    state.last_viewport.pivot = Vec3::ZERO;
+    state.last_viewport.zoom = state.viewport().zoom;
     let before = state.view_scale_ratio();
     state.view_one_to_one();
-    state.last_viewport_zoom = state.viewport().zoom;
+    state.last_viewport.zoom = state.viewport().zoom;
     let after = state.view_scale_ratio();
     assert!((after - 1.0).abs() < 1e-3, "ratio {after} (was {before})");
     assert!((state.world_unit_mm() - 10.0).abs() < 1e-4);
     // A millimetre unit needs the camera ~10× farther; still reachable.
     state.world_unit = cce_ui::units::Unit::Mm;
     state.view_one_to_one();
-    state.last_viewport_zoom = state.viewport().zoom;
+    state.last_viewport.zoom = state.viewport().zoom;
     let mm = state.view_scale_ratio();
     assert!((mm - 1.0).abs() < 1e-3, "mm ratio {mm}");
 }

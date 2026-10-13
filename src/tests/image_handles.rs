@@ -41,7 +41,7 @@ fn a_page_frame_is_the_page_without_its_pixels() {
 /// Give the viewer state the camera the stage pass would have cached.
 fn cache_scene_camera(state: &mut State) {
     let (pos, rot, pivot) = state.active_camera_pose();
-    let (w, h) = (state.last_viewport_width as f32, state.last_viewport_height as f32);
+    let (w, h) = (state.last_viewport.width as f32, state.last_viewport.height as f32);
     let (proj, view, model) = state.viewport().get_matrices(w / h, Some(pos), Some(rot), Some(pivot));
     state.last_scene_mvp = Some(proj * view * model);
     state.last_scene_view_rect = (0.0, 0.0, w, h);

@@ -430,8 +430,8 @@ fn frame_all_frames_the_root_camera_from_inside_a_subnet() {
             Vertex3D { position: [c[0] + 0.25 * a.cos(), c[1] + 0.25 * a.sin(), c[2] + 0.1 * (i % 3) as f32], color: [1.0; 3] }
         })
         .collect();
-    state.last_viewport_width = 800;
-    state.last_viewport_height = 600;
+    state.last_viewport.width = 800;
+    state.last_viewport.height = 600;
     let zoom_before = state.viewport().zoom;
 
     state.frame_all();

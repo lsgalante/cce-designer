@@ -88,7 +88,7 @@ impl State {
         if self.square_viewport {
             1.0
         } else {
-            self.last_viewport_width.max(1) as f32 / self.last_viewport_height.max(1) as f32
+            self.last_viewport.width.max(1) as f32 / self.last_viewport.height.max(1) as f32
         }
     }
 
@@ -178,7 +178,7 @@ impl State {
     pub fn view_image_pixels(&mut self) -> bool {
         let Some(shown) = self.image_to_frame() else { return false };
         let size = shown.world_size(self.world_unit_mm());
-        let dist = pixel_distance(size[1], shown.pixels.1, self.last_viewport_height);
+        let dist = pixel_distance(size[1], shown.pixels.1, self.last_viewport.height);
         let reached = self.face_image(Vec3::from_array(shown.origin), dist);
         if (reached - dist).abs() > dist * 1e-3 {
             self.update_status_text("Image pixels 1:1 is past what the zoom reaches.");
