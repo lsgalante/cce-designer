@@ -8,7 +8,7 @@
 //! a Ramp or a Vector draws. What differs is where it lives: a node is part
 //! of the scene and travels with its chain; a visualizer is a DISPLAY
 //! setting, as every display setting here is — a live field on `State`
-//! (`State::visualizers`), persisted to state.kdl and with the project's
+//! (`State::view.visualizers`), persisted to state.kdl and with the project's
 //! display block, applied to the merged scene `Detail` at the end of a scene
 //! rebuild (`State::present_scene`), and reached from the palette (the
 //! `attribute_visualizers` command). Several apply in order, the later over
@@ -312,14 +312,14 @@ impl State {
             .or_else(|| self.scene_attributes.first().map(|a| a.name.as_str()))
             .unwrap_or("")
             .to_string();
-        self.visualizers.push(Visualizer::new(&pick));
+        self.view.visualizers.push(Visualizer::new(&pick));
         self.visualizers_changed(true);
-        self.visualizers.len() - 1
+        self.view.visualizers.len() - 1
     }
 
     pub(crate) fn delete_visualizer(&mut self, i: usize) {
-        if i < self.visualizers.len() {
-            self.visualizers.remove(i);
+        if i < self.view.visualizers.len() {
+            self.view.visualizers.remove(i);
             self.visualizers_changed(true);
         }
     }
@@ -327,7 +327,7 @@ impl State {
     /// Write one of visualizer `i`'s settings from the text its row holds —
     /// a choice's option, a toggle's `true`/`false`, a number.
     pub(crate) fn set_visualizer_field(&mut self, i: usize, field: &str, value: &str, save: bool) {
-        let Some(v) = self.visualizers.get_mut(i) else { return };
+        let Some(v) = self.view.visualizers.get_mut(i) else { return };
         let number = || value.parse::<f32>().ok();
         match field {
             "enabled" => v.enabled = value == "true",
@@ -371,7 +371,7 @@ impl State {
     /// Show the attribute visualizers in the params HUD, editing the first
     /// (or `i`), in place of the selected node's parameters.
     pub(crate) fn open_visualizers_hud(&mut self) {
-        self.vis_hud = Some(self.vis_hud.unwrap_or(0).min(self.visualizers.len().saturating_sub(1)));
+        self.vis_hud = Some(self.vis_hud.unwrap_or(0).min(self.view.visualizers.len().saturating_sub(1)));
         self.vis_hud_from = self.param_pane_target();
         if !self.show_parameters {
             self.execute_menu_action("Show Parameters Pane");
@@ -389,7 +389,7 @@ impl State {
 
     /// What the picker calls visualizer `i`.
     fn visualizer_pick_label(&self, i: usize) -> String {
-        let v = &self.visualizers[i];
+        let v = &self.view.visualizers[i];
         let attr = if v.attribute.is_empty() { NO_ATTRIBUTE } else { &v.attribute };
         format!("#{} {attr}", i + 1)
     }
@@ -405,15 +405,15 @@ impl State {
             d
         };
         let mut out = Vec::new();
-        let editing = self.vis_hud.filter(|&i| i < self.visualizers.len());
+        let editing = self.vis_hud.filter(|&i| i < self.view.visualizers.len());
         if let Some(i) = editing {
-            let labels: Vec<String> = (0..self.visualizers.len()).map(|k| self.visualizer_pick_label(k)).collect();
+            let labels: Vec<String> = (0..self.view.visualizers.len()).map(|k| self.visualizer_pick_label(k)).collect();
             out.push(grouped(p(HUD_PICK, format!("choice:{}", labels.join(",")), labels[i].clone(), "Visualizer"), "pick"));
         }
         out.push(grouped(p(HUD_ADD, "button".into(), String::new(), "Add Visualizer"), "pick"));
         if let Some(i) = editing {
             out.push(grouped(p(HUD_DELETE, "button".into(), String::new(), "Delete Visualizer"), "pick"));
-            let v = &self.visualizers[i];
+            let v = &self.view.visualizers[i];
             out.push(grouped(p("enabled", "toggle".into(), v.enabled.to_string(), "Enabled"), "settings"));
             let mut attrs: Vec<String> = self.scene_attributes.iter().map(|a| a.name.clone()).collect();
             if !v.attribute.is_empty() && !attrs.contains(&v.attribute) {
@@ -464,7 +464,7 @@ impl State {
             let i = self.vis_hud.unwrap_or(0);
             match def.name.as_str() {
                 HUD_PICK => {
-                    if let Some(k) = (0..self.visualizers.len()).find(|&k| self.visualizer_pick_label(k) == value) {
+                    if let Some(k) = (0..self.view.visualizers.len()).find(|&k| self.visualizer_pick_label(k) == value) {
                         self.vis_hud = Some(k);
                     }
                     reread = true;
@@ -476,7 +476,7 @@ impl State {
                 }
                 HUD_DELETE if value == "clicked" => {
                     self.delete_visualizer(i);
-                    self.vis_hud = Some(i.min(self.visualizers.len().saturating_sub(1)));
+                    self.vis_hud = Some(i.min(self.view.visualizers.len().saturating_sub(1)));
                     reread = true;
                 }
                 HUD_DONE if value == "clicked" => {

@@ -146,9 +146,9 @@ impl State {
                 Some((pb.start_frame.round() as i32, pb.end_frame.round() as i32))
             },
             default_view: Some(crate::app::DefaultCameraView {
-                square: self.square_viewport,
+                square: self.view.square_viewport,
                 show_pivot: self.viewport().show_camera_pivot,
-                pivot_size: self.camera_pivot_size,
+                pivot_size: self.view.camera_pivot_size,
                 rotation: (self.viewport().rotation_x, self.viewport().rotation_y),
                 zoom: self.viewport().zoom,
                 pivot: self.viewport().pivot.to_array(),
@@ -168,8 +168,8 @@ impl State {
         let has_node = active != "Default Camera"
             && self.camera_level().children.iter().any(|c| c.node_type == "camera" && c.name == active);
         if !has_node {
-            self.square_viewport = v.square;
-            self.camera_pivot_size = v.pivot_size;
+            self.view.square_viewport = v.square;
+            self.view.camera_pivot_size = v.pivot_size;
             self.viewport_mut().show_camera_pivot = v.show_pivot;
         }
         let vp = self.viewport_mut();
@@ -685,13 +685,13 @@ impl State {
                 "Show Origin Axes" | "Origin" => {
                     if let Some(v) = as_bool(p) { self.viewport_mut().show_origin = v; }
                 }
-                "Grid Thickness" => if let Some(v) = as_f32(p) { self.grid_thickness = v / 1000.0; },
-                "Origin Guide Size" => if let Some(v) = as_f32(p) { self.origin_size = v / 10.0; },
-                "Camera Pivot Size" => if let Some(v) = as_f32(p) { self.camera_pivot_size = v / 10.0; },
+                "Grid Thickness" => if let Some(v) = as_f32(p) { self.view.grid_thickness = v / 1000.0; },
+                "Origin Guide Size" => if let Some(v) = as_f32(p) { self.view.origin_size = v / 10.0; },
+                "Camera Pivot Size" => if let Some(v) = as_f32(p) { self.view.camera_pivot_size = v / 10.0; },
                 "Grid Color" => if let Some(c) = hex_to_color(p.text()) { self.viewport_mut().grid_color = c; },
                 "Background Color" => if let Some(c) = hex_to_color(p.text()) { self.viewport_mut().bg_color = c; },
-                "Point Marker Size" => if let Some(v) = as_f32(p) { self.point_marker_size = v / 1000.0; },
-                "Point Marker Color" => if let Some(c) = hex_to_color(p.text()) { self.point_marker_color = c; },
+                "Point Marker Size" => if let Some(v) = as_f32(p) { self.view.point_marker_size = v / 1000.0; },
+                "Point Marker Color" => if let Some(c) = hex_to_color(p.text()) { self.view.point_marker_color = c; },
                 "World Unit" => if let Some(u) = cce_ui::units::Unit::parse(p.text()) { self.doc.world_unit = u; },
                 "Circular Pane" => if let Some(v) = as_bool(p) { self.circular_network_pane = v; },
                 "Ray Traced Preview" => if let Some(v) = as_bool(p) { self.viewport_mut().rt_mode = v; },

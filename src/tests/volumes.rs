@@ -464,7 +464,7 @@ fn viewport_settings_round_trip_through_the_scene_file() {
     // The Default Camera is active: a camera NODE's own Pivot would
     // override the saved view's, by design.
     a.camera.active_camera = "Default Camera".to_string();
-    a.square_viewport = true;
+    a.view.square_viewport = true;
     a.viewport_mut().show_camera_pivot = true;
     a.viewport_mut().rotation_y = 0.7;
     a.viewport_mut().zoom = 0.4;
@@ -476,7 +476,7 @@ fn viewport_settings_round_trip_through_the_scene_file() {
     let mut b = State::new(false);
     b.render.wireframe = false;
     b.load_from_file(&dir).expect("load");
-    assert!(b.square_viewport, "Square Aspect loads from the file");
+    assert!(b.view.square_viewport, "Square Aspect loads from the file");
     assert!(b.viewport().show_camera_pivot, "the pivot marker loads from the file");
     assert!((b.viewport().rotation_y - 0.7).abs() < 1e-4);
     assert!((b.viewport().zoom - 0.4).abs() < 1e-4);
@@ -499,12 +499,12 @@ fn display_settings_round_trip_through_state_kdl() {
     a.viewport_mut().bg_color = [0.1, 0.2, 0.3];
     a.viewport_mut().grid_color = [0.4, 0.5, 0.6];
     a.viewport_mut().rt_mode = true;
-    a.grid_thickness = 0.04;
-    a.origin_size = 2.5;
-    a.show_point_markers = true;
-    a.show_point_numbers = true;
-    a.point_marker_size = 0.05;
-    a.point_marker_color = [1.0, 0.5, 0.0];
+    a.view.grid_thickness = 0.04;
+    a.view.origin_size = 2.5;
+    a.view.show_point_markers = true;
+    a.view.show_point_numbers = true;
+    a.view.point_marker_size = 0.05;
+    a.view.point_marker_color = [1.0, 0.5, 0.0];
     a.doc.world_unit = cce_ui::units::Unit::Cm;
     a.render.wireframe = true;
     a.render.wire_single_color = true;
@@ -1259,13 +1259,13 @@ fn attribute_visualizers_are_edited_in_the_params_hud() {
 
     // Add one: it is edited, on the first attribute worth showing.
     pane(&mut state, "Add Visualizer", "clicked");
-    assert_eq!(state.visualizers.len(), 1);
+    assert_eq!(state.view.visualizers.len(), 1);
     let k = keys(&state);
     assert!(k.contains(&"Visualizer".to_string()) && k.contains(&"Ramp".to_string()) && !k.contains(&"Scale".to_string()), "Ramp's rows: {k:?}");
 
     // On N, a Ramp recolours the scene, which gained no node.
     pane(&mut state, "Attribute", "N");
-    assert_eq!(state.visualizers[0].attribute, "N");
+    assert_eq!(state.view.visualizers[0].attribute, "N");
     assert_ne!(colours(&state), plain, "the ramp is on the scene");
     assert_eq!(serde_json::to_string(&state.doc.fs_root).unwrap(), nodes_before, "no node in the graph");
 
@@ -1273,20 +1273,20 @@ fn attribute_visualizers_are_edited_in_the_params_hud() {
     pane(&mut state, "Range", "Manual");
     assert!(keys(&state).contains(&"Manual Range".to_string()));
     pane(&mut state, "Manual Range", "-0.5:0.5");
-    assert_eq!(state.visualizers[0].manual_range, [-0.5, 0.5]);
+    assert_eq!(state.view.visualizers[0].manual_range, [-0.5, 0.5]);
 
     // Vector: Scale's row in place of Ramp's.
     pane(&mut state, "Mode", "Vector");
-    assert!(state.visualizers[0].is_vector());
+    assert!(state.view.visualizers[0].is_vector());
     let k = keys(&state);
     assert!(k.contains(&"Scale".to_string()) && !k.contains(&"Ramp".to_string()), "Vector's rows: {k:?}");
     assert_eq!(colours(&state), plain, "a Vector leaves the colours");
 
     // Its switch turns it off; a second one is picked from the list.
     pane(&mut state, "Enabled", "false");
-    assert!(!state.visualizers[0].enabled);
+    assert!(!state.view.visualizers[0].enabled);
     pane(&mut state, "Add Visualizer", "clicked");
-    assert_eq!((state.visualizers.len(), state.vis_hud), (2, Some(1)));
+    assert_eq!((state.view.visualizers.len(), state.vis_hud), (2, Some(1)));
     pane(&mut state, "Visualizer", "#1 N");
     assert_eq!(state.vis_hud, Some(0));
 
@@ -1294,11 +1294,11 @@ fn attribute_visualizers_are_edited_in_the_params_hud() {
     state.save_settings();
     let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
     let kept = crate::visualizer::decode(&crate::app::DesignSettings::from_kdl_str(&kdl).viewport.visualizers);
-    assert_eq!(kept, state.visualizers);
+    assert_eq!(kept, state.view.visualizers);
 
     // Delete, then Done: the HUD is the node's again.
     pane(&mut state, "Delete Visualizer", "clicked");
-    assert_eq!(state.visualizers.len(), 1);
+    assert_eq!(state.view.visualizers.len(), 1);
     pane(&mut state, "Done", "clicked");
     assert_eq!(state.vis_hud, None);
 
@@ -2313,7 +2313,7 @@ fn guide_toggles_survive_the_settings_apply_pass() {
         let flag = |state: &State| match command {
             "toggle_grid" => state.viewport().show_grid,
             "toggle_origin" => state.viewport().show_origin,
-            _ => state.show_point_markers,
+            _ => state.view.show_point_markers,
         };
         let before = flag(&state);
         assert!(state.run_command(command));

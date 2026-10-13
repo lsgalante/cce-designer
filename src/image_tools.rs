@@ -85,7 +85,7 @@ fn row_number(v: f32, unit: crate::page::PageUnit) -> String {
 impl State {
     /// The pane's aspect as the stage pass has it.
     fn viewport_aspect(&self) -> f32 {
-        if self.square_viewport {
+        if self.view.square_viewport {
             1.0
         } else {
             self.last_viewport.width.max(1) as f32 / self.last_viewport.height.max(1) as f32

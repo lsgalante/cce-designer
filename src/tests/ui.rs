@@ -560,11 +560,11 @@ fn test_session_node_exists_and_cannot_be_deleted() {
     // all rather than simply dropping the node.
     assert_eq!(state.doc.world_unit, cce_ui::units::Unit::Cm);
     assert!((state.world_unit_mm() - 10.0).abs() < 1e-4);
-    assert!((state.point_marker_size - 0.05).abs() < 1e-6);
-    assert!((state.point_marker_color[0] - 1.0).abs() < 0.01);
-    assert!((state.point_marker_color[1] - 0.5).abs() < 0.01);
-    assert!((state.point_marker_color[2] - 0.0).abs() < 0.01);
-    assert!((state.grid_thickness - 0.04).abs() < 1e-6);
+    assert!((state.view.point_marker_size - 0.05).abs() < 1e-6);
+    assert!((state.view.point_marker_color[0] - 1.0).abs() < 0.01);
+    assert!((state.view.point_marker_color[1] - 0.5).abs() < 0.01);
+    assert!((state.view.point_marker_color[2] - 0.0).abs() < 0.01);
+    assert!((state.view.grid_thickness - 0.04).abs() < 1e-6);
     assert!(state.render.wireframe);
     assert!((state.render.wire_width - 4.0).abs() < 1e-6);
     assert!(state.circular_network_pane);
@@ -1119,9 +1119,9 @@ fn a_project_keeps_its_display_settings() {
     state.render.smooth_shading = true;
     state.render.wireframe = true;
     state.render.geo_opacity = 0.5;
-    state.grid_thickness = 0.07;
+    state.view.grid_thickness = 0.07;
     state.doc.world_unit = cce_ui::units::Unit::Cm;
-    state.point_marker_color = [0.1, 0.9, 0.2];
+    state.view.point_marker_color = [0.1, 0.9, 0.2];
     state.save_to_file(&dir).expect("save");
     assert!(!state.has_unsaved_changes());
 
@@ -1133,18 +1133,18 @@ fn a_project_keeps_its_display_settings() {
     state.render.smooth_shading = false;
     state.render.wireframe = false;
     state.render.geo_opacity = 1.0;
-    state.grid_thickness = 0.03;
+    state.view.grid_thickness = 0.03;
     state.doc.world_unit = cce_ui::units::Unit::Mm;
-    state.point_marker_color = [1.0, 1.0, 1.0];
+    state.view.point_marker_color = [1.0, 1.0, 1.0];
 
     state.load_from_file(&dir).expect("load");
     assert!(!state.viewport().show_grid, "the grid comes back off");
     assert!(!state.viewport().show_origin);
     assert!(state.render.smooth_shading && state.render.wireframe);
     assert!((state.render.geo_opacity - 0.5).abs() < 1e-6);
-    assert!((state.grid_thickness - 0.07).abs() < 1e-6);
+    assert!((state.view.grid_thickness - 0.07).abs() < 1e-6);
     assert_eq!(state.doc.world_unit, cce_ui::units::Unit::Cm);
-    assert_eq!(state.point_marker_color, [0.1, 0.9, 0.2]);
+    assert_eq!(state.view.point_marker_color, [0.1, 0.9, 0.2]);
     assert!(!state.scene_smooth_verts.is_empty(), "the scene was rebuilt smooth");
     assert!(!state.has_unsaved_changes(), "a fresh load is clean");
     assert_eq!(state.command_toggle_state("toggle_grid"), Some(false), "the palette's switch agrees");
@@ -1204,7 +1204,7 @@ fn a_point_number_under_a_plate_is_not_drawn() {
     state.resize(1600.0, 900.0, 1.0);
     state.rebuild_positions();
     state.apply_layout();
-    state.show_point_numbers = true;
+    state.view.show_point_numbers = true;
     state.render.geo_opacity = 0.2;
     state.render.show_occluded = true;
     state.rebuild_scene_geometry();
@@ -1468,7 +1468,7 @@ fn the_params_plate_fits_its_rows() {
 #[test]
 fn a_scene_rebuild_keeps_the_point_numbers_dimmed() {
     let mut state = State::new(false);
-    state.show_point_numbers = true;
+    state.view.show_point_numbers = true;
     state.rebuild_scene_geometry();
     assert!(!state.overlay_number_labels.is_empty());
     // The view the stage pass last staged: from +z, looking at the origin.
@@ -1520,7 +1520,7 @@ fn a_point_number_is_dimmed_by_the_fill_in_front_of_it() {
 
     // And the paint reads it: a label behind an opaque face is not drawn.
     let mut state = State::new(false);
-    state.show_point_numbers = true;
+    state.view.show_point_numbers = true;
     state.rebuild_scene_geometry();
     assert!(state.overlay_number_alpha.is_empty(), "a rebuild drops the old eye's answers");
     let labels = |state: &mut State| {
@@ -1918,7 +1918,7 @@ fn the_viewport_menu_turns_into_its_pages_and_back() {
     use crate::window::{LocalPosition, WindowEvent};
     use cce_ui::widget::{context_menu, ElementState, MouseButton, MouseScrollDelta, Position};
     let mut state = State::new(false);
-    state.show_prim_numbers = false;
+    state.view.show_prim_numbers = false;
     state.cursor_x = 300.0;
     state.cursor_y = 200.0;
     state.open_viewport_context_menu();
@@ -1958,7 +1958,7 @@ fn the_viewport_menu_turns_into_its_pages_and_back() {
 
     move_to(&mut state, corner.0 + 20.0, context_menu::row_y(prims) + 12.0);
     press(&mut state);
-    assert!(state.show_prim_numbers, "the switch flipped");
+    assert!(state.view.show_prim_numbers, "the switch flipped");
     assert!(state.viewport_menu_open() && state.viewport_menu_page == Some(P::Markers), "and the page is still up");
     assert!(context_menu::options()[prims].starts_with('●'), "re-marked: {}", context_menu::options()[prims]);
 
@@ -2047,8 +2047,8 @@ fn primitives_and_vertices_are_numbered_where_they_are() {
 
     // The markers are built with the points', and re-sized with them.
     let mut state = State::new(false);
-    state.show_point_markers = false;
-    state.show_vertex_markers = false;
+    state.view.show_point_markers = false;
+    state.view.show_vertex_markers = false;
     state.rebuild_scene_geometry();
     let drawn = |state: &State| state.drawn_markers(crate::app::MarkerKind::Overlay);
     assert!(drawn(&state).is_empty());
@@ -2056,7 +2056,7 @@ fn primitives_and_vertices_are_numbered_where_they_are() {
     let built = drawn(&state);
     assert!(!built.is_empty() && !state.overlay_vertex_marker_points.is_empty());
     assert_eq!(built.len(), state.vertex_markers.verts.len() * 240, "a sphere drawn over each instance");
-    state.point_marker_size *= 2.0;
+    state.view.point_marker_size *= 2.0;
     state.rebuild_overlay_markers();
     assert_eq!(drawn(&state).len(), built.len());
     assert_ne!(drawn(&state)[0].position, built[0].position, "re-sized");
@@ -2065,8 +2065,8 @@ fn primitives_and_vertices_are_numbered_where_they_are() {
 
     // And the app collects them by its switches, and persists those.
     let mut state = State::new(false);
-    state.show_prim_numbers = false;
-    state.show_vertex_numbers = false;
+    state.view.show_prim_numbers = false;
+    state.view.show_vertex_numbers = false;
     state.rebuild_scene_geometry();
     assert!(state.overlay_prim_labels.is_empty() && state.overlay_vertex_labels.is_empty());
     state.run_command("toggle_prim_numbers");
@@ -2127,7 +2127,7 @@ fn the_viewport_menu_toggles_show_origin() {
 fn the_viewport_menu_toggles_show_point_normals() {
     use crate::app::ViewportMenuAction as A;
     let mut state = State::new(false);
-    state.show_point_normals = false;
+    state.view.show_point_normals = false;
     state.rebuild_scene_geometry();
     let whiskers = state.overlay_normals.verts.len();
     let row = |state: &State| {
@@ -2138,7 +2138,7 @@ fn the_viewport_menu_toggles_show_point_normals() {
     let label = crate::command::by_id("toggle_point_normals").unwrap().label;
     assert_eq!(row(&state), format!("○ {label}"));
     state.run_viewport_menu_action(A::Command("toggle_point_normals"));
-    assert!(state.show_point_normals);
+    assert!(state.view.show_point_normals);
     assert_eq!(row(&state), format!("● {label}"));
     assert!(state.overlay_normals.verts.len() > whiskers, "the whiskers were collected");
     let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
@@ -2152,7 +2152,7 @@ fn the_viewport_menu_toggles_show_point_normals() {
 fn the_viewport_menu_toggles_show_point_numbers() {
     use crate::app::ViewportMenuAction as A;
     let mut state = State::new(false);
-    state.show_point_numbers = false;
+    state.view.show_point_numbers = false;
     state.rebuild_scene_geometry();
     let row = |state: &State| {
         let (options, actions) = state.viewport_menu_rows_of(state.viewport_menu_page_of(A::Command("toggle_point_numbers")));
@@ -2163,7 +2163,7 @@ fn the_viewport_menu_toggles_show_point_numbers() {
     assert_eq!(row(&state), format!("○ {label}"));
     assert!(state.overlay_number_labels.is_empty());
     state.run_viewport_menu_action(A::Command("toggle_point_numbers"));
-    assert!(state.show_point_numbers);
+    assert!(state.view.show_point_numbers);
     assert_eq!(row(&state), format!("● {label}"));
     assert!(!state.overlay_number_labels.is_empty(), "the labels were collected");
     let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
@@ -2375,7 +2375,7 @@ fn the_viewport_menu_sets_the_camera_pivot_size() {
     use crate::window::WindowEvent;
     use cce_ui::widget::{context_menu, MouseScrollDelta};
     let mut state = State::new(false);
-    state.camera_pivot_size = 0.5;
+    state.view.camera_pivot_size = 0.5;
     state.pending_pivot = None;
     let version = state.rt_geometry_version;
     state.cursor_x = 300.0;
@@ -2391,7 +2391,7 @@ fn the_viewport_menu_sets_the_camera_pivot_size() {
     state.cursor_x = context_menu::x() + 20.0;
     state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
     state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 5.0) });
-    assert!((state.camera_pivot_size - 0.75).abs() < 1e-5, "{}", state.camera_pivot_size);
+    assert!((state.view.camera_pivot_size - 0.75).abs() < 1e-5, "{}", state.view.camera_pivot_size);
     assert!(state.pending_pivot.is_some(), "the marker re-bakes");
     assert_eq!(state.rt_geometry_version, version, "and the graph is not evaluated");
     assert!(context_menu::is_visible(), "a slider row keeps the menu up");
@@ -2409,7 +2409,7 @@ fn the_viewport_menu_sets_the_camera_pivot_size() {
 fn the_viewport_menu_toggles_show_point_markers() {
     use crate::app::ViewportMenuAction as A;
     let mut state = State::new(false);
-    state.show_point_markers = false;
+    state.view.show_point_markers = false;
     state.rebuild_scene_geometry();
     let row = |state: &State| {
         let (options, actions) = state.viewport_menu_rows_of(state.viewport_menu_page_of(A::Command("toggle_point_markers")));
@@ -2420,7 +2420,7 @@ fn the_viewport_menu_toggles_show_point_markers() {
     assert_eq!(row(&state), format!("○ {label}"));
     assert!(state.point_markers.verts.is_empty());
     state.run_viewport_menu_action(A::Command("toggle_point_markers"));
-    assert!(state.show_point_markers);
+    assert!(state.view.show_point_markers);
     assert_eq!(row(&state), format!("● {label}"));
     assert!(!state.point_markers.verts.is_empty(), "the overlay was built");
     assert!(!state.overlay_marker_points.is_empty(), "and its positions kept for re-sizing");
@@ -2524,8 +2524,8 @@ fn the_viewport_menu_sets_the_point_marker_size_without_a_rebuild() {
     use crate::window::WindowEvent;
     use cce_ui::widget::{context_menu, MouseScrollDelta};
     let mut state = State::new(false);
-    state.show_point_markers = true;
-    state.point_marker_size = 0.02;
+    state.view.show_point_markers = true;
+    state.view.point_marker_size = 0.02;
     state.rebuild_scene_geometry();
     assert!(!state.overlay_marker_points.is_empty(), "the bundled scene has points");
     let version = state.rt_geometry_version;
@@ -2543,7 +2543,7 @@ fn the_viewport_menu_sets_the_point_marker_size_without_a_rebuild() {
     state.cursor_x = context_menu::x() + 20.0;
     state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
     state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 4.0) });
-    assert!((state.point_marker_size - 0.04).abs() < 1e-5, "{}", state.point_marker_size);
+    assert!((state.view.point_marker_size - 0.04).abs() < 1e-5, "{}", state.view.point_marker_size);
     assert_eq!(state.rt_geometry_version, version, "no rebuild ran");
     assert!(state.point_markers.dirty);
     let resized: Vec<[f32; 3]> = state.drawn_markers(crate::app::MarkerKind::Overlay).iter().map(|v| v.position).collect();
@@ -2679,7 +2679,7 @@ fn the_dialog_plate_is_the_menu_plate() {
     let r = cce_ui::layout::menu_corner_radius();
     let rect = cce_ui::scene::layout::Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 };
     assert_eq!(dialog.corner_style(rect).map(|(r, _)| r), (r > 0.0).then_some(r));
-    for file in ["src/dialog.rs", "src/render.rs", "src/app.rs", "src/app/input.rs", "src/app/document.rs", "src/app/network.rs", "src/app/camera.rs"] {
+    for file in ["src/dialog.rs", "src/render.rs", "src/app.rs", "src/app/input.rs", "src/app/document.rs", "src/app/network.rs", "src/app/camera.rs", "src/app/view.rs"] {
         let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(file)).unwrap();
         assert!(!src.contains("dialog/compression") && !src.contains("DIALOG_COMPRESSION"), "{file} overrides the menu material");
     }
@@ -2979,7 +2979,7 @@ fn the_point_numbers_are_placed_by_the_camera_as_it_is() {
     state.rebuild_positions();
     state.apply_layout();
     state.set_active_camera("Default Camera");
-    state.show_point_numbers = true;
+    state.view.show_point_numbers = true;
     state.render.geo_opacity = 0.35;
     state.render.show_occluded = true;
     state.rebuild_scene_geometry();

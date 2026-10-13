@@ -3952,7 +3952,7 @@ Visualize node cannot disagree about what they draw
 the later over the earlier, as a chain of Visualize nodes composites.
 
 - **They are display settings**, by the rule "There are no meta nodes"
-  states: `State::visualizers`, persisted in the viewport block of
+  states: `State::view.visualizers`, persisted in the viewport block of
   state.kdl and with the project's display block, so a project keeps its
   own. **As one string** (`visualizer::encode` / `decode`: `key=value`
   joined by `|`, a visualizer per `;`, percent-escaped) — not JSON,
@@ -4347,7 +4347,7 @@ rather than two:
   group's members in the viewport: a sphere at Group Marker Size in the
   selected group's amber, on every member, staying on whatever is
   selected. Enter or a click flips it in place and the list stays up, as
-  the palette's toggles do. `State::marked_groups` is the set, persisted
+  the palette's toggles do. `State::view.marked_groups` is the set, persisted
   in the viewport block (one comma-joined string — a KDL list of one
   reads back as a bare string, which a `Vec` refuses, and a settings file
   that fails to parse reads as the defaults), so it rides the project

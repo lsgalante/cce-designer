@@ -150,12 +150,12 @@ fn dialog_enter_on_a_toggle_row_flips_it_and_keeps_the_dialog_open() {
         state.dialog_key_input(&typed(c));
     }
     assert_eq!(state.ui_context[state.slots.dialog].selected_id(), Some("toggle_square_viewport"));
-    let before = state.square_viewport;
+    let before = state.view.square_viewport;
     let row = state.ui_context[state.slots.dialog].rows[state.ui_context[state.slots.dialog].selected].clone();
     assert_eq!(row.toggle(), Some(before), "the switch shows the live value");
 
     state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
-    assert_eq!(state.square_viewport, !before, "Enter ran the command");
+    assert_eq!(state.view.square_viewport, !before, "Enter ran the command");
     assert!(state.dialog_visible(), "and the dialog stayed up");
     assert_eq!(state.ui_context[state.slots.dialog].query, "squa", "with its query intact");
     assert_eq!(state.ui_context[state.slots.dialog].selected_id(), Some("toggle_square_viewport"), "and its selection");
@@ -164,13 +164,13 @@ fn dialog_enter_on_a_toggle_row_flips_it_and_keeps_the_dialog_open() {
 
     // And back again, without leaving.
     state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
-    assert_eq!(state.square_viewport, before);
+    assert_eq!(state.view.square_viewport, before);
     assert!(state.dialog_visible());
     assert_eq!(state.ui_context[state.slots.dialog].rows[state.ui_context[state.slots.dialog].selected].toggle(), Some(before));
 
     // A click on the row is the same pick as Enter.
     state.take_dialog_pick("toggle_square_viewport".to_string());
-    assert_eq!(state.square_viewport, !before);
+    assert_eq!(state.view.square_viewport, !before);
     assert!(state.dialog_visible(), "a clicked switch keeps the dialog up too");
 }
 
@@ -507,17 +507,17 @@ fn a_dialog_slider_drag_lands_without_re_evaluating_the_graph() {
     state.pending_origin = None;
     state.pending_pivot = None;
     state.land_dialog_slider(&setting_row_id("Grid Thickness"), 40.0);
-    assert!((state.grid_thickness - 0.04).abs() < 1e-6, "{}", state.grid_thickness);
+    assert!((state.view.grid_thickness - 0.04).abs() < 1e-6, "{}", state.view.grid_thickness);
     assert!(state.pending_grid.is_some(), "the grid re-baked");
     state.land_dialog_slider(&setting_row_id("Origin Size"), 25.0);
-    assert!((state.origin_size - 2.5).abs() < 1e-6, "{}", state.origin_size);
+    assert!((state.view.origin_size - 2.5).abs() < 1e-6, "{}", state.view.origin_size);
     assert!(state.pending_origin.is_some(), "the origin re-baked");
     // Point Marker Size reads in world units, as Group Marker Size does
     // — one radius, one number in both rows.
     state.land_dialog_slider(&setting_row_id("Point Marker Size"), 0.05);
-    assert!((state.point_marker_size - 0.05).abs() < 1e-6, "{}", state.point_marker_size);
+    assert!((state.view.point_marker_size - 0.05).abs() < 1e-6, "{}", state.view.point_marker_size);
     state.land_dialog_slider(&setting_row_id("Group Marker Size"), 0.05);
-    assert!((state.render.group_marker_size - state.point_marker_size).abs() < 1e-6);
+    assert!((state.render.group_marker_size - state.view.point_marker_size).abs() < 1e-6);
     assert_eq!(state.settings_row_value("Point Marker Size"), state.settings_row_value("Group Marker Size"));
     assert_eq!(state.rt_geometry_version, version, "a spin row re-evaluated the graph");
     assert!((saved(&path) - 1.0).abs() < 1e-3, "the file follows every single landing");
@@ -830,7 +830,7 @@ fn dialog_settings_write_reaches_the_owning_subnet() {
 
     // A Field row: Grid Thickness is a whole number in thousandths.
     state.apply_setting("Grid Thickness", "40");
-    assert!((state.grid_thickness - 0.04).abs() < 1e-6, "{}", state.grid_thickness);
+    assert!((state.view.grid_thickness - 0.04).abs() < 1e-6, "{}", state.view.grid_thickness);
     let row = state.ui_context[state.slots.dialog].rows.iter().find(|r| r.id == setting_row_id("Grid Thickness")).unwrap();
     assert!(matches!(row.control, Some(Control::Slider { value, .. }) if (value - 40.0).abs() < 1e-6), "the row re-read the value");
 
@@ -867,7 +867,7 @@ fn dialog_settings_write_reaches_the_owning_subnet() {
         .apply_action(crate::app::McpAction::SetParam { slot: sphere, name: "radius".into(), value: "0.8".into() }, &mut redraw)
         .expect("set a sphere param");
     assert_eq!(state.viewport().show_grid, !was, "a param edit reverted the toggle");
-    assert!((state.grid_thickness - 0.04).abs() < 1e-6, "a param edit reverted the thickness");
+    assert!((state.view.grid_thickness - 0.04).abs() < 1e-6, "a param edit reverted the thickness");
 }
 
 /// A Grid Color edit re-bakes the grid mesh in the new colour.
@@ -2124,7 +2124,7 @@ fn command_palette_opens_the_dialog_on_commands() {
 /// start, which is indistinguishable from one that failed to.
 #[test]
 fn nothing_shells_out_to_cce_cloud_any_more() {
-    for name in ["app.rs", "app/input.rs", "app/document.rs", "app/network.rs", "app/camera.rs", "window.rs", "dialog.rs", "render.rs", "api.rs", "slots.rs"] {
+    for name in ["app.rs", "app/input.rs", "app/document.rs", "app/network.rs", "app/camera.rs", "app/view.rs", "window.rs", "dialog.rs", "render.rs", "api.rs", "slots.rs"] {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(name);
         let src = std::fs::read_to_string(&path).expect("read source");
         for needle in ["CloudPopup", "run_dmenu", "CloudPopupTracker"] {

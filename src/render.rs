@@ -1465,9 +1465,9 @@ impl State {
     /// visualizers or not (~1 ms at 100k prims).
     fn present_scene(&mut self, base: &crate::detail::Detail) {
         let visualized;
-        let geom = if crate::visualizer::any_applies(&self.visualizers) {
+        let geom = if crate::visualizer::any_applies(&self.view.visualizers) {
             let mut g = base.clone();
-            crate::visualizer::apply_all(&self.visualizers, &mut g);
+            crate::visualizer::apply_all(&self.view.visualizers, &mut g);
             visualized = g;
             &visualized
         } else {
@@ -1512,16 +1512,16 @@ impl State {
         // this Detail.
         let (markers, labels, normals) = scene_point_overlays(
             &geom,
-            self.show_point_markers,
-            self.show_point_numbers,
-            self.show_point_normals,
-            self.point_marker_size,
-            self.point_marker_color,
+            self.view.show_point_markers,
+            self.view.show_point_numbers,
+            self.view.show_point_normals,
+            self.view.point_marker_size,
+            self.view.point_marker_color,
         );
         self.point_markers.verts = markers;
         // Kept for re-sizing the markers without this evaluation — see
         // `State::rebuild_overlay_markers`.
-        self.overlay_marker_points = if self.show_point_markers {
+        self.overlay_marker_points = if self.view.show_point_markers {
             geom.positions()
                 .iter()
                 .map(|&position| crate::geometry::Vertex3D { position, color: [0.0; 3] })
@@ -1535,13 +1535,13 @@ impl State {
         let elements = scene_element_overlays(
             &geom,
             ElementOverlays {
-                prim_numbers: self.show_prim_numbers,
-                prim_normals: self.show_prim_normals,
-                vertex_numbers: self.show_vertex_numbers,
-                vertex_markers: self.show_vertex_markers,
-                vertex_normals: self.show_vertex_normals,
+                prim_numbers: self.view.show_prim_numbers,
+                prim_normals: self.view.show_prim_normals,
+                vertex_numbers: self.view.show_vertex_numbers,
+                vertex_markers: self.view.show_vertex_markers,
+                vertex_normals: self.view.show_vertex_normals,
             },
-            self.point_marker_size * 4.0,
+            self.view.point_marker_size * 4.0,
         );
         self.overlay_prim_labels = elements.prim_labels;
         self.overlay_prim_alpha.clear();

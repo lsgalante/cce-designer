@@ -152,6 +152,9 @@ pub use network::{DropGlow, NetworkView, NodeDragGroup, OverlayWheel, OVERLAY_WH
 // `State::camera`: the active camera, its drags, the view last staged.
 mod camera;
 pub use camera::CameraView;
+// `State::view`: the guides' sizes, the overlays, the visualizers.
+mod view;
+pub use view::ViewDisplay;
 
 /// Which node the params pane is showing: the editor's level, the slot
 /// there, and the node's id. All three, because no one of them is an
@@ -850,8 +853,6 @@ pub struct State {
     pub pending_window_drag: Option<PendingWindowDrag>,
     pub window_action: Option<cce_ui::engine::WindowAction>,
     pub vertex_count_spheres: u32,
-    pub origin_size: f32,
-    pub camera_pivot_size: f32,
 
     /// The open project: the node tree, the editor's path into it, undo
     /// and what it was last saved as (`src/app/document.rs`).
@@ -996,7 +997,9 @@ pub struct State {
     pub physical_width: u32,
     pub physical_height: u32,
     pub scale: f64,
-    pub square_viewport: bool,
+    /// The viewport's display settings: the guides' sizes, the element
+    /// overlays, the marked groups, the visualizers (`src/app/view.rs`).
+    pub view: ViewDisplay,
 
     /// The viewport's camera: which one looks, the orbit and pan drags,
     /// the viewer state, the view last staged (`src/app/camera.rs`).
@@ -1015,7 +1018,6 @@ pub struct State {
     pub last_spreadsheet_node_params: Option<Vec<(String, String)>>,
     /// The frame and geometry version the spreadsheet's rows were read at.
     pub last_spreadsheet_read_at: (i32, u64),
-    pub grid_thickness: f32,
     pub focused_pane: usize,
     pub last_config_read: Instant,
     pub circular_network_pane: bool,
@@ -1188,25 +1190,6 @@ pub struct State {
     /// its smooth vertex normal (computed from topology — the kernel outputs
     /// carry only a default up-normal attribute).
     pub overlay_normals: StagedMesh,
-    /// The three overlay switches, flipped by their palette commands and
-    /// persisted in `ViewportSettings`.
-    pub show_point_markers: bool,
-    pub show_point_numbers: bool,
-    pub show_point_normals: bool,
-    pub show_prim_numbers: bool,
-    pub show_prim_normals: bool,
-    pub show_vertex_numbers: bool,
-    pub show_vertex_markers: bool,
-    pub show_vertex_normals: bool,
-    /// The point groups whose members wear a marker in the scene, by name
-    /// — the Group Markers dialog's switches (`group_markers`), persisted
-    /// in the viewport block. A name the scene has no group for stays on
-    /// the list and marks nothing, so a switch set for a group that comes
-    /// and goes with a frame or an edit is not lost with it.
-    pub marked_groups: Vec<String>,
-    /// The attribute visualizers, applied in order to the displayed scene
-    /// (`crate::visualizer`). Persisted in the viewport block.
-    pub visualizers: Vec<crate::visualizer::Visualizer>,
     /// The params HUD shows the attribute visualizers, editing visualizer
     /// `i` (0 with none yet), in place of the selected node's parameters —
     /// `visualizer::State::open_visualizers_hud`. `None` is the node.
@@ -1239,10 +1222,6 @@ pub struct State {
     /// rebuilt with the scene while Show Wireframe is on and empty while it
     /// is off. Topological — see `render::scene_edge_verts`.
     pub scene_edge_verts: Vec<Vertex3D>,
-    /// World-unit radius of the Show Point Markers overlay.
-    pub point_marker_size: f32,
-    /// sRGB color of the Show Point Markers overlay.
-    pub point_marker_color: [f32; 3],
     /// The param pane's completion lists — (input node name, geometry
     /// version) → (group names, attribute names) read off that input's
     /// evaluated geometry, feeding the textpick rows on group/attribute
@@ -1380,28 +1359,28 @@ impl State {
         DisplaySettings {
             viewport: ViewportSettings {
                 bg_color: self.viewport().bg_color,
-                square: self.square_viewport,
+                square: self.view.square_viewport,
                 show_camera_pivot_enabled: self.viewport().show_camera_pivot,
-                camera_pivot_size: self.camera_pivot_size,
+                camera_pivot_size: self.view.camera_pivot_size,
                 show_grid_enabled: self.viewport().show_grid,
                 show_origin_enabled: self.viewport().show_origin,
-                origin_size: self.origin_size,
-                grid_thickness: self.grid_thickness,
+                origin_size: self.view.origin_size,
+                grid_thickness: self.view.grid_thickness,
                 grid_color: self.viewport().grid_color,
                 params_plate: self.params_plate,
                 node_wire_style: self.ui_context[self.slots.content].inner().chosen_wire_style().map(|w| w.name().to_string()).unwrap_or_default(),
-                show_point_markers: self.show_point_markers,
-                show_point_numbers: self.show_point_numbers,
-                show_point_normals: self.show_point_normals,
-                show_prim_numbers: self.show_prim_numbers,
-                show_prim_normals: self.show_prim_normals,
-                show_vertex_numbers: self.show_vertex_numbers,
-                show_vertex_markers: self.show_vertex_markers,
-                show_vertex_normals: self.show_vertex_normals,
-                marked_groups: Self::join_marked_groups(&self.marked_groups),
-                visualizers: crate::visualizer::encode(&self.visualizers),
-                point_marker_size: self.point_marker_size,
-                point_marker_color: self.point_marker_color,
+                show_point_markers: self.view.show_point_markers,
+                show_point_numbers: self.view.show_point_numbers,
+                show_point_normals: self.view.show_point_normals,
+                show_prim_numbers: self.view.show_prim_numbers,
+                show_prim_normals: self.view.show_prim_normals,
+                show_vertex_numbers: self.view.show_vertex_numbers,
+                show_vertex_markers: self.view.show_vertex_markers,
+                show_vertex_normals: self.view.show_vertex_normals,
+                marked_groups: Self::join_marked_groups(&self.view.marked_groups),
+                visualizers: crate::visualizer::encode(&self.view.visualizers),
+                point_marker_size: self.view.point_marker_size,
+                point_marker_color: self.view.point_marker_color,
                 world_unit: self.doc.world_unit.suffix().to_string(),
                 rt_mode: self.viewport().rt_mode,
                 circular_pane: self.circular_network_pane,
@@ -1453,25 +1432,25 @@ impl State {
             vp.grid_color = v.grid_color;
             vp.rt_mode = v.rt_mode;
         }
-        self.square_viewport = v.square;
-        self.camera_pivot_size = v.camera_pivot_size;
-        self.origin_size = v.origin_size;
-        self.grid_thickness = v.grid_thickness;
+        self.view.square_viewport = v.square;
+        self.view.camera_pivot_size = v.camera_pivot_size;
+        self.view.origin_size = v.origin_size;
+        self.view.grid_thickness = v.grid_thickness;
         self.params_plate = v.params_plate;
         self.set_node_wire_style(cce_ui::widget::display::WireStyle::parse(&v.node_wire_style));
         self.circular_network_pane = self.is_detached_network || v.circular_pane;
-        self.show_point_markers = v.show_point_markers;
-        self.show_point_numbers = v.show_point_numbers;
-        self.show_point_normals = v.show_point_normals;
-        self.show_prim_numbers = v.show_prim_numbers;
-        self.show_prim_normals = v.show_prim_normals;
-        self.show_vertex_numbers = v.show_vertex_numbers;
-        self.show_vertex_markers = v.show_vertex_markers;
-        self.show_vertex_normals = v.show_vertex_normals;
-        self.marked_groups = Self::marked_groups_of(&v.marked_groups);
-        self.visualizers = crate::visualizer::decode(&v.visualizers);
-        self.point_marker_size = v.point_marker_size;
-        self.point_marker_color = v.point_marker_color;
+        self.view.show_point_markers = v.show_point_markers;
+        self.view.show_point_numbers = v.show_point_numbers;
+        self.view.show_point_normals = v.show_point_normals;
+        self.view.show_prim_numbers = v.show_prim_numbers;
+        self.view.show_prim_normals = v.show_prim_normals;
+        self.view.show_vertex_numbers = v.show_vertex_numbers;
+        self.view.show_vertex_markers = v.show_vertex_markers;
+        self.view.show_vertex_normals = v.show_vertex_normals;
+        self.view.marked_groups = Self::marked_groups_of(&v.marked_groups);
+        self.view.visualizers = crate::visualizer::decode(&v.visualizers);
+        self.view.point_marker_size = v.point_marker_size;
+        self.view.point_marker_color = v.point_marker_color;
         if let Some(u) = cce_ui::units::Unit::parse(&v.world_unit) {
             self.doc.world_unit = u;
         }
@@ -1507,17 +1486,17 @@ impl State {
 
     pub fn update_grid_geometry(&mut self) {
         let linear_grid_color = cce_ui::color::to_linear_rgb(self.viewport().grid_color);
-        self.pending_grid = Some(grid_vertices(self.grid_thickness, linear_grid_color));
+        self.pending_grid = Some(grid_vertices(self.view.grid_thickness, linear_grid_color));
         self.viewport_dirty = true;
     }
 
     pub fn update_origin_geometry(&mut self) {
-        self.pending_origin = Some(origin_vectors_vertices(self.origin_size));
+        self.pending_origin = Some(origin_vectors_vertices(self.view.origin_size));
         self.viewport_dirty = true;
     }
 
     pub fn update_pivot_geometry(&mut self) {
-        self.pending_pivot = Some(camera_pivot_vertices(self.camera_pivot_size));
+        self.pending_pivot = Some(camera_pivot_vertices(self.view.camera_pivot_size));
         self.viewport_dirty = true;
     }
 
@@ -1785,7 +1764,7 @@ impl State {
         let s = self.scale as f32;
         let (mut sx, mut sy) = (0u32, (HEADER_H * s) as u32);
         let (mut cw, mut ch) = ((self.width * s) as u32, (self.body_h() * s) as u32);
-        if self.square_viewport {
+        if self.view.square_viewport {
             let side = cw.min(ch);
             sx += (cw - side) / 2;
             sy += (ch - side) / 2;
@@ -3667,7 +3646,7 @@ impl State {
         // Fit the bounding sphere inside the narrower frustum axis
         // (get_matrices: vertical FOV 0.9 rad), with a little breathing room.
         let (w, h) = (self.last_viewport.width.max(1) as f32, self.last_viewport.height.max(1) as f32);
-        let aspect = if self.square_viewport { 1.0 } else { w / h };
+        let aspect = if self.view.square_viewport { 1.0 } else { w / h };
         let half_v = 0.45f32;
         let half_h = (half_v.tan() * aspect).atan();
         let half = half_v.min(half_h);
@@ -4416,7 +4395,7 @@ impl State {
             // The palette row's spin is 5–100 thousandths; the same range in
             // world units here, where the readout has room for the decimals.
             ViewportMenuAction::PointMarkerSizeSlider => MenuSlider {
-                value: self.point_marker_size.clamp(0.005, 0.1),
+                value: self.view.point_marker_size.clamp(0.005, 0.1),
                 min: 0.005,
                 max: 0.1,
                 step: 0.005,
@@ -4437,7 +4416,7 @@ impl State {
             // may not carry and which a fallback glyph would then
             // under-measure.
             ViewportMenuAction::CameraPivotSizeSlider => MenuSlider {
-                value: self.camera_pivot_size.clamp(0.0, 1.0),
+                value: self.view.camera_pivot_size.clamp(0.0, 1.0),
                 min: 0.0,
                 max: 1.0,
                 step: 0.05,
@@ -4468,7 +4447,7 @@ impl State {
         if action == ViewportMenuAction::CameraPivotSizeSlider {
             // The live field itself: the palette row writes whole tenths,
             // which is coarser than this slider's step.
-            self.camera_pivot_size = v.clamp(0.0, 1.0);
+            self.view.camera_pivot_size = v.clamp(0.0, 1.0);
             self.update_pivot_geometry();
             self.viewport_dirty = true;
             return;
@@ -4505,7 +4484,7 @@ impl State {
             "wire_width" => self.render.wire_width = v.clamp(1.0, 8.0),
             "wire_opacity" => self.render.wire_opacity = v.clamp(0.0, 1.0),
             "point_marker_size" => {
-                self.point_marker_size = v.clamp(0.005, 0.1);
+                self.view.point_marker_size = v.clamp(0.005, 0.1);
                 self.rebuild_overlay_markers();
             }
             "group_marker_size" => {
@@ -4519,11 +4498,11 @@ impl State {
             // The spin rows' ranges, in world units (the rows read in
             // thousandths and tenths).
             "grid_thickness" => {
-                self.grid_thickness = v.clamp(0.002, 0.2);
+                self.view.grid_thickness = v.clamp(0.002, 0.2);
                 self.update_grid_geometry();
             }
             "origin_size" => {
-                self.origin_size = v.clamp(0.1, 5.0);
+                self.view.origin_size = v.clamp(0.1, 5.0);
                 self.update_origin_geometry();
             }
             _ => return false,
@@ -5482,7 +5461,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     pub(crate) fn rebuild_overlay_markers(&mut self) {
         self.point_markers.verts = crate::geometry::marker_instances(
             &self.overlay_marker_points,
-            cce_ui::color::to_linear_rgb(self.point_marker_color),
+            cce_ui::color::to_linear_rgb(self.view.point_marker_color),
         );
         self.vertex_markers.verts = crate::geometry::marker_instances(
             &self.overlay_vertex_marker_points,
@@ -5512,9 +5491,9 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             MarkerKind::Row => expand_instances(&group(), &self.row_markers.verts),
             MarkerKind::Marked => expand_instances(&group(), &self.marked_group_markers.verts),
             MarkerKind::Overlay => {
-                let mut out = expand_instances(&marker_sphere(self.point_marker_size), &self.point_markers.verts);
+                let mut out = expand_instances(&marker_sphere(self.view.point_marker_size), &self.point_markers.verts);
                 out.extend(expand_instances(
-                    &marker_sphere(self.point_marker_size * crate::render::VERTEX_MARKER_SCALE),
+                    &marker_sphere(self.view.point_marker_size * crate::render::VERTEX_MARKER_SCALE),
                     &self.vertex_markers.verts,
                 ));
                 out
@@ -5553,7 +5532,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         let at: Vec<Vertex3D> = self
             .scene_groups
             .iter()
-            .filter(|(name, _)| self.marked_groups.contains(name))
+            .filter(|(name, _)| self.view.marked_groups.contains(name))
             .flat_map(|(_, members)| members.iter().map(|&position| Vertex3D { position, color: [0.0; 3] }))
             .collect();
         self.marked_group_markers.verts = crate::geometry::marker_instances(&at, cce_ui::color::to_linear_rgb([1.0, 0.78, 0.20]));
@@ -5576,7 +5555,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
 
     /// Whether `group` is marked.
     pub fn group_marked(&self, group: &str) -> bool {
-        self.marked_groups.iter().any(|g| g == group)
+        self.view.marked_groups.iter().any(|g| g == group)
     }
 
     /// Mark or unmark a point group: the Group Markers dialog's switch.
@@ -5585,10 +5564,10 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     pub fn set_group_marked(&mut self, group: &str, on: bool) {
         let was = self.group_marked(group);
         if on && !was {
-            self.marked_groups.push(group.to_string());
-            self.marked_groups.sort();
+            self.view.marked_groups.push(group.to_string());
+            self.view.marked_groups.sort();
         } else if !on && was {
-            self.marked_groups.retain(|g| g != group);
+            self.view.marked_groups.retain(|g| g != group);
         }
         if on != was {
             self.rebuild_marked_group_markers();
@@ -5801,8 +5780,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             pending_window_drag: None,
             window_action: None,
             vertex_count_spheres: 0,
-            origin_size: settings.viewport.origin_size,
-            camera_pivot_size: settings.viewport.camera_pivot_size,
             doc: Document {
                 fs_root: fs_root.clone(),
                 node_templates,
@@ -5901,7 +5878,24 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             physical_width: pw,
             physical_height: ph,
             scale,
-            square_viewport: settings.viewport.square,
+            view: ViewDisplay {
+                square_viewport: settings.viewport.square,
+                grid_thickness: settings.viewport.grid_thickness,
+                origin_size: settings.viewport.origin_size,
+                camera_pivot_size: settings.viewport.camera_pivot_size,
+                point_marker_size: settings.viewport.point_marker_size,
+                point_marker_color: settings.viewport.point_marker_color,
+                show_point_markers: settings.viewport.show_point_markers,
+                show_point_numbers: settings.viewport.show_point_numbers,
+                show_point_normals: settings.viewport.show_point_normals,
+                show_prim_numbers: settings.viewport.show_prim_numbers,
+                show_prim_normals: settings.viewport.show_prim_normals,
+                show_vertex_numbers: settings.viewport.show_vertex_numbers,
+                show_vertex_markers: settings.viewport.show_vertex_markers,
+                show_vertex_normals: settings.viewport.show_vertex_normals,
+                marked_groups: Self::marked_groups_of(&settings.viewport.marked_groups),
+                visualizers: crate::visualizer::decode(&settings.viewport.visualizers),
+            },
             camera: CameraView {
                 active_camera,
                 orbit_drag: None,
@@ -5922,7 +5916,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             last_spreadsheet_node_name: None,
             last_spreadsheet_node_params: None,
             last_spreadsheet_read_at: (i32::MIN, 0),
-            grid_thickness: settings.viewport.grid_thickness,
             focused_pane: LEFT_MENUBAR_IDX,
             // Config-owned; update_inertial_settings overwrites these from
             // config.kdl's input.inertial right after construction. They
@@ -6008,16 +6001,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             overlay_vertex_labels: Vec::new(),
             overlay_vertex_alpha: Vec::new(),
             overlay_normals: StagedMesh::default(),
-            show_point_markers: settings.viewport.show_point_markers,
-            show_point_numbers: settings.viewport.show_point_numbers,
-            show_point_normals: settings.viewport.show_point_normals,
-            show_prim_numbers: settings.viewport.show_prim_numbers,
-            show_prim_normals: settings.viewport.show_prim_normals,
-            show_vertex_numbers: settings.viewport.show_vertex_numbers,
-            show_vertex_markers: settings.viewport.show_vertex_markers,
-            show_vertex_normals: settings.viewport.show_vertex_normals,
-            marked_groups: Self::marked_groups_of(&settings.viewport.marked_groups),
-            visualizers: crate::visualizer::decode(&settings.viewport.visualizers),
             vis_hud: None,
             vis_hud_from: None,
             value_row_span: None,
@@ -6027,8 +6010,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             scene_groups: Vec::new(),
             marked_group_markers: StagedMesh::default(),
             scene_edge_verts: Vec::new(),
-            point_marker_size: settings.viewport.point_marker_size,
-            point_marker_color: settings.viewport.point_marker_color,
             pick_cache: None,
             rt_sphere_verts: Vec::new(),
             rt_geometry_version: 0,
@@ -6756,42 +6737,42 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             // flip has to re-run it: the meshes are built from the flags,
             // not filtered at draw time.
             Action::TogglePointMarkers => {
-                self.show_point_markers = !self.show_point_markers;
+                self.view.show_point_markers = !self.view.show_point_markers;
                 self.rebuild_scene_geometry();
                 settings_changed = true;
             }
             Action::TogglePointNumbers => {
-                self.show_point_numbers = !self.show_point_numbers;
+                self.view.show_point_numbers = !self.view.show_point_numbers;
                 self.rebuild_scene_geometry();
                 settings_changed = true;
             }
             Action::TogglePointNormals => {
-                self.show_point_normals = !self.show_point_normals;
+                self.view.show_point_normals = !self.view.show_point_normals;
                 self.rebuild_scene_geometry();
                 settings_changed = true;
             }
             Action::TogglePrimNumbers => {
-                self.show_prim_numbers = !self.show_prim_numbers;
+                self.view.show_prim_numbers = !self.view.show_prim_numbers;
                 self.rebuild_scene_geometry();
                 settings_changed = true;
             }
             Action::TogglePrimNormals => {
-                self.show_prim_normals = !self.show_prim_normals;
+                self.view.show_prim_normals = !self.view.show_prim_normals;
                 self.rebuild_scene_geometry();
                 settings_changed = true;
             }
             Action::ToggleVertexMarkers => {
-                self.show_vertex_markers = !self.show_vertex_markers;
+                self.view.show_vertex_markers = !self.view.show_vertex_markers;
                 self.rebuild_scene_geometry();
                 settings_changed = true;
             }
             Action::ToggleVertexNormals => {
-                self.show_vertex_normals = !self.show_vertex_normals;
+                self.view.show_vertex_normals = !self.view.show_vertex_normals;
                 self.rebuild_scene_geometry();
                 settings_changed = true;
             }
             Action::ToggleVertexNumbers => {
-                self.show_vertex_numbers = !self.show_vertex_numbers;
+                self.view.show_vertex_numbers = !self.view.show_vertex_numbers;
                 self.rebuild_scene_geometry();
                 settings_changed = true;
             }
@@ -6807,7 +6788,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 settings_changed = true;
             }
             Action::ToggleSquareViewport => {
-                self.square_viewport = !self.square_viewport;
+                self.view.square_viewport = !self.view.square_viewport;
                 settings_changed = true;
             }
             Action::ToggleConfigure => {
@@ -7112,16 +7093,16 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                          self.ui_context[self.slots.playbar].inner_mut().repeat = settings.playbar_repeat;
                          self.ui_context[self.slots.playbar].inner_mut().step_buttons = settings.playbar_step_buttons;
                          self.ui_context[self.slots.playbar].inner_mut().fps = settings.playbar_fps.clamp(1.0, 120.0);
-                         self.square_viewport = settings.viewport.square;
-                         self.grid_thickness = settings.viewport.grid_thickness;
+                         self.view.square_viewport = settings.viewport.square;
+                         self.view.grid_thickness = settings.viewport.grid_thickness;
                          self.viewport_mut().show_grid = settings.viewport.show_grid_enabled;
                          self.viewport_mut().show_origin = settings.viewport.show_origin_enabled;
                          self.viewport_mut().show_camera_pivot = settings.viewport.show_camera_pivot_enabled;
                          self.viewport_mut().bg_color = settings.viewport.bg_color;
                          self.net.node_color = cce_ui::color::graph_node_color();
                          self.viewport_mut().grid_color = settings.viewport.grid_color;
-                         self.origin_size = settings.viewport.origin_size;
-                         self.camera_pivot_size = settings.viewport.camera_pivot_size;
+                         self.view.origin_size = settings.viewport.origin_size;
+                         self.view.camera_pivot_size = settings.viewport.camera_pivot_size;
 
                         color::set_node_color(self.net.node_color);
 
@@ -7358,8 +7339,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         // The spheres the markers are drawn over, at the sizes as they are.
         let radii = [
             self.render.group_marker_size,
-            self.point_marker_size,
-            self.point_marker_size * crate::render::VERTEX_MARKER_SCALE,
+            self.view.point_marker_size,
+            self.view.point_marker_size * crate::render::VERTEX_MARKER_SCALE,
         ];
         if self.marker_sphere_radii != Some(radii) {
             self.marker_sphere_radii = Some(radii);
@@ -7434,9 +7415,9 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
 
     pub fn init_renderer(&mut self, renderer: &mut cce_ui::vk::VkRenderer) {
         let linear_grid_color = cce_ui::color::to_linear_rgb(self.viewport().grid_color);
-        let grid_verts = grid_vertices(self.grid_thickness, linear_grid_color);
-        let origin_verts = origin_vectors_vertices(self.origin_size);
-        let pivot_verts = camera_pivot_vertices(self.camera_pivot_size);
+        let grid_verts = grid_vertices(self.view.grid_thickness, linear_grid_color);
+        let origin_verts = origin_vectors_vertices(self.view.origin_size);
+        let pivot_verts = camera_pivot_vertices(self.view.camera_pivot_size);
         let bg_verts =
             Self::viewport_bg_vertices(cce_ui::color::to_linear_rgb(self.viewport().bg_color));
         self.meshes = Some(SceneMeshes {
@@ -7632,7 +7613,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             let mut sx = (cx_logical * self.scale as f32) as u32;
             let mut sy = (cy_logical * self.scale as f32) as u32;
 
-            if self.square_viewport {
+            if self.view.square_viewport {
                 let s = cw.min(ch);
                 sx += (cw - s) / 2;
                 sy += (ch - s) / 2;

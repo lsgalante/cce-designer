@@ -1580,7 +1580,7 @@ pub fn setting_of_row(id: &str) -> Option<&'static Setting> {
 /// It used to be neither the live `State` fields nor `DesignSettings`: both
 /// were DOWNSTREAM of the root meta node, whose utility subnets were copied
 /// over live state on every param change, so a write straight to
-/// `State::grid_thickness` survived exactly until the next one. With that
+/// `State::view.grid_thickness` survived exactly until the next one. With that
 /// node retired the live field IS the value, and it is the one kind of owner
 /// left. (A toggle the command registry owns went when the settings joined
 /// the commands list: those toggles ARE command rows there, and a second row
@@ -2188,17 +2188,17 @@ impl State {
             "toggle_wireframe" => self.render.wireframe,
             "toggle_smooth_shading" => self.render.smooth_shading,
             "toggle_show_occluded" => self.render.show_occluded,
-            "toggle_point_markers" => self.show_point_markers,
-            "toggle_point_numbers" => self.show_point_numbers,
-            "toggle_point_normals" => self.show_point_normals,
-            "toggle_prim_numbers" => self.show_prim_numbers,
-            "toggle_prim_normals" => self.show_prim_normals,
-            "toggle_vertex_numbers" => self.show_vertex_numbers,
-            "toggle_vertex_markers" => self.show_vertex_markers,
-            "toggle_vertex_normals" => self.show_vertex_normals,
+            "toggle_point_markers" => self.view.show_point_markers,
+            "toggle_point_numbers" => self.view.show_point_numbers,
+            "toggle_point_normals" => self.view.show_point_normals,
+            "toggle_prim_numbers" => self.view.show_prim_numbers,
+            "toggle_prim_normals" => self.view.show_prim_normals,
+            "toggle_vertex_numbers" => self.view.show_vertex_numbers,
+            "toggle_vertex_markers" => self.view.show_vertex_markers,
+            "toggle_vertex_normals" => self.view.show_vertex_normals,
             "toggle_wire_single_color" => self.render.wire_single_color,
             "toggle_ray_traced_preview" => self.viewport().rt_mode,
-            "toggle_square_viewport" => self.square_viewport,
+            "toggle_square_viewport" => self.view.square_viewport,
             "toggle_params_plate" => self.params_plate,
             "toggle_circular_pane" => self.circular_network_pane,
             "detach_circular_window" => self.detached_circular_network,
@@ -2338,7 +2338,7 @@ impl State {
         match key {
             "bg_color" => self.viewport().bg_color,
             "grid_color" => self.viewport().grid_color,
-            "point_marker_color" => self.point_marker_color,
+            "point_marker_color" => self.view.point_marker_color,
             "wire_color" => self.render.wire_color,
             _ => [0.0; 3],
         }
@@ -2346,9 +2346,9 @@ impl State {
 
     fn settings_field_f32(&self, key: &str) -> f32 {
         match key {
-            "grid_thickness" => self.grid_thickness,
-            "origin_size" => self.origin_size,
-            "point_marker_size" => self.point_marker_size,
+            "grid_thickness" => self.view.grid_thickness,
+            "origin_size" => self.view.origin_size,
+            "point_marker_size" => self.view.point_marker_size,
             "wire_width" => self.render.wire_width,
             "geo_opacity" => self.render.geo_opacity,
             "wire_opacity" => self.render.wire_opacity,
@@ -2387,7 +2387,7 @@ impl State {
                 match key {
                     "bg_color" => self.viewport_mut().bg_color = c,
                     "grid_color" => self.viewport_mut().grid_color = c,
-                    "point_marker_color" => self.point_marker_color = c,
+                    "point_marker_color" => self.view.point_marker_color = c,
                     "wire_color" => {
                         // Setting a wire colour means wanting to see it: the
                         // colour applies in single-colour mode only, so a
@@ -2406,8 +2406,8 @@ impl State {
                 let Ok(v) = value.parse::<f32>() else { return };
                 let v = v / unit;
                 match key {
-                    "grid_thickness" => self.grid_thickness = v,
-                    "origin_size" => self.origin_size = v,
+                    "grid_thickness" => self.view.grid_thickness = v,
+                    "origin_size" => self.view.origin_size = v,
                     _ => {}
                 }
             }
@@ -2419,7 +2419,7 @@ impl State {
                     "geo_opacity" => self.render.geo_opacity = v,
                     "wire_opacity" => self.render.wire_opacity = v,
                     "group_marker_size" => self.render.group_marker_size = v,
-                    "point_marker_size" => self.point_marker_size = v,
+                    "point_marker_size" => self.view.point_marker_size = v,
                     "pull_arrow_scale" => {
                         self.render.pull_arrow_scale = v;
                         self.rebuild_pull_arrow_verts();
