@@ -550,20 +550,56 @@ impl State {
                 // 2026-10-07, when the grid's visual was removed; the lattice
                 // itself — where nodes stand, snapping, the grid cursor — is
                 // unchanged.)
-                // The box round the wired chain the pointer is in, where
-                // the pointer is the network's (`overlay_claims`): a wash
-                // and a hairline in the plates' neutral border colour,
-                // under the wires, its corners concentric with the nodes'.
+                // The outline shrink-wrapped round the wired chain the
+                // pointer is in, where the pointer is the network's
+                // (`overlay_claims`): a wash and a hairline in the plates'
+                // neutral border colour, under the wires, its outer corners
+                // concentric with the nodes' and its inner ones filleted.
                 if let Some(b) = &self.net.chain_box {
-                    let n = cce_ui::color::plate_border_color().unwrap_or([0.58, 0.58, 0.66, 1.0]);
-                    let r = node_r + self.chain_box_pad();
-                    pc.border(
-                        rect(b.x, b.y, b.w, b.h),
-                        (r, r, r, r),
-                        [n[0], n[1], n[2], 0.07 * b.alpha],
-                        [n[0], n[1], n[2], 0.6 * b.alpha],
-                        1.5,
-                    );
+                    if let Some(shape) = self.chain_shape_of(&b.ids) {
+                        let n = cce_ui::color::plate_border_color().unwrap_or([0.58, 0.58, 0.66, 1.0]);
+                        let wash = [n[0], n[1], n[2], 0.07 * b.alpha];
+                        let line = [n[0], n[1], n[2], 0.6 * b.alpha];
+                        let t = 1.5;
+                        let shown = shape.rounded(node_r + self.chain_box_pad());
+                        for (span, r) in &shown.strips {
+                            fill_strip_circular(pc, *span, *r, wash);
+                        }
+                        // A fillet's wash: the corner's square outside the
+                        // strips, up to the arc, a pixel row at a time.
+                        for c in shown.loops.iter().flatten().filter(|c| !c.convex && c.radius > 0.5) {
+                            let (cx, cy, r) = (c.center.0, c.center.1, c.radius);
+                            let (vx, vy) = c.at;
+                            let (y0, y1) = (vy.min(cy), vy.max(cy));
+                            let mut y = y0;
+                            while y < y1 {
+                                let h = (y1 - y).min(1.0);
+                                let dy = (y + h * 0.5 - cy).abs().min(r);
+                                let x = cx + (vx - cx).signum() * (r * r - dy * dy).sqrt();
+                                let (a, b) = (x.min(vx), x.max(vx));
+                                if b > a {
+                                    pc.quad(rect(a, y, b - a, h), wash);
+                                }
+                                y += h;
+                            }
+                        }
+                        for corners in &shown.loops {
+                            for (k, c) in corners.iter().enumerate() {
+                                let next = &corners[(k + 1) % corners.len()];
+                                let (a, z) = (c.to, next.from);
+                                let (lx, ly) = (a.0.min(z.0), a.1.min(z.1));
+                                let (w, h) = ((a.0 - z.0).abs(), (a.1 - z.1).abs());
+                                if w > h {
+                                    pc.quad(rect(lx, ly - t * 0.5, w, t), line);
+                                } else if h > 0.0 {
+                                    pc.quad(rect(lx - t * 0.5, ly, t, h), line);
+                                }
+                                if c.radius > 0.25 {
+                                    pc.arc(c.center.0, c.center.1, c.radius + t * 0.5, t, c.start, c.end, line);
+                                }
+                            }
+                        }
+                    }
                 }
                 g.paint_wires(clip, pc);
                 for (qx, qy, qw, qh, qc, cell) in g.geometry_quads_tagged(clip) {
@@ -1963,5 +1999,38 @@ fn append_plate_at(w: &dyn WidgetHost, pc: &mut PaintCtx, r: Rect, tint: Option<
         }
     } else {
         pc.border(r, radii, w.color(), [0.0; 4], 0.0);
+    }
+}
+
+/// Fill `(x0, y0, x1, y1)` with its corners — top left, top right, bottom
+/// right, bottom left — rounded on CIRCLES of the given radii, each at most
+/// half the strip: quads round quarter discs. Not a rounded rect, whose
+/// corners are the DE's squircle and would stand past a circular outline
+/// drawn round the same corner (the chain outline's arcs).
+fn fill_strip_circular(pc: &mut PaintCtx, (x0, y0, x1, y1): (f32, f32, f32, f32), r: [f32; 4], color: [f32; 4]) {
+    use std::f32::consts::{FRAC_PI_2, PI};
+    let [tl, tr, br, bl] = r;
+    let (top, bottom) = (tl.max(tr), bl.max(br));
+    let mut quad = |x: f32, y: f32, w: f32, h: f32| {
+        if w > 0.0 && h > 0.0 {
+            pc.quad(rect(x, y, w, h), color);
+        }
+    };
+    quad(x0 + tl, y0, x1 - tr - x0 - tl, top);
+    quad(x0, y0 + tl, tl, top - tl);
+    quad(x1 - tr, y0 + tr, tr, top - tr);
+    quad(x0, y0 + top, x1 - x0, y1 - bottom - y0 - top);
+    quad(x0 + bl, y1 - bottom, x1 - br - x0 - bl, bottom);
+    quad(x0, y1 - bottom, bl, bottom - bl);
+    quad(x1 - br, y1 - bottom, br, bottom - br);
+    for (rad, cx, cy, start) in [
+        (tl, x0 + tl, y0 + tl, PI),
+        (tr, x1 - tr, y0 + tr, PI + FRAC_PI_2),
+        (br, x1 - br, y1 - br, 0.0),
+        (bl, x0 + bl, y1 - bl, FRAC_PI_2),
+    ] {
+        if rad > 0.0 {
+            pc.arc(cx, cy, rad, rad, start, start + FRAC_PI_2, color);
+        }
     }
 }

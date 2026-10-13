@@ -3034,36 +3034,63 @@ What changes for the user: a plain click on empty space is not the network's
 feel like a scene with a graph on it rather than a graph with a picture
 behind it. Deselecting is on Escape.
 
-### A wired chain claims its box (since 2026-10-13)
+### A wired chain claims its outline (since 2026-10-13)
 
 The exception to "empty space is the scene's": every wired CHAIN of the
 level — the nodes joined by wires naming siblings, as cce-ui's
 `wire_pairs` reads them (`network::wired_chains`; a node wired to nothing
-is no chain) — has a box round its bodies and their name labels
-(`node_extent`, Frame All's rule), padded by `chain_box_pad` (0.55 of the
-body's height, so the ports stand inside). Inside it the pointer is the
-NETWORK'S, empty space and all: `overlay_claims` takes `chain_box_at` as
+is no chain) — has an outline SHRINK-WRAPPED round it, of horizontal and
+vertical edges only (`src/chain_shape.rs`, `State::chain_shape`). It is the
+ORTHOGONAL CONVEX HULL — the smallest region every horizontal and every
+vertical line crosses in one run — of:
+
+- each node, body and name label (`node_extent`, Frame All's rule), padded
+  by `chain_box_pad` (0.55 of the body's height, so the ports stand
+  inside), its right edge rounded out to a whole number of pads from its
+  left, so names of about one length end at one place and not in a stair
+  of slivers;
+- each wire between two of them, as a node-wide route along the SOURCE'S
+  ROW and down the DESTINATION'S COLUMN — so a chain whose nodes share no
+  row or column is still one piece, and every edge a route adds is a row's
+  or a column's own (a route through the middle of the gap between rows
+  left 6 px notches).
+
+So a column is a column, its right side stepping with the names, and an L
+is an L, its empty corner the scene's. Until later the same day it was the
+chain's bounding box (`a_chains_outline_follows_its_shape_and_not_its_bounds`).
+The shape is kept on a grid of the rectangles' own edges, a cell in or out;
+`ChainShape::rounded` gives the drawing — the fill as horizontal strips and
+the outline as loops of corners, radius `node_r + pad` cut to half the
+shorter edge beside a corner and, turning out, to half its strip — so fill
+and line agree corner for corner.
+
+Inside it the pointer is the NETWORK'S, empty space and all:
+`overlay_claims` takes `chain_box_at` (the smallest containing outline) as
 well as `node_at`, and everything routed off it follows — `in_network_pane`,
 `cursor_in_viewport`, the press cascade's `hits_widget`, the wheel's
-per-gesture target. So in a chain's box a left press is the grid's (the
-cursor to the cell, an expansion drag armed, the network focused), the
+per-gesture target. So in a chain's outline a left press is the grid's
+(the cursor to the cell, an expansion drag armed, the network focused), the
 wheel pans the graph, a right press opens the network's menu, and a viewer
-state's handle under the box cannot be grabbed. Outside every box nothing
+state's handle under it cannot be grabbed. Outside every outline nothing
 changed.
 
-The box is DRAWN only while the pointer is in it
-(`State::net.chain_box`, eased in `animate_chain_box` from the tick: it
-fades in, glides to another chain, follows its own exactly through a pan
-or zoom, fades out where it was), a wash and a hairline in the plates'
-neutral border colour under the wires, its corners concentric with the
-nodes'. A captured pointer or a floating pane over it shows none.
+It is DRAWN only while the pointer is in it (`State::net.chain_box`, the
+chain's node ids and an alpha, faded in `animate_chain_box` from the tick;
+the shape is worked out from the ids as it is drawn, so it follows a pan, a
+zoom or a node moved), a wash and a hairline in the plates' neutral border
+colour under the wires. The corners are CIRCLES on both: the line is
+`Prim::Arc`s, the wash `render::fill_strip_circular` (quads round quarter
+discs) — a rounded rect's corners are the DE's squircle and stood past the
+arcs — and an inner corner's fillet is washed a pixel row at a time up to
+its arc. A captured pointer or a floating pane over it shows none.
 `chain_box_stale` is what pointer motion repaints for, since the tick runs
-only on a frame something asked for. Where boxes overlap the smallest
-wins. Boxes are read off the graph widget's own nodes, so they are round
-what is drawn. `a_chain_under_the_pointer_has_a_box_and_its_input_is_the_networks`
-is the test. Checked in a shadow session.
+only on a frame something asked for. Read off the graph widget's own
+nodes, so it is round what is drawn.
+`a_chain_under_the_pointer_has_a_box_and_its_input_is_the_networks` is the
+test of the routing; `chain_shape`'s own tests the hull and the corners.
+Checked in a shadow session, corners zoomed.
 
-**The keyboard follows the pointer into a box** (`follow_chain_hover`, from
+**The keyboard follows the pointer into an outline** (`follow_chain_hover`, from
 pointer motion): ENTERING one gives the network the focus — the pane and the
 graph widget, as a press on the graph does — so hjkl, `f`, Delete and the
 rest of the network's keys work with no click; LEAVING gives the focus back

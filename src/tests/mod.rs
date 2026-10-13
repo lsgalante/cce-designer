@@ -648,22 +648,23 @@ fn a_chain_under_the_pointer_has_a_box_and_its_input_is_the_networks() {
     state.sync_nodes();
 
     // Empty space inside a chain's box, clear of its nodes and the plates.
-    let boxes = state.chain_boxes();
-    assert_eq!(boxes.len(), 1, "one wired chain");
-    let (px, py) = boxes
-        .iter()
-        .flat_map(|(_, (x, y, w, h))| {
-            let (x, y, w, h) = (*x, *y, *w, *h);
-            (1..10).flat_map(move |i| (1..10).map(move |j| (x + w * i as f32 / 10.0, y + h * j as f32 / 10.0)))
-        })
-        .find(|&(x, y)| state.graph().node_at(x, y).is_none() && !state.over_floating_pane_at(x, y))
-        .expect("empty space inside a chain's box");
+    let shapes = state.chain_shapes();
+    assert_eq!(shapes.len(), 1, "one wired chain");
+    let in_shape = |state: &State| {
+        let shape = state.chain_shapes().remove(0).1;
+        let (x0, y0, x1, y1) = shape.bounds();
+        (1..20)
+            .flat_map(|i| (1..20).map(move |j| (x0 + (x1 - x0) * i as f32 / 20.0, y0 + (y1 - y0) * j as f32 / 20.0)))
+            .find(|&(x, y)| shape.contains(x, y) && state.graph().node_at(x, y).is_none() && !state.over_floating_pane_at(x, y))
+            .expect("empty space inside a chain's outline")
+    };
+    let (px, py) = in_shape(&state);
     at(&mut state, px, py);
     assert!(state.overlay_claims(px, py) && state.in_network_pane(), "the box is the network's");
     assert!(!state.cursor_in_viewport(), "and not the scene's");
     state.tick_frame(1.0);
-    let shown = state.net.chain_box.clone().expect("the box is shown");
-    assert!(shown.x <= px && px < shown.x + shown.w && shown.y <= py && py < shown.y + shown.h, "round the pointer");
+    let shown = state.net.chain_box.clone().expect("the outline is shown");
+    assert!(state.chain_shape_of(&shown.ids).is_some_and(|s| s.contains(px, py)), "round the pointer");
 
     // The wheel pans the graph and turns no camera.
     state.net.overlay_wheel = None;
@@ -676,15 +677,7 @@ fn a_chain_under_the_pointer_has_a_box_and_its_input_is_the_networks() {
 
     // The box followed its chain through the pan; find empty space in it again.
     state.tick_frame(1.0 / 60.0);
-    let (px, py) = state
-        .chain_boxes()
-        .iter()
-        .flat_map(|(_, (x, y, w, h))| {
-            let (x, y, w, h) = (*x, *y, *w, *h);
-            (1..10).flat_map(move |i| (1..10).map(move |j| (x + w * i as f32 / 10.0, y + h * j as f32 / 10.0)))
-        })
-        .find(|&(x, y)| state.graph().node_at(x, y).is_none() && !state.over_floating_pane_at(x, y))
-        .expect("empty space inside a chain's box");
+    let (px, py) = in_shape(&state);
 
     // A press there is the grid's: the cursor goes to the cell, nothing orbits.
     state.focused_pane = RIGHT_MENUBAR_IDX;
@@ -718,6 +711,47 @@ fn a_chain_under_the_pointer_has_a_box_and_its_input_is_the_networks() {
     assert_ne!(orbit(&state), turned, "a scroll outside the boxes orbits");
 }
 
+/// A chain's outline is shrink-wrapped, not its bounding box: for an L of
+/// nodes the empty corner of the L is the scene's, the bend is the
+/// network's.
+#[test]
+fn a_chains_outline_follows_its_shape_and_not_its_bounds() {
+    let mut state = State::new(false);
+    state.resize(1600.0, 900.0, 1.0);
+    state.rebuild_positions();
+    state.apply_layout();
+    let (sx, sy) = {
+        let level = state.current_dir_mut();
+        let sphere = level.children.iter().find(|c| c.node_type == "sphere").expect("a sphere").clone();
+        let (sx, sy) = sphere.position;
+        let mut down = sphere.clone();
+        down.id = "l_down".into();
+        down.name = "down1".into();
+        down.position = (sx, sy + 2.0);
+        down.params = vec![crate::app::ParamDef::new("input", "node", &sphere.name)];
+        let mut across = sphere.clone();
+        across.id = "l_across".into();
+        across.name = "across1".into();
+        across.position = (sx + 3.0, sy + 2.0);
+        across.params = vec![crate::app::ParamDef::new("input", "node", "down1")];
+        level.children.push(down);
+        level.children.push(across);
+        (sx as i32, sy as i32)
+    };
+    state.sync_nodes();
+    let shapes = state.chain_shapes();
+    assert_eq!(shapes.len(), 1, "one chain of three");
+    let shape = &shapes[0].1;
+    let (cx, cy) = state.cell_center(sx + 3, sy);
+    assert!(!shape.contains(cx, cy), "the empty corner of the L is not in the outline");
+    assert!(!state.overlay_claims(cx, cy) || state.over_floating_pane_at(cx, cy), "and is the scene's");
+    let (bx, by) = state.cell_center(sx, sy + 1);
+    assert!(shape.contains(bx, by), "the run down the column is");
+    let (mx, my) = state.cell_center(sx + 2, sy + 2);
+    assert!(shape.contains(mx, my), "and the run across the row");
+    assert_eq!(shape.outline().len(), 1, "one piece");
+}
+
 /// Hovering a chain's box gives the network the keyboard, and leaving it
 /// gives the keyboard back; a press in between keeps it the network's, and
 /// a field being typed into keeps its keys.
@@ -744,11 +778,12 @@ fn hovering_a_chain_box_gives_the_network_the_keyboard() {
     let at = |state: &mut State, x: f32, y: f32| {
         state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
     };
-    let (_, (bx, by, bw, bh)) = state.chain_boxes().remove(0);
-    let (ix, iy) = (1..10)
-        .flat_map(|i| (1..10).map(move |j| (bx + bw * i as f32 / 10.0, by + bh * j as f32 / 10.0)))
-        .find(|&(x, y)| state.graph().node_at(x, y).is_none() && !state.over_floating_pane_at(x, y))
-        .expect("empty space in the box");
+    let shape = state.chain_shapes().remove(0).1;
+    let (x0, y0, x1, y1) = shape.bounds();
+    let (ix, iy) = (1..20)
+        .flat_map(|i| (1..20).map(move |j| (x0 + (x1 - x0) * i as f32 / 20.0, y0 + (y1 - y0) * j as f32 / 20.0)))
+        .find(|&(x, y)| shape.contains(x, y) && state.graph().node_at(x, y).is_none() && !state.over_floating_pane_at(x, y))
+        .expect("empty space in the outline");
     let (cx, cy, cw, ch) = state.positions[CONTENT_IDX];
     let (ox, oy) = (1..20)
         .flat_map(|i| (1..20).map(move |j| (cx + cw * i as f32 / 20.0, cy + ch * j as f32 / 20.0)))

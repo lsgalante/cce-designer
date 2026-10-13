@@ -42,6 +42,7 @@ pub mod slots;
 pub mod command;
 pub mod dialog;
 pub mod layout;
+pub mod chain_shape;
 pub mod panes;
 pub mod mold;
 pub mod hull;
