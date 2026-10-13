@@ -752,6 +752,20 @@ fn a_chains_outline_follows_its_shape_and_not_its_bounds() {
     let (mx, my) = state.cell_center(sx + 2, sy + 2);
     assert!(shape.contains(mx, my), "and the run across the row");
     assert_eq!(shape.outline().len(), 1, "one piece");
+
+    // Every corner, out and in, is the node bodies' radius: the steps the
+    // names make are whole corner diameters, so none is cut down.
+    let r = state.chain_corner_radius();
+    assert!(r > 0.0);
+    let shown = shape.rounded(r);
+    let corners: Vec<_> = shown.loops.iter().flatten().collect();
+    assert!(corners.iter().any(|c| !c.convex), "an L has an inner corner");
+    for c in &corners {
+        assert!((c.radius - r).abs() < 1e-3, "corner at {:?} is {} where the nodes' is {r}", c.at, c.radius);
+    }
+    for (_, radii) in &shown.strips {
+        assert!(radii.iter().all(|&x| x == 0.0 || (x - r).abs() < 1e-3), "{radii:?}");
+    }
 }
 
 /// Hovering a chain's box gives the network the keyboard, and leaving it

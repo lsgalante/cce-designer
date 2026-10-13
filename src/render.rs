@@ -553,15 +553,15 @@ impl State {
                 // The outline shrink-wrapped round the wired chain the
                 // pointer is in, where the pointer is the network's
                 // (`overlay_claims`): a wash and a hairline in the plates'
-                // neutral border colour, under the wires, its outer corners
-                // concentric with the nodes' and its inner ones filleted.
+                // neutral border colour, under the wires, every corner — out
+                // and in — at the node bodies' own radius.
                 if let Some(b) = &self.net.chain_box {
                     if let Some(shape) = self.chain_shape_of(&b.ids) {
                         let n = cce_ui::color::plate_border_color().unwrap_or([0.58, 0.58, 0.66, 1.0]);
                         let wash = [n[0], n[1], n[2], 0.07 * b.alpha];
                         let line = [n[0], n[1], n[2], 0.6 * b.alpha];
                         let t = 1.5;
-                        let shown = shape.rounded(node_r + self.chain_box_pad());
+                        let shown = shape.rounded(self.chain_corner_radius());
                         for (span, r) in &shown.strips {
                             fill_strip_circular(pc, *span, *r, wash);
                         }

@@ -1311,14 +1311,25 @@ impl State {
         self.net.grid.node_h * 0.55
     }
 
+    /// The radius of every corner of a chain's outline, in and out: the
+    /// node bodies' own, as they are drawn — the configured node corner
+    /// radius, held to half the body's shorter side as the bevel holds it.
+    pub fn chain_corner_radius(&self) -> f32 {
+        let g = &self.net.grid;
+        cce_ui::layout::graph_node_corner_radius().min(g.node_h * 0.5).min(g.node_w * 0.5).max(0.0)
+    }
+
     /// The shrink-wrapped outline round one chain of the graph's `nodes`
     /// (`chain_shape::ChainShape`, the orthogonal convex hull), in window
     /// space. What it wraps:
     ///
     /// - each node, body and name label (`node_extent`, the rule Frame All
-    ///   fits), padded by `chain_box_pad`, its right edge rounded OUT to a
-    ///   whole number of pads from its left so names of about one length
-    ///   end the outline at one place rather than in a stair of slivers;
+    ///   fits), padded by `chain_box_pad`, the part of it right of the
+    ///   padded body — the name — rounded OUT to a whole number of corner
+    ///   DIAMETERS (`chain_corner_radius`), so every step the names make in
+    ///   the outline, and every step between a name and a wire's route, is
+    ///   long enough for two full corners and every corner is drawn at the
+    ///   one radius;
     /// - each wire between two of them, as a node-wide route along the
     ///   source's row and down the destination's column, so a chain whose
     ///   nodes are in no row or column together is one shape, and every
@@ -1328,13 +1339,15 @@ impl State {
         let (ox, oy) = self.network_origin();
         let (ox, oy) = (ox + self.net.pan_x, oy + self.net.pan_y);
         let pad = self.chain_box_pad();
-        let q = pad.max(1.0);
+        let q = (self.chain_corner_radius() * 2.0).max(1.0);
         let mut rects: Vec<crate::chain_shape::Span> = Vec::new();
         for &i in chain {
             let (x0, x1, y0, y1) = Self::node_extent(&nodes[i].name, nodes[i].position, g);
-            let left = ox + x0 - pad;
-            let right = left + ((x1 - x0 + pad * 2.0) / q).ceil() * q;
-            rects.push((left, oy + y0 - pad, right, oy + y1 + pad));
+            // `node_extent`'s x0 is the body's left edge.
+            let body_right = ox + x0 + g.node_w + pad;
+            let name = (ox + x1 + pad - body_right).max(0.0);
+            let right = body_right + (name / q).ceil() * q;
+            rects.push((ox + x0 - pad, oy + y0 - pad, right, oy + y1 + pad));
         }
         let center = |i: usize| (ox + nodes[i].position.0 * g.pitch_x, oy + nodes[i].position.1 * g.pitch_y);
         let (hw, hh) = (g.node_w * 0.5 + pad, g.node_h * 0.5 + pad);

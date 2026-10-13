@@ -3065,9 +3065,9 @@ vertical line crosses in one run — of:
 
 - each node, body and name label (`node_extent`, Frame All's rule), padded
   by `chain_box_pad` (0.55 of the body's height, so the ports stand
-  inside), its right edge rounded out to a whole number of pads from its
-  left, so names of about one length end at one place and not in a stair
-  of slivers;
+  inside), the name's part — right of the padded body — rounded out to a
+  whole number of corner DIAMETERS, so every step the names make is long
+  enough for two full corners;
 - each wire between two of them, as a node-wide route along the SOURCE'S
   ROW and down the DESTINATION'S COLUMN — so a chain whose nodes share no
   row or column is still one piece, and every edge a route adds is a row's
@@ -3079,9 +3079,15 @@ is an L, its empty corner the scene's. Until later the same day it was the
 chain's bounding box (`a_chains_outline_follows_its_shape_and_not_its_bounds`).
 The shape is kept on a grid of the rectangles' own edges, a cell in or out;
 `ChainShape::rounded` gives the drawing — the fill as horizontal strips and
-the outline as loops of corners, radius `node_r + pad` cut to half the
-shorter edge beside a corner and, turning out, to half its strip — so fill
-and line agree corner for corner.
+the outline as loops of corners — so fill and line agree corner for corner.
+**Every corner, out and in, is the node bodies' radius**
+(`chain_corner_radius`: the configured node corner radius held to half the
+body's shorter side, as the bevel holds it; since later on 2026-10-13, at
+the user's request — it was `node_r + pad`, cut down on short edges, so the
+corners came in several sizes). `rounded` still cuts a corner to half the
+shorter edge beside it, but the geometry leaves it nothing to cut: names
+step in whole diameters, and every other edge is a row's or a column's.
+The outline test asserts every corner of an L at the one radius.
 
 Inside it the pointer is the NETWORK'S, empty space and all:
 `overlay_claims` takes `chain_box_at` (the smallest containing outline) as
