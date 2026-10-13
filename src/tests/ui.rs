@@ -1403,6 +1403,16 @@ fn a_node_name_on_a_light_floor_is_written_dark() {
     assert_eq!(state.node_ink(), None);
     state.net.node_tint = Some(light);
     assert!(state.node_ink().is_some_and(|ink| ink.iter().all(|&c| c < 0x40)));
+    // The names can have floors of their own: clear light bodies with no
+    // compression, dark floors under the names, light ink on them.
+    state.net.node_compression = Some(0.0);
+    state.net.label_compression = Some(0.85);
+    state.net.label_tint = Some(dark);
+    assert_eq!(state.node_ink(), None, "a dark label floor keeps the light ink");
+    // A label compression alone draws floors, in the nodes' tint.
+    state.net.node_compression = None;
+    state.net.label_tint = None;
+    assert!(state.node_ink().is_some(), "the floors fall back to the light node tint");
 }
 
 #[test]

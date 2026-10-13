@@ -116,6 +116,14 @@ pub struct NetworkView {
     /// light tint is a light node. None = the pane's. See
     /// [`State::node_ink`](crate::app::State::node_ink) for what it does to the names.
     pub node_tint: Option<[f32; 4]>,
+    /// The name floors' own compression and tint
+    /// (`style.surface.graph.label_compression` / `label_tint`), so the
+    /// names can keep a solid floor while the bodies are clear. Each falls
+    /// back to the node's ([`node_compression`](Self::node_compression),
+    /// [`node_tint`](Self::node_tint)); a floor is drawn when either
+    /// compression is set.
+    pub label_compression: Option<f32>,
+    pub label_tint: Option<[f32; 4]>,
     /// The node colour the config names (`cce_ui::color::graph_node_color`),
     /// as last handed to the toolkit.
     pub node_color: [f32; 4],
@@ -714,7 +722,22 @@ impl State {
             .and_then(|v| v.as_str())
             .and_then(cce_ui::color::parse_hex_rgba_linear);
 
+        let label_compression = cce_ui::config::cached_config()
+            .pointer("/style/surface/graph/label_compression")
+            .and_then(|v| v.as_f64())
+            .map(|k| (k as f32).clamp(0.0, 1.0));
+        let label_tint = cce_ui::config::cached_config()
+            .pointer("/style/surface/graph/label_tint")
+            .and_then(|v| v.as_str())
+            .and_then(cce_ui::color::parse_hex_rgba_linear);
+
         let mut changed = false;
+
+        if self.net.label_compression != label_compression || self.net.label_tint != label_tint {
+            self.net.label_compression = label_compression;
+            self.net.label_tint = label_tint;
+            changed = true;
+        }
 
         if self.net.node_tint != node_tint {
             self.net.node_tint = node_tint;

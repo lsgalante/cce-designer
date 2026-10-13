@@ -503,8 +503,8 @@ impl State {
             // pane, so with the plate faint it stands on the bare scene. With
             // `node_compression` set it gets a floor of the bodies' material,
             // as each params row does (`param.backdrop_compression`).
-            let label_floors =
-                if self.net.node_compression.is_some() { self.node_label_floors(w) } else { Vec::new() };
+            let label_floors = if self.label_compression().is_some() { self.node_label_floors(w) } else { Vec::new() };
+            let label_mat = self.label_material();
 
             pc.clip(clip, |pc| {
                 // Node bodies wear the parameter plate's fill exactly — same
@@ -652,7 +652,7 @@ impl State {
                 let mut bars: Vec<cce_ui::scene::layout::Rect> = Vec::new();
                 // In the bodies' run, so they share its blur snapshot.
                 for (floor, r) in &label_floors {
-                    pc.fill_material(*floor, (*r, *r, *r, *r), &node_mat);
+                    pc.fill_material(*floor, (*r, *r, *r, *r), &label_mat);
                 }
                 for (qx, qy, qw, qh, highlighted, off) in bodies {
                     if highlighted {
@@ -1038,7 +1038,8 @@ impl State {
     /// The node bodies' material: the pane material, with the nodes' own
     /// compression (NetworkView::node_compression) and tint (NetworkView::node_tint)
     /// where configured — the knobs that differ between a node body and the
-    /// plate it sits on. The name floors wear it too.
+    /// plate it sits on. The name floors wear it too unless they have
+    /// their own (`label_material`).
     fn node_material(&self) -> cce_ui::scene::Material {
         let mut m = cce_ui::scene::Material::from_fill(cce_ui::scene::param_plate_fill());
         if let (Some(k), cce_ui::scene::Frost::Frosted { compression, .. }) = (self.net.node_compression, &mut m.frost) {
@@ -1050,17 +1051,39 @@ impl State {
         m
     }
 
+    /// The name floors' compression: the label's own
+    /// (`NetworkView::label_compression`), else the nodes'. A floor is
+    /// drawn only when there is one.
+    fn label_compression(&self) -> Option<f32> {
+        self.net.label_compression.or(self.net.node_compression)
+    }
+
+    /// The name floors' material: the pane material under the label's own
+    /// compression and tint, each falling back to the nodes' — so by
+    /// default the floors wear the bodies' material, and set apart they
+    /// can stay solid under names while the bodies let the scene through.
+    fn label_material(&self) -> cce_ui::scene::Material {
+        let mut m = cce_ui::scene::Material::from_fill(cce_ui::scene::param_plate_fill());
+        if let (Some(k), cce_ui::scene::Frost::Frosted { compression, .. }) = (self.label_compression(), &mut m.frost) {
+            *compression = k;
+        }
+        if let Some(t) = self.net.label_tint.or(self.net.node_tint) {
+            m.tint = t;
+        }
+        m
+    }
+
     /// The ink a node name is written in, where it is not the widget's own
-    /// light grey: dark, when the name stands on a floor (node_compression
-    /// set) whose key is light. Compression pulls the backdrop's luminance
+    /// light grey: dark, when the name stands on a floor (a label or node
+    /// compression set) whose key is light. Compression pulls the backdrop's luminance
     /// toward the tint's, and the tint is laid over that at its alpha, so
     /// the floor's luminance is the tint's to within the (1 - k) the
     /// compression leaves of the backdrop. 0.179 linear is where black and
     /// white ink have the same contrast against it. Without a floor a name
     /// stands on the bare scene, and stays light.
     pub(crate) fn node_ink(&self) -> Option<[u8; 3]> {
-        self.net.node_compression?;
-        let t = self.node_material().tint;
+        self.label_compression()?;
+        let t = self.label_material().tint;
         let key = 0.2126 * t[0] + 0.7152 * t[1] + 0.0722 * t[2];
         (key > NODE_INK_CROSSOVER).then_some(NODE_DARK_INK)
     }

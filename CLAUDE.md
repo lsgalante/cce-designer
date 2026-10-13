@@ -2898,6 +2898,25 @@ bare scene and keeps the widget's light grey. Dark ink reads LIGHTER than
 its colour at label sizes: the glyph pass blends coverage in linear
 space, which thins dark-on-light strokes (a 14 px stem bottoms out near
 `#5c` on `#e6e8f0`). `a_node_name_on_a_light_floor_is_written_dark`.
+**The names can have floors of their own** (since 2026-10-13):
+`style.surface.graph.label_compression` and `label_tint` are the name
+floors' material (`render::label_material`), each falling back to the
+node's, and a floor is drawn when either compression is set. They exist
+because of what compression does toward a LIGHT key: cce-ui's frost shader
+cross-fades a backdrop it lifts more than 2x toward neutral grey (the
+chroma guard in `resolve_blur`), so a light `node_tint` under any real
+`node_compression` over the dark scene is a flat grey slab, the scene's
+colour gone, and the names on floors of the same material were grey ink on
+grey (measured: bodies (172,174,180) over a (13,13,26) scene, about 2.3:1
+for the names). A pull DOWN toward a dark key keeps the hue. So the look
+that lets the scene through and keeps the names legible is clear bodies —
+`node_compression 0.0` and a light `node_tint` at a low alpha, which lays a
+faint glass over the scene with its colour intact — and dark compressed
+name floors (`label_compression 0.85`, a dark `label_tint`) with the light
+ink `node_ink` gives them. The user's config.kdl was set that way on
+2026-10-13 (`node_tint "#c4c8d428"`, `label_tint "#1a1a24b0"`), chosen from
+three variants rendered in a shadow session.
+
 The params widget alone also reads `style.surface.param.backdrop_compression`.
 The rules live in cce-ui's CLAUDE.md ("There is one roll width", "The
 relief is two shapes", "Frost is one block"); this is the designer's view of

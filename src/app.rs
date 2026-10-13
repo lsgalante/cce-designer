@@ -5257,6 +5257,8 @@ impl State {
                 node_opacity: 1.0,
                 node_compression: None,
                 node_tint: None,
+                label_compression: None,
+                label_tint: None,
                 node_color: cce_ui::color::graph_node_color(),
                 drop_glow: None,
                 chain_box: None,
