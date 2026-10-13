@@ -2185,9 +2185,9 @@ impl State {
             "toggle_grid" => self.viewport().show_grid,
             "toggle_origin" => self.viewport().show_origin,
             "toggle_camera_pivot" => self.viewport().show_camera_pivot,
-            "toggle_wireframe" => self.wireframe,
-            "toggle_smooth_shading" => self.smooth_shading,
-            "toggle_show_occluded" => self.show_occluded,
+            "toggle_wireframe" => self.render.wireframe,
+            "toggle_smooth_shading" => self.render.smooth_shading,
+            "toggle_show_occluded" => self.render.show_occluded,
             "toggle_point_markers" => self.show_point_markers,
             "toggle_point_numbers" => self.show_point_numbers,
             "toggle_point_normals" => self.show_point_normals,
@@ -2196,7 +2196,7 @@ impl State {
             "toggle_vertex_numbers" => self.show_vertex_numbers,
             "toggle_vertex_markers" => self.show_vertex_markers,
             "toggle_vertex_normals" => self.show_vertex_normals,
-            "toggle_wire_single_color" => self.wire_single_color,
+            "toggle_wire_single_color" => self.render.wire_single_color,
             "toggle_ray_traced_preview" => self.viewport().rt_mode,
             "toggle_square_viewport" => self.square_viewport,
             "toggle_params_plate" => self.params_plate,
@@ -2329,7 +2329,7 @@ impl State {
 
     fn settings_field_bool(&self, key: &str) -> bool {
         match key {
-            "wire_single_color" => self.wire_single_color,
+            "wire_single_color" => self.render.wire_single_color,
             _ => false,
         }
     }
@@ -2339,7 +2339,7 @@ impl State {
             "bg_color" => self.viewport().bg_color,
             "grid_color" => self.viewport().grid_color,
             "point_marker_color" => self.point_marker_color,
-            "wire_color" => self.wire_color,
+            "wire_color" => self.render.wire_color,
             _ => [0.0; 3],
         }
     }
@@ -2349,11 +2349,11 @@ impl State {
             "grid_thickness" => self.grid_thickness,
             "origin_size" => self.origin_size,
             "point_marker_size" => self.point_marker_size,
-            "wire_width" => self.wire_width,
-            "geo_opacity" => self.geo_opacity,
-            "wire_opacity" => self.wire_opacity,
-            "group_marker_size" => self.group_marker_size,
-            "pull_arrow_scale" => self.pull_arrow_scale,
+            "wire_width" => self.render.wire_width,
+            "geo_opacity" => self.render.geo_opacity,
+            "wire_opacity" => self.render.wire_opacity,
+            "group_marker_size" => self.render.group_marker_size,
+            "pull_arrow_scale" => self.render.pull_arrow_scale,
             _ => 0.0,
         }
     }
@@ -2378,7 +2378,7 @@ impl State {
             Ctl::Toggle => {
                 let on = value == "true";
                 match key {
-                    "wire_single_color" => self.wire_single_color = on,
+                    "wire_single_color" => self.render.wire_single_color = on,
                     _ => {}
                 }
             }
@@ -2393,10 +2393,10 @@ impl State {
                         // colour applies in single-colour mode only, so a
                         // colour edit turns that mode on if it was off. Twice
                         // read as "the colour did not take" (2026-09-21).
-                        let changed = c != self.wire_color;
-                        self.wire_color = c;
-                        if changed && !self.wire_single_color {
-                            self.wire_single_color = true;
+                        let changed = c != self.render.wire_color;
+                        self.render.wire_color = c;
+                        if changed && !self.render.wire_single_color {
+                            self.render.wire_single_color = true;
                         }
                     }
                     _ => {}
@@ -2415,13 +2415,13 @@ impl State {
                 let Ok(v) = value.parse::<f32>() else { return };
                 let v = v.clamp(min, max);
                 match key {
-                    "wire_width" => self.wire_width = v,
-                    "geo_opacity" => self.geo_opacity = v,
-                    "wire_opacity" => self.wire_opacity = v,
-                    "group_marker_size" => self.group_marker_size = v,
+                    "wire_width" => self.render.wire_width = v,
+                    "geo_opacity" => self.render.geo_opacity = v,
+                    "wire_opacity" => self.render.wire_opacity = v,
+                    "group_marker_size" => self.render.group_marker_size = v,
                     "point_marker_size" => self.point_marker_size = v,
                     "pull_arrow_scale" => {
-                        self.pull_arrow_scale = v;
+                        self.render.pull_arrow_scale = v;
                         self.rebuild_pull_arrow_verts();
                     }
                     _ => {}

@@ -700,15 +700,15 @@ impl State {
         }
         for p in params("render") {
             match p.name.as_str() {
-                "Show Wireframe" => if let Some(v) = as_bool(&p) { self.wireframe = v; },
-                "Wire Single Color" => if let Some(v) = as_bool(&p) { self.wire_single_color = v; },
+                "Show Wireframe" => if let Some(v) = as_bool(&p) { self.render.wireframe = v; },
+                "Wire Single Color" => if let Some(v) = as_bool(&p) { self.render.wire_single_color = v; },
                 // Its alpha was the wire opacity until that was a setting.
                 "Wire Color" => if let Some([r, g, b, a]) = hex_to_rgba(p.text()) {
-                    self.wire_color = [r, g, b];
-                    self.wire_opacity = a;
+                    self.render.wire_color = [r, g, b];
+                    self.render.wire_opacity = a;
                 },
-                "Wire Thickness" => if let Some(v) = as_f32(&p) { self.wire_width = v.clamp(1.0, 8.0); },
-                "Opacity" => if let Some(v) = as_f32(&p) { self.geo_opacity = v.clamp(0.0, 1.0); },
+                "Wire Thickness" => if let Some(v) = as_f32(&p) { self.render.wire_width = v.clamp(1.0, 8.0); },
+                "Opacity" => if let Some(v) = as_f32(&p) { self.render.geo_opacity = v.clamp(0.0, 1.0); },
                 // Render Points, Point Size and Point Color were the Show
                 // Points display, retired as a double of Show Point Markers.
                 _ => {}

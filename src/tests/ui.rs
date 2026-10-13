@@ -565,8 +565,8 @@ fn test_session_node_exists_and_cannot_be_deleted() {
     assert!((state.point_marker_color[1] - 0.5).abs() < 0.01);
     assert!((state.point_marker_color[2] - 0.0).abs() < 0.01);
     assert!((state.grid_thickness - 0.04).abs() < 1e-6);
-    assert!(state.wireframe);
-    assert!((state.wire_width - 4.0).abs() < 1e-6);
+    assert!(state.render.wireframe);
+    assert!((state.render.wire_width - 4.0).abs() < 1e-6);
     assert!(state.circular_network_pane);
 
     // Idempotent: a second pass has nothing to find and changes nothing.
@@ -1116,9 +1116,9 @@ fn a_project_keeps_its_display_settings() {
     let mut state = State::new(false);
     state.viewport_mut().show_grid = false;
     state.viewport_mut().show_origin = false;
-    state.smooth_shading = true;
-    state.wireframe = true;
-    state.geo_opacity = 0.5;
+    state.render.smooth_shading = true;
+    state.render.wireframe = true;
+    state.render.geo_opacity = 0.5;
     state.grid_thickness = 0.07;
     state.world_unit = cce_ui::units::Unit::Cm;
     state.point_marker_color = [0.1, 0.9, 0.2];
@@ -1130,9 +1130,9 @@ fn a_project_keeps_its_display_settings() {
     assert!(state.viewport().show_grid);
     assert!(state.has_unsaved_changes(), "a display change is an edit to the file");
     state.run_command("toggle_origin");
-    state.smooth_shading = false;
-    state.wireframe = false;
-    state.geo_opacity = 1.0;
+    state.render.smooth_shading = false;
+    state.render.wireframe = false;
+    state.render.geo_opacity = 1.0;
     state.grid_thickness = 0.03;
     state.world_unit = cce_ui::units::Unit::Mm;
     state.point_marker_color = [1.0, 1.0, 1.0];
@@ -1140,8 +1140,8 @@ fn a_project_keeps_its_display_settings() {
     state.load_from_file(&dir).expect("load");
     assert!(!state.viewport().show_grid, "the grid comes back off");
     assert!(!state.viewport().show_origin);
-    assert!(state.smooth_shading && state.wireframe);
-    assert!((state.geo_opacity - 0.5).abs() < 1e-6);
+    assert!(state.render.smooth_shading && state.render.wireframe);
+    assert!((state.render.geo_opacity - 0.5).abs() < 1e-6);
     assert!((state.grid_thickness - 0.07).abs() < 1e-6);
     assert_eq!(state.world_unit, cce_ui::units::Unit::Cm);
     assert_eq!(state.point_marker_color, [0.1, 0.9, 0.2]);
@@ -1205,8 +1205,8 @@ fn a_point_number_under_a_plate_is_not_drawn() {
     state.rebuild_positions();
     state.apply_layout();
     state.show_point_numbers = true;
-    state.geo_opacity = 0.2;
-    state.show_occluded = true;
+    state.render.geo_opacity = 0.2;
+    state.render.show_occluded = true;
     state.rebuild_scene_geometry();
     let view = Mat4::look_at_rh(Vec3::new(0.0, 0.0, 6.0), Vec3::ZERO, Vec3::Y);
     let proj = Mat4::perspective_rh(0.9, 1600.0 / 900.0, 0.1, 100.0);
@@ -1626,14 +1626,14 @@ fn a_see_through_fill_sorts_its_triangles_back_to_front() {
 fn show_occluded_sees_through_a_translucent_fill_only() {
     use crate::app::ViewportMenuAction as A;
     let mut state = State::new(false);
-    state.show_occluded = false;
-    state.geo_opacity = 1.0;
+    state.render.show_occluded = false;
+    state.render.geo_opacity = 1.0;
     let (options, actions) = state.viewport_menu_rows_of(state.viewport_menu_page_of(A::Command("toggle_show_occluded")));
     let i = actions.iter().position(|a| *a == A::Command("toggle_show_occluded")).expect("a Show Occluded row");
     assert_eq!(options[i], "○ Show Occluded");
 
     state.run_viewport_menu_action(A::Command("toggle_show_occluded"));
-    assert!(state.show_occluded);
+    assert!(state.render.show_occluded);
     assert_eq!(state.command_toggle_state("toggle_show_occluded"), Some(true));
     assert!(!state.see_through_active(), "nothing to see through at 100%");
     assert!(state.last_status_text.contains("below 100%"), "{}", state.last_status_text);
@@ -1652,9 +1652,9 @@ fn show_occluded_sees_through_a_translucent_fill_only() {
 fn the_viewport_menu_sets_the_display_mode() {
     use crate::app::ViewportMenuAction as A;
     let mut state = State::new(false);
-    state.wireframe = false;
-    state.smooth_shading = false;
-    state.geo_opacity = 1.0;
+    state.render.wireframe = false;
+    state.render.smooth_shading = false;
+    state.render.geo_opacity = 1.0;
     let row = |state: &State, a: A| {
         let (options, actions) = state.viewport_menu_rows_of(state.viewport_menu_page_of(a));
         let i = actions.iter().position(|x| *x == a).unwrap_or_else(|| panic!("no {a:?} row"));
@@ -1666,22 +1666,22 @@ fn the_viewport_menu_sets_the_display_mode() {
     assert_eq!(row(&state, A::OpacitySlider), "Opacity");
 
     state.run_viewport_menu_action(A::Command("toggle_wireframe"));
-    assert!(state.wireframe);
+    assert!(state.render.wireframe);
     assert!(row(&state, A::Command("toggle_wireframe")).starts_with('●'));
 
     // Smooth: the flag, and a lit raster fill beside the unlit one the
     // path tracer reads, triangle for triangle.
     state.run_viewport_menu_action(A::Shading(true));
-    assert!(state.smooth_shading);
+    assert!(state.render.smooth_shading);
     assert_eq!(state.scene_smooth_verts.len(), state.rt_sphere_verts.len());
     assert!(!state.scene_smooth_verts.is_empty(), "the bundled scene draws something");
     // Picking the mode already on is not a flip.
     state.run_viewport_menu_action(A::Shading(true));
-    assert!(state.smooth_shading);
+    assert!(state.render.smooth_shading);
     assert!(row(&state, A::Shading(true)).starts_with('●'));
     assert_eq!(state.command_toggle_state("toggle_smooth_shading"), Some(true));
     state.run_viewport_menu_action(A::Shading(false));
-    assert!(!state.smooth_shading);
+    assert!(!state.render.smooth_shading);
     assert!(state.scene_smooth_verts.is_empty(), "flat keeps no lit copy");
 
 }
@@ -1698,7 +1698,7 @@ fn the_viewport_menus_opacity_row_is_a_wheel_slider() {
     use crate::window::WindowEvent;
     use cce_ui::widget::{context_menu, ElementState, MouseButton, MouseScrollDelta};
     let mut state = State::new(false);
-    state.geo_opacity = 0.5;
+    state.render.geo_opacity = 0.5;
     state.cursor_x = 300.0;
     state.cursor_y = 200.0;
     state.open_viewport_context_menu();
@@ -1715,31 +1715,31 @@ fn the_viewport_menus_opacity_row_is_a_wheel_slider() {
         state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, notches) })
     };
     assert!(wheel(&mut state, 1.0));
-    assert!((state.geo_opacity - 0.55).abs() < 1e-6, "{}", state.geo_opacity);
+    assert!((state.render.geo_opacity - 0.55).abs() < 1e-6, "{}", state.render.geo_opacity);
     assert!(state.viewport_menu_open(), "the menu stays open");
     let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
     assert!(kdl.contains("0.55"), "the wheel step persisted: {kdl}");
     wheel(&mut state, -3.0);
-    assert!((state.geo_opacity - 0.40).abs() < 1e-6);
+    assert!((state.render.geo_opacity - 0.40).abs() < 1e-6);
 
     // Press on the band's right end: 100%, live; drag back; release.
     let band = context_menu::with_state(|m| m.borrow().slider_band(i));
     state.cursor_x = band.x + band.width - 1.0;
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
-    assert!((state.geo_opacity - 1.0).abs() < 1e-6, "{}", state.geo_opacity);
+    assert!((state.render.geo_opacity - 1.0).abs() < 1e-6, "{}", state.render.geo_opacity);
     assert!(state.viewport_menu_open());
     state.handle_event(&WindowEvent::CursorMoved { position: crate::window::LocalPosition { x: (band.x + band.width * 0.25) as f64, y: 900.0 } });
-    assert!((state.geo_opacity - 0.25).abs() < 1e-6, "the drag follows off the plate: {}", state.geo_opacity);
+    assert!((state.render.geo_opacity - 0.25).abs() < 1e-6, "the drag follows off the plate: {}", state.render.geo_opacity);
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
     assert!(!context_menu::slider_dragging());
     assert!(state.viewport_menu_open(), "the release does not close it");
 
     // The wheel over an action row changes nothing and orbits nothing.
-    let before = (state.geo_opacity, state.viewport().rotation_y);
+    let before = (state.render.geo_opacity, state.viewport().rotation_y);
     state.cursor_x = context_menu::x() + 20.0;
     state.cursor_y = context_menu::row_y(0) + context_menu::ROW_H * 0.5;
     assert!(wheel(&mut state, 1.0));
-    assert_eq!((state.geo_opacity, state.viewport().rotation_y), before);
+    assert_eq!((state.render.geo_opacity, state.viewport().rotation_y), before);
     context_menu::hide();
 }
 
@@ -1788,8 +1788,8 @@ fn wire_opacity_is_separate_from_polygon_opacity() {
     use crate::window::WindowEvent;
     use cce_ui::widget::{context_menu, MouseScrollDelta};
     let mut state = State::new(false);
-    state.geo_opacity = 0.5;
-    state.wire_opacity = 0.5;
+    state.render.geo_opacity = 0.5;
+    state.render.wire_opacity = 0.5;
     state.cursor_x = 300.0;
     state.cursor_y = 200.0;
     state.open_viewport_context_menu();
@@ -1802,14 +1802,14 @@ fn wire_opacity_is_separate_from_polygon_opacity() {
     state.cursor_x = context_menu::x() + 20.0;
     state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
     state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, -2.0) });
-    assert!((state.wire_opacity - 0.40).abs() < 1e-6, "{}", state.wire_opacity);
-    assert!((state.geo_opacity - 0.5).abs() < 1e-6, "the polygon opacity moved with the wires'");
+    assert!((state.render.wire_opacity - 0.40).abs() < 1e-6, "{}", state.render.wire_opacity);
+    assert!((state.render.geo_opacity - 0.5).abs() < 1e-6, "the polygon opacity moved with the wires'");
 
     let j = acts.iter().position(|a| *a == A::OpacitySlider).expect("an Opacity row");
     state.cursor_y = context_menu::row_y(j) + context_menu::ROW_H * 0.5;
     state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 2.0) });
-    assert!((state.geo_opacity - 0.60).abs() < 1e-6, "{}", state.geo_opacity);
-    assert!((state.wire_opacity - 0.40).abs() < 1e-6, "the wires' opacity moved with the polygons'");
+    assert!((state.render.geo_opacity - 0.60).abs() < 1e-6, "{}", state.render.geo_opacity);
+    assert!((state.render.wire_opacity - 0.40).abs() < 1e-6, "the wires' opacity moved with the polygons'");
     context_menu::hide();
 
     let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
@@ -1818,8 +1818,8 @@ fn wire_opacity_is_separate_from_polygon_opacity() {
 
     // The dialog row edits the same field.
     state.apply_setting("Wire Opacity", "0.25");
-    assert!((state.wire_opacity - 0.25).abs() < 1e-6);
-    assert!((state.geo_opacity - 0.60).abs() < 1e-6);
+    assert!((state.render.wire_opacity - 0.25).abs() < 1e-6);
+    assert!((state.render.geo_opacity - 0.60).abs() < 1e-6);
 }
 
 /// Until 2026-09-25 the wire opacity was the wire colour's alpha:
@@ -2438,7 +2438,7 @@ fn the_viewport_menu_sets_the_wire_thickness_by_wheel() {
     use crate::window::WindowEvent;
     use cce_ui::widget::{context_menu, ElementState, MouseButton, MouseScrollDelta};
     let mut state = State::new(false);
-    state.wire_width = 2.0;
+    state.render.wire_width = 2.0;
     state.cursor_x = 300.0;
     state.cursor_y = 200.0;
     state.open_viewport_context_menu();
@@ -2456,7 +2456,7 @@ fn the_viewport_menu_sets_the_wire_thickness_by_wheel() {
     state.cursor_x = context_menu::x() + 20.0;
     state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
     state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 2.0) });
-    assert!((state.wire_width - 3.0).abs() < 1e-6, "{}", state.wire_width);
+    assert!((state.render.wire_width - 3.0).abs() < 1e-6, "{}", state.render.wire_width);
     let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
     assert!(kdl.contains("wire_width (f64)3") || kdl.contains("wire_width 3"), "persisted: {kdl}");
     assert!(state.viewport_menu_open());
@@ -2465,7 +2465,7 @@ fn the_viewport_menu_sets_the_wire_thickness_by_wheel() {
     state.cursor_x = band.x + 1.0;
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
-    assert!((state.wire_width - 1.0).abs() < 1e-6, "the band's left end is 1 px: {}", state.wire_width);
+    assert!((state.render.wire_width - 1.0).abs() < 1e-6, "the band's left end is 1 px: {}", state.render.wire_width);
     context_menu::hide();
 }
 
@@ -2571,7 +2571,7 @@ fn pull_arrow_scale_stretches_the_arrows_from_their_base() {
     assert_eq!(crate::app::DesignSettings::from_kdl_str("").render.pull_arrow_scale, 1.0, "absent means 1");
 
     let mut state = State::new(false);
-    state.pull_arrow_scale = 1.0;
+    state.render.pull_arrow_scale = 1.0;
     let (a, b) = (glam::Vec3::new(0.0, 1.0, 0.0), glam::Vec3::new(0.0, 1.06, 0.0));
     state.pull_arrow_pairs = vec![(a, b)];
     state.rebuild_pull_arrow_verts();
@@ -2592,7 +2592,7 @@ fn pull_arrow_scale_stretches_the_arrows_from_their_base() {
     state.cursor_x = context_menu::x() + 20.0;
     state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
     state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 15.0) });
-    let k = state.pull_arrow_scale;
+    let k = state.render.pull_arrow_scale;
     assert!(k > 1.0, "the wheel raised the scale: {k}");
     assert_eq!(shaft(&state).0, a.to_array());
     assert!((shaft(&state).1[1] - (1.0 + 0.06 * k)).abs() < 1e-5, "the tip stretched to {:?} at {k}x", shaft(&state).1);
@@ -2609,7 +2609,7 @@ fn the_viewport_menu_sets_the_group_marker_size() {
     use crate::window::WindowEvent;
     use cce_ui::widget::{context_menu, MouseScrollDelta};
     let mut state = State::new(false);
-    state.group_marker_size = 0.025;
+    state.render.group_marker_size = 0.025;
     let centre = [0.0f32, 1.0, 0.0];
     state.group_members = vec![crate::geometry::Vertex3D { position: centre, color: [0.0; 3] }];
     state.rebuild_group_markers();
@@ -2630,7 +2630,7 @@ fn the_viewport_menu_sets_the_group_marker_size() {
     state.cursor_x = context_menu::x() + 20.0;
     state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
     state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 3.0) });
-    assert!((state.group_marker_size - 0.04).abs() < 1e-5, "{}", state.group_marker_size);
+    assert!((state.render.group_marker_size - 0.04).abs() < 1e-5, "{}", state.render.group_marker_size);
     assert!((radius(&state) - 0.04).abs() < 1e-5, "the markers re-sized: {}", radius(&state));
     assert!(state.group_points_dirty, "and will re-upload");
     let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
@@ -2640,7 +2640,7 @@ fn the_viewport_menu_sets_the_group_marker_size() {
     // A size change arriving another way re-sizes too, through
     // sync_nodes' size check.
     context_menu::hide();
-    state.group_marker_size = 0.03;
+    state.render.group_marker_size = 0.03;
     state.sync_nodes();
     assert!((radius(&state) - 0.03).abs() < 1e-5, "{}", radius(&state));
 }
@@ -2980,8 +2980,8 @@ fn the_point_numbers_are_placed_by_the_camera_as_it_is() {
     state.apply_layout();
     state.set_active_camera("Default Camera");
     state.show_point_numbers = true;
-    state.geo_opacity = 0.35;
-    state.show_occluded = true;
+    state.render.geo_opacity = 0.35;
+    state.render.show_occluded = true;
     state.rebuild_scene_geometry();
     let _ = state.collect_display_list();
     let placed = |state: &State| -> Vec<(String, f32, f32)> {

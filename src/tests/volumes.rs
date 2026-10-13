@@ -363,7 +363,7 @@ fn the_wireframe_colour_is_a_colour_row_of_the_palette() {
     assert!(crate::command::by_id("wireframe_color").is_none(), "the command went with the Settings half");
 
     let mut state = State::new(false);
-    state.wire_color = [0.2, 0.6, 0.9];
+    state.render.wire_color = [0.2, 0.6, 0.9];
     state.run_command("command_palette");
     let id = setting_row_id("Wireframe Color");
     let row = state.ui_context[state.slots.dialog]
@@ -386,17 +386,17 @@ fn the_wireframe_colour_is_a_colour_row_of_the_palette() {
     // that makes the wire pass use it (off, the wires carry the
     // geometry's colours). The dialog stays up, and the row re-reads the
     // value.
-    state.wire_single_color = false;
+    state.render.wire_single_color = false;
     state.apply_setting("Wireframe Color", "#000000");
-    assert_eq!(state.wire_color, [0.0, 0.0, 0.0], "the colour row writes the live wire colour");
-    assert!(state.wire_single_color, "a colour edit turns single-colour mode on");
+    assert_eq!(state.render.wire_color, [0.0, 0.0, 0.0], "the colour row writes the live wire colour");
+    assert!(state.render.wire_single_color, "a colour edit turns single-colour mode on");
     assert!(state.dialog_visible());
     let row = state.ui_context[state.slots.dialog].rows.iter().find(|r| r.id == id).unwrap();
     assert_eq!(row.control, Some(Control::Color { hex: "#000000".into() }));
 
     // And the switch is a command row of its own, flipped in place.
     state.take_dialog_pick("toggle_wire_single_color".to_string());
-    assert!(!state.wire_single_color, "the switch row did not reach the flag");
+    assert!(!state.render.wire_single_color, "the switch row did not reach the flag");
     assert!(state.dialog_visible());
 }
 
@@ -470,18 +470,18 @@ fn viewport_settings_round_trip_through_the_scene_file() {
     a.viewport_mut().zoom = 0.4;
     a.viewport_mut().pivot = Vec3::new(3.0, 0.5, -2.0);
     // A display setting, which travels with the project now.
-    a.wireframe = true;
+    a.render.wireframe = true;
     a.save_to_file(&dir).expect("save");
 
     let mut b = State::new(false);
-    b.wireframe = false;
+    b.render.wireframe = false;
     b.load_from_file(&dir).expect("load");
     assert!(b.square_viewport, "Square Aspect loads from the file");
     assert!(b.viewport().show_camera_pivot, "the pivot marker loads from the file");
     assert!((b.viewport().rotation_y - 0.7).abs() < 1e-4);
     assert!((b.viewport().zoom - 0.4).abs() < 1e-4);
     assert_eq!(b.viewport().pivot, Vec3::new(3.0, 0.5, -2.0));
-    assert!(b.wireframe, "the wireframe travels with the project");
+    assert!(b.render.wireframe, "the wireframe travels with the project");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -506,16 +506,16 @@ fn display_settings_round_trip_through_state_kdl() {
     a.point_marker_size = 0.05;
     a.point_marker_color = [1.0, 0.5, 0.0];
     a.world_unit = cce_ui::units::Unit::Cm;
-    a.wireframe = true;
-    a.wire_single_color = true;
-    a.wire_color = [0.2, 0.4, 0.6];
-    a.wire_opacity = 0.5;
-    a.wire_width = 3.0;
-    a.geo_opacity = 0.75;
-    a.group_marker_size = 0.125;
-    a.pull_arrow_scale = 4.0;
-    a.smooth_shading = true;
-    a.show_occluded = true;
+    a.render.wireframe = true;
+    a.render.wire_single_color = true;
+    a.render.wire_color = [0.2, 0.4, 0.6];
+    a.render.wire_opacity = 0.5;
+    a.render.wire_width = 3.0;
+    a.render.geo_opacity = 0.75;
+    a.render.group_marker_size = 0.125;
+    a.render.pull_arrow_scale = 4.0;
+    a.render.smooth_shading = true;
+    a.render.show_occluded = true;
     a.save_settings();
 
     let kdl = std::fs::read_to_string(DesignSettings::file_path()).expect("state.kdl was written");
@@ -560,21 +560,21 @@ fn display_settings_round_trip_through_state_kdl() {
 #[test]
 fn changing_the_wire_colour_turns_single_colour_mode_on() {
     let mut state = State::new(false);
-    state.wire_single_color = false;
-    state.wire_color = [1.0, 1.0, 1.0];
+    state.render.wire_single_color = false;
+    state.render.wire_color = [1.0, 1.0, 1.0];
 
     // An edit through the dialog's colour row, which is the only way
     // in now that the Render node is gone.
     state.open_dialog();
     state.apply_setting("Wireframe Color", "#000000");
-    assert_eq!(state.wire_color, [0.0, 0.0, 0.0]);
-    assert!(state.wire_single_color, "a colour change switches single-colour mode on");
+    assert_eq!(state.render.wire_color, [0.0, 0.0, 0.0]);
+    assert!(state.render.wire_single_color, "a colour change switches single-colour mode on");
 
     // Off again by hand stays off while the colour is unchanged: the
     // auto-enable fires on a CHANGE, not on every settings pass.
-    state.wire_single_color = false;
+    state.render.wire_single_color = false;
     state.apply_setting("Wireframe Color", "#000000");
-    assert!(!state.wire_single_color, "an unrelated pass flipped it back on");
+    assert!(!state.render.wire_single_color, "an unrelated pass flipped it back on");
 
     // A load carries the project's geometry and leaves the wire
     // settings — preferences now — exactly where they are.
@@ -582,8 +582,8 @@ fn changing_the_wire_colour_turns_single_colour_mode_on() {
     let _ = std::fs::remove_dir_all(&dir);
     state.save_to_file(&dir).expect("save");
     state.load_from_file(&dir).expect("load");
-    assert_eq!(state.wire_color, [0.0, 0.0, 0.0]);
-    assert!(!state.wire_single_color, "a load never flips the switch");
+    assert_eq!(state.render.wire_color, [0.0, 0.0, 0.0]);
+    assert!(!state.render.wire_single_color, "a load never flips the switch");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -601,17 +601,17 @@ fn test_toggle_wireframe_flips_the_flag_and_the_render_node() {
     assert_eq!(cmd.run, Run::Key(crate::shortcut::Action::ToggleWireframe));
 
     let mut state = State::new(false);
-    state.wireframe = false;
+    state.render.wireframe = false;
     assert!(state.run_command("toggle_wireframe"));
-    assert!(state.wireframe);
+    assert!(state.render.wireframe);
     assert_eq!(state.command_toggle_state("toggle_wireframe"), Some(true));
     // An unrelated settings apply no longer reverts it.
     state.open_dialog();
     let thickness = state.settings_row_value("Wire Thickness");
     state.apply_setting("Wire Thickness", &thickness);
-    assert!(state.wireframe, "a settings pass read the flag back over itself");
+    assert!(state.render.wireframe, "a settings pass read the flag back over itself");
     assert!(state.run_command("toggle_wireframe"));
-    assert!(!state.wireframe);
+    assert!(!state.render.wireframe);
 }
 
 /// The registry's own invariants. Ids are what `input.kdl` binds and
@@ -1382,7 +1382,7 @@ fn the_group_markers_dialog_marks_a_groups_points() {
     // On the group's points, at Group Marker Size.
     let members: Vec<[f32; 3]> = state.scene_groups.iter().find(|(n, _)| n == "five").unwrap().1.clone();
     for m in &members {
-        assert!(state.marked_group_instances.iter().any(|v| (0..3).all(|k| (v.position[k] - m[k]).abs() <= state.group_marker_size + 1e-4)), "a marker at {m:?}");
+        assert!(state.marked_group_instances.iter().any(|v| (0..3).all(|k| (v.position[k] - m[k]).abs() <= state.render.group_marker_size + 1e-4)), "a marker at {m:?}");
     }
     let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
     assert_eq!(crate::app::DesignSettings::from_kdl_str(&kdl).viewport.marked_groups, "five", "persisted");

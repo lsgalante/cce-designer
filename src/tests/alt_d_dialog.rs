@@ -438,7 +438,7 @@ fn a_dialog_slider_drag_lands_without_re_evaluating_the_graph() {
     use crate::window::{LocalPosition, WindowEvent};
     use cce_ui::widget::{ElementState, MouseButton};
     let mut state = State::new(false);
-    state.geo_opacity = 1.0;
+    state.render.geo_opacity = 1.0;
     state.save_settings();
     let path = crate::app::DesignSettings::file_path();
     let saved = |path: &std::path::Path| {
@@ -468,36 +468,36 @@ fn a_dialog_slider_drag_lands_without_re_evaluating_the_graph() {
     at(&mut state, 0.5);
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
     assert!(state.ui_context[state.slots.dialog].slider_dragging(), "the press took the band");
-    assert!((state.geo_opacity - 0.5).abs() < 0.02, "{}", state.geo_opacity);
+    assert!((state.render.geo_opacity - 0.5).abs() < 0.02, "{}", state.render.geo_opacity);
     assert_eq!(state.rt_geometry_version, version, "a draw-time value re-evaluated the graph");
     assert!((saved(&path) - 1.0).abs() < 1e-3, "written mid-drag");
 
     // A motion lands the value live and re-reads the row in place.
     at(&mut state, 0.25);
-    assert!((state.geo_opacity - 0.25).abs() < 0.02, "{}", state.geo_opacity);
+    assert!((state.render.geo_opacity - 0.25).abs() < 0.02, "{}", state.render.geo_opacity);
     let shown = state.ui_context[state.slots.dialog].rows[0].slider_value().expect("a slider row");
-    assert!((shown - state.geo_opacity).abs() < 1e-3, "the row shows {shown}, the field holds {}", state.geo_opacity);
+    assert!((shown - state.render.geo_opacity).abs() < 1e-3, "the row shows {shown}, the field holds {}", state.render.geo_opacity);
     assert_eq!(state.rt_geometry_version, version, "a drag motion re-evaluated the graph");
     assert!((saved(&path) - 1.0).abs() < 1e-3, "written mid-drag");
 
     // The release writes the file once.
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
     assert!(!state.ui_context[state.slots.dialog].slider_dragging());
-    assert!((saved(&path) - state.geo_opacity).abs() < 1e-3, "the release did not save");
+    assert!((saved(&path) - state.render.geo_opacity).abs() < 1e-3, "the release did not save");
     assert_eq!(state.rt_geometry_version, version);
 
     // A single landing saves at once, and clamps as the menu clamps.
     state.land_dialog_slider(&row, 0.7);
-    assert!((state.geo_opacity - 0.7).abs() < 1e-6);
+    assert!((state.render.geo_opacity - 0.7).abs() < 1e-6);
     assert!((saved(&path) - 0.7).abs() < 1e-3, "a wheel or arrow landing did not save");
     state.land_dialog_slider(&row, 7.0);
-    assert!((state.geo_opacity - 1.0).abs() < 1e-6, "clamped");
+    assert!((state.render.geo_opacity - 1.0).abs() < 1e-6, "clamped");
     assert_eq!(state.rt_geometry_version, version);
 
     // Group Marker Size re-sizes the group markers from their kept
     // members.
     state.land_dialog_slider(&setting_row_id("Group Marker Size"), 0.05);
-    assert!((state.group_marker_size - 0.05).abs() < 1e-6);
+    assert!((state.render.group_marker_size - 0.05).abs() < 1e-6);
     assert!((state.last_group_marker_size - 0.05).abs() < 1e-6);
     assert_eq!(state.rt_geometry_version, version);
 
@@ -517,7 +517,7 @@ fn a_dialog_slider_drag_lands_without_re_evaluating_the_graph() {
     state.land_dialog_slider(&setting_row_id("Point Marker Size"), 0.05);
     assert!((state.point_marker_size - 0.05).abs() < 1e-6, "{}", state.point_marker_size);
     state.land_dialog_slider(&setting_row_id("Group Marker Size"), 0.05);
-    assert!((state.group_marker_size - state.point_marker_size).abs() < 1e-6);
+    assert!((state.render.group_marker_size - state.point_marker_size).abs() < 1e-6);
     assert_eq!(state.settings_row_value("Point Marker Size"), state.settings_row_value("Group Marker Size"));
     assert_eq!(state.rt_geometry_version, version, "a spin row re-evaluated the graph");
     assert!((saved(&path) - 1.0).abs() < 1e-3, "the file follows every single landing");
@@ -853,11 +853,11 @@ fn dialog_settings_write_reaches_the_owning_subnet() {
 
     let scale_row = state.ui_context[state.slots.dialog].rows.iter().position(|r| r.id == setting_row_id("Group Marker Size")).unwrap();
     state.ui_context[state.slots.dialog].selected = scale_row;
-    let before = state.group_marker_size;
+    let before = state.render.group_marker_size;
     state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowRight)));
-    assert!(state.group_marker_size > before, "right arrow grows the markers");
+    assert!(state.render.group_marker_size > before, "right arrow grows the markers");
     state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowLeft)));
-    assert!((state.group_marker_size - before).abs() < 1e-5, "left arrow shrinks them back");
+    assert!((state.render.group_marker_size - before).abs() < 1e-5, "left arrow shrinks them back");
 
     // And it survives an unrelated parameter edit, which is the whole
     // reason the subnets had to be the owner before.
@@ -1992,7 +1992,7 @@ fn the_environment_node_lights_both_views() {
     let mut state = State::new(false);
     state.current_path.clear();
     state.on_path_changed();
-    state.smooth_shading = true;
+    state.render.smooth_shading = true;
     state.rebuild_scene_geometry();
     assert_eq!(state.environment, Environment::default());
     let colours = |state: &State| state.scene_smooth_verts.iter().map(|v| v.color).collect::<Vec<_>>();

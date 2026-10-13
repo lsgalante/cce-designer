@@ -3727,7 +3727,7 @@ order of all three. The rows: the Show Wireframe switch (its registry command), 
 Shading / Smooth Shading** as a radio pair over `toggle_smooth_shading`,
 a **Wire Thickness** slider under the wireframe switch (1–8 px by
 half a pixel, the palette row's range), a **Wire Opacity** slider under
-that (percent by 5, `State::wire_opacity` — the wires' own, apart from the
+that (percent by 5, `State::render.wire_opacity` — the wires' own, apart from the
 polygons' Opacity; until 2026-09-25 it was the Wire Color's ALPHA, and
 `StoredRenderSettings` moves an old alpha, from state.kdl's `#rrggbbaa` or
 a project's four-component array, into it on load), a
@@ -3774,7 +3774,7 @@ of the same scene, with a size and a colour of its own, differing only in
 following the fill's Opacity. It is gone — the command, the mesh, the three
 settings. The group markers were sized off it, Point Size times Group
 Marker Scale, and have a size of their own now
-(`State::group_marker_size`, world units); `StoredRenderSettings` reads a
+(`State::render.group_marker_size`, world units); `StoredRenderSettings` reads a
 file from before by multiplying the old pair out, and does not read
 `render_points` or `point_color`.
 `an_older_render_block_gives_the_group_markers_their_size` is the test.
@@ -4007,7 +4007,7 @@ MEASURED, output `P` minus input `P` (`point_displacements`), not read off
 Value, so Set, Multiply and an expression all show what actually happened,
 and the arrowed points are exactly the ones that moved. An arrow's full length,
 head included, is the displacement times **Pull Arrow Scale**
-(`State::pull_arrow_scale`, default 1 — the true vector; a dialog row and a
+(`State::render.pull_arrow_scale`, default 1 — the true vector; a dialog row and a
 viewport-menu slider, 0.25–10x, persisted in the render block beside Group
 Marker Size). The scale is display only: the sampled pairs are kept
 unscaled on `pull_arrow_pairs`, and `rebuild_pull_arrow_verts` stretches
@@ -4449,7 +4449,7 @@ arm names reads a default and writes nowhere, so the row draws, takes an
 edit and does nothing, which is why that test round-trips every one of them.
 **Group Marker Size** is the one row added with the collapse: the
 Selected-Group markers' radius in world units
-(`State::group_marker_size`, persisted in the render block; it was a
+(`State::render.group_marker_size`, persisted in the render block; it was a
 multiple of the retired Point Size until 2026-09-29).
 
 **The open project's PATH heads the Commands list**, as a row rather than a

@@ -1441,7 +1441,7 @@ impl State {
             return false;
         }
         self.environment = env;
-        if self.smooth_shading {
+        if self.render.smooth_shading {
             self.revisualize();
         }
         self.viewport_dirty = true;
@@ -1482,7 +1482,7 @@ impl State {
         // above serves both.
         // Lit by the environment's sun, which the flat shader is handed too.
         self.environment = crate::environment::Environment::of_scene(&self.fs_root, self.sim_frame());
-        self.scene_smooth_verts = if self.smooth_shading {
+        self.scene_smooth_verts = if self.render.smooth_shading {
             crate::geometry::smooth_lit_vertices(&geom, self.environment.sun_direction)
         } else {
             Vec::new()
@@ -1556,7 +1556,7 @@ impl State {
         // The wire pass's edges, likewise — topological, and only while the
         // wireframe is actually on.
         self.scene_edge_verts =
-            if self.wireframe { scene_edge_verts(&geom) } else { Vec::new() };
+            if self.render.wireframe { scene_edge_verts(&geom) } else { Vec::new() };
 
         // Visualize's vector markers — a node's or a visualizer's — ride the
         // same LINE_LIST channel as the normal whiskers.

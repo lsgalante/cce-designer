@@ -1213,34 +1213,12 @@ pub struct State {
     /// frame whose `StageKey` is this one, and that nothing marked
     /// `viewport_dirty`, keeps the staged backdrop.
     pub last_viewport: StageKey,
-    /// Wireframe display of the node geometry (the Render utility node's
-    /// "Show Wireframe" toggle): a wire pass drawn IN ADDITION to the filled
-    /// geometry, never instead of it.
-    pub wireframe: bool,
-    /// "Wire Single Color" toggle: on, the wires draw in `wire_color`; off,
-    /// they carry the geometry's vertex colors unlit — brighter than the lit
-    /// fill beneath, which is what separates them.
-    pub wire_single_color: bool,
-    /// RGB, used in single-colour mode only.
-    pub wire_color: [f32; 3],
-    /// The wire pass's opacity ("Wire Opacity"), in both colour modes — the
-    /// geometry Opacity slider affects only the polygons.
-    pub wire_opacity: f32,
-    /// Wire line width in framebuffer pixels ("Wire Thickness" slider).
-    pub wire_width: f32,
-    /// Opacity of the rendered node geometry (the Render node's "Opacity"
-    /// slider): 1.0 opaque, straight-alpha blended toward the viewport bg.
-    pub geo_opacity: f32,
-    /// Selected-Group marker radius in world units (a setting row of the
-    /// dialog and a viewport-menu slider; persisted in the render block).
-    pub group_marker_size: f32,
-    /// Pull arrow length as a multiple of the true displacement (a setting
-    /// row of the dialog and a viewport-menu slider; persisted in the render
-    /// block).
-    pub pull_arrow_scale: f32,
-    /// Smooth shading of the scene fill (`toggle_smooth_shading`). While on,
-    /// `scene_smooth_verts` holds the lit fill and the draw is `prelit`.
-    pub smooth_shading: bool,
+    /// The draw-time render settings — the wireframe pass, the fill's
+    /// opacity, shading and see-through, the group markers' size and the
+    /// pull arrows' scale: the render block of state.kdl and of a project's
+    /// display block, field for field (`settings::RenderSettings`, where
+    /// each is described).
+    pub render: RenderSettings,
     /// The scene fill with smooth shading baked into its colours
     /// (`geometry::smooth_lit_vertices`), built by `rebuild_scene_geometry`
     /// while `smooth_shading` is on and empty otherwise. The raster pass
@@ -1251,10 +1229,6 @@ pub struct State {
     /// defaults) — read by `present_scene` and `sync_environment`, handed
     /// to both views by the stage pass. See `crate::environment`.
     pub environment: crate::environment::Environment,
-    /// See-through fill (`toggle_show_occluded`), in effect only below full
-    /// opacity — at 100% there is nothing to see through, and the ordinary
-    /// depth-writing fill is exact.
-    pub show_occluded: bool,
     /// What the fill mesh was last SORTED for: (geometry version, smooth,
     /// eye in mesh space). The stage pass re-sorts and re-uploads when any
     /// of the three moves while see-through is in effect — which during an
@@ -1553,7 +1527,7 @@ impl State {
     /// and the fill is translucent. At full opacity the ordinary fill is
     /// exact and cheaper — no sort, no re-upload.
     pub fn see_through_active(&self) -> bool {
-        self.show_occluded && self.geo_opacity < 0.999
+        self.render.show_occluded && self.render.geo_opacity < 0.999
     }
 
     /// The live display settings — what state.kdl and a project's
@@ -1588,18 +1562,7 @@ impl State {
                 rt_mode: self.viewport().rt_mode,
                 circular_pane: self.circular_network_pane,
             },
-            render: RenderSettings {
-                wireframe: self.wireframe,
-                wire_single_color: self.wire_single_color,
-                wire_color: self.wire_color,
-                wire_opacity: self.wire_opacity,
-                wire_width: self.wire_width,
-                geo_opacity: self.geo_opacity,
-                group_marker_size: self.group_marker_size,
-                pull_arrow_scale: self.pull_arrow_scale,
-                smooth_shading: self.smooth_shading,
-                show_occluded: self.show_occluded,
-            },
+            render: self.render.clone(),
         }
     }
 
@@ -1668,17 +1631,8 @@ impl State {
         if let Some(u) = cce_ui::units::Unit::parse(&v.world_unit) {
             self.world_unit = u;
         }
-        self.wireframe = r.wireframe;
-        self.wire_single_color = r.wire_single_color;
-        self.wire_color = r.wire_color;
-        self.wire_opacity = r.wire_opacity;
-        self.wire_width = r.wire_width;
-        self.geo_opacity = r.geo_opacity;
-        self.group_marker_size = r.group_marker_size;
-        self.pull_arrow_scale = r.pull_arrow_scale;
+        self.render = r.clone();
         self.rebuild_pull_arrow_verts();
-        self.smooth_shading = r.smooth_shading;
-        self.show_occluded = r.show_occluded;
 
         // The checkmarks the guide and pane toggles keep in step by hand.
         let (sg, so, cp) = {
@@ -4627,7 +4581,7 @@ impl State {
         use cce_ui::widget::context_menu::MenuSlider;
         Some(match action {
             ViewportMenuAction::OpacitySlider => MenuSlider {
-                value: (self.geo_opacity.clamp(0.0, 1.0) * 100.0).round(),
+                value: (self.render.geo_opacity.clamp(0.0, 1.0) * 100.0).round(),
                 min: 0.0,
                 max: 100.0,
                 step: 5.0,
@@ -4635,7 +4589,7 @@ impl State {
                 suffix: "%",
             },
             ViewportMenuAction::WireOpacitySlider => MenuSlider {
-                value: (self.wire_opacity.clamp(0.0, 1.0) * 100.0).round(),
+                value: (self.render.wire_opacity.clamp(0.0, 1.0) * 100.0).round(),
                 min: 0.0,
                 max: 100.0,
                 step: 5.0,
@@ -4643,7 +4597,7 @@ impl State {
                 suffix: "%",
             },
             ViewportMenuAction::WireThicknessSlider => MenuSlider {
-                value: self.wire_width.clamp(1.0, 8.0),
+                value: self.render.wire_width.clamp(1.0, 8.0),
                 min: 1.0,
                 max: 8.0,
                 step: 0.5,
@@ -4665,7 +4619,7 @@ impl State {
             },
             // World units, as the point markers' size is.
             ViewportMenuAction::GroupMarkerSizeSlider => MenuSlider {
-                value: self.group_marker_size.clamp(0.0, GROUP_MARKER_SIZE_MAX),
+                value: self.render.group_marker_size.clamp(0.0, GROUP_MARKER_SIZE_MAX),
                 min: 0.0,
                 max: GROUP_MARKER_SIZE_MAX,
                 step: 0.005,
@@ -4685,7 +4639,7 @@ impl State {
                 suffix: "x",
             },
             ViewportMenuAction::PullArrowScaleSlider => MenuSlider {
-                value: self.pull_arrow_scale.clamp(0.25, 10.0),
+                value: self.render.pull_arrow_scale.clamp(0.25, 10.0),
                 min: 0.25,
                 max: 10.0,
                 step: 0.25,
@@ -4741,19 +4695,19 @@ impl State {
     /// pointer event, for six values none of which the graph reads.
     pub(crate) fn land_draw_time_setting(&mut self, key: &str, v: f32) -> bool {
         match key {
-            "geo_opacity" => self.geo_opacity = v.clamp(0.0, 1.0),
-            "wire_width" => self.wire_width = v.clamp(1.0, 8.0),
-            "wire_opacity" => self.wire_opacity = v.clamp(0.0, 1.0),
+            "geo_opacity" => self.render.geo_opacity = v.clamp(0.0, 1.0),
+            "wire_width" => self.render.wire_width = v.clamp(1.0, 8.0),
+            "wire_opacity" => self.render.wire_opacity = v.clamp(0.0, 1.0),
             "point_marker_size" => {
                 self.point_marker_size = v.clamp(0.005, 0.1);
                 self.rebuild_overlay_markers();
             }
             "group_marker_size" => {
-                self.group_marker_size = v.clamp(0.0, GROUP_MARKER_SIZE_MAX);
+                self.render.group_marker_size = v.clamp(0.0, GROUP_MARKER_SIZE_MAX);
                 self.rebuild_group_markers();
             }
             "pull_arrow_scale" => {
-                self.pull_arrow_scale = v.clamp(0.25, 10.0);
+                self.render.pull_arrow_scale = v.clamp(0.25, 10.0);
                 self.rebuild_pull_arrow_verts();
             }
             // The spin rows' ranges, in world units (the rows read in
@@ -4866,8 +4820,8 @@ impl State {
 
                 // Surface.
                 row(&mut options, &mut actions, "-".into(), sep);
-                row(&mut options, &mut actions, format!("{}Flat Shading", mark(!self.smooth_shading)), ViewportMenuAction::Shading(false));
-                row(&mut options, &mut actions, format!("{}Smooth Shading", mark(self.smooth_shading)), ViewportMenuAction::Shading(true));
+                row(&mut options, &mut actions, format!("{}Flat Shading", mark(!self.render.smooth_shading)), ViewportMenuAction::Shading(false));
+                row(&mut options, &mut actions, format!("{}Smooth Shading", mark(self.render.smooth_shading)), ViewportMenuAction::Shading(true));
                 row(&mut options, &mut actions, "Opacity".into(), ViewportMenuAction::OpacitySlider);
                 toggle(&mut options, &mut actions, "toggle_show_occluded");
                 return (options, actions);
@@ -4960,7 +4914,7 @@ impl State {
                 self.run_command(id);
             }
             ViewportMenuAction::Shading(smooth) => {
-                if self.smooth_shading != smooth {
+                if self.render.smooth_shading != smooth {
                     self.run_command("toggle_smooth_shading");
                 }
             }
@@ -5769,7 +5723,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             self.group_members = members;
             self.last_group_points_key = group_key;
             self.rebuild_group_markers();
-        } else if (self.group_marker_size - self.last_group_marker_size).abs() > f32::EPSILON {
+        } else if (self.render.group_marker_size - self.last_group_marker_size).abs() > f32::EPSILON {
             // Same members, new size (the palette's Group Marker Size):
             // re-size without re-evaluating.
             self.rebuild_group_markers();
@@ -5845,7 +5799,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     /// it on every motion of a drag. Each arrow keeps its base on the point's
     /// position before the pull and stretches along the pull by the scale.
     pub(crate) fn rebuild_pull_arrow_verts(&mut self) {
-        let scale = self.pull_arrow_scale;
+        let scale = self.render.pull_arrow_scale;
         let shown: Vec<(glam::Vec3, glam::Vec3)> =
             self.pull_arrow_pairs.iter().map(|&(a, b)| (a, a + (b - a) * scale)).collect();
         // The group markers' warm accent: both are "what the selected node
@@ -5864,7 +5818,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         let key = (
             mvp.to_cols_array().map(f32::to_bits),
             self.rt_geometry_version,
-            self.geo_opacity.to_bits(),
+            self.render.geo_opacity.to_bits(),
             self.see_through_active(),
             self.overlay_number_labels.len() + self.overlay_prim_labels.len() + self.overlay_vertex_labels.len(),
         );
@@ -5895,7 +5849,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             mvp,
             eye,
             &at,
-            self.geo_opacity,
+            self.render.geo_opacity,
             self.see_through_active(),
         );
         self.overlay_vertex_alpha = alpha.split_off(points_n + prims_n);
@@ -5929,7 +5883,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     #[cfg(test)]
     pub(crate) fn drawn_markers(&self, kind: MarkerKind) -> Vec<Vertex3D> {
         use crate::geometry::{expand_instances, marker_sphere};
-        let group = || marker_sphere(self.group_marker_size);
+        let group = || marker_sphere(self.render.group_marker_size);
         match kind {
             MarkerKind::Group => expand_instances(&group(), &self.group_point_instances),
             MarkerKind::Row => expand_instances(&group(), &self.row_marker_instances),
@@ -6026,7 +5980,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         self.group_point_instances =
             crate::geometry::marker_instances(&self.group_members, cce_ui::color::to_linear_rgb([1.0, 0.78, 0.20]));
         self.group_points_dirty = true;
-        self.last_group_marker_size = self.group_marker_size;
+        self.last_group_marker_size = self.render.group_marker_size;
     }
 
 
@@ -6396,17 +6350,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             viewport_dirty: true,
             last_status_text: String::new(),
             last_viewport: StageKey::default(),
-            wireframe: settings.render.wireframe,
-            wire_single_color: settings.render.wire_single_color,
-            wire_color: settings.render.wire_color,
-            wire_opacity: settings.render.wire_opacity,
-            wire_width: settings.render.wire_width,
-            geo_opacity: settings.render.geo_opacity,
-            group_marker_size: settings.render.group_marker_size,
-            pull_arrow_scale: settings.render.pull_arrow_scale,
+            render: settings.render.clone(),
             pull_arrow_pairs: Vec::new(),
-            smooth_shading: settings.render.smooth_shading,
-            show_occluded: settings.render.show_occluded,
             sorted_fill_key: None,
             scene_smooth_verts: Vec::new(),
             environment: crate::environment::Environment::default(),
@@ -8034,8 +7979,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 settings_changed = true;
             }
             Action::ToggleWireframe => {
-                let val = !self.wireframe;
-                self.wireframe = val;
+                let val = !self.render.wireframe;
+                self.render.wireframe = val;
                 // The edge list is collected with the scene and dropped
                 // while the wireframe is off, so switching it on has to
                 // rebuild — there is nothing staged to draw otherwise.
@@ -8044,7 +7989,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             // The smooth-lit fill is baked with the scene and dropped while
             // flat, so the flip rebuilds, as the wireframe's does.
             Action::ToggleSmoothShading => {
-                self.smooth_shading = !self.smooth_shading;
+                self.render.smooth_shading = !self.render.smooth_shading;
                 self.rebuild_scene_geometry();
                 settings_changed = true;
             }
@@ -8052,10 +7997,10 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             // see-through pipeline; nothing to rebuild. Said out loud at full
             // opacity, where it has nothing to show and would look broken.
             Action::ToggleShowOccluded => {
-                self.show_occluded = !self.show_occluded;
+                self.render.show_occluded = !self.render.show_occluded;
                 self.viewport_dirty = true;
                 settings_changed = true;
-                if self.show_occluded && self.geo_opacity >= 0.999 {
+                if self.render.show_occluded && self.render.geo_opacity >= 0.999 {
                     self.update_status_text("Show Occluded takes effect below 100% opacity.");
                 }
             }
@@ -8104,7 +8049,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 settings_changed = true;
             }
             Action::ToggleWireSingleColor => {
-                self.wire_single_color = !self.wire_single_color;
+                self.render.wire_single_color = !self.render.wire_single_color;
                 self.viewport_dirty = true;
                 settings_changed = true;
             }
@@ -10216,7 +10161,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         }
         if self.spheres_dirty {
             self.spheres_dirty = false;
-            let fill = if self.smooth_shading { &self.scene_smooth_verts } else { &self.rt_sphere_verts };
+            let fill = if self.render.smooth_shading { &self.scene_smooth_verts } else { &self.rt_sphere_verts };
             renderer.update_mesh(meshes.spheres, bytemuck::cast_slice(fill));
             // Edge mesh for the wire pass, collected with the scene.
             renderer.update_mesh(meshes.sphere_edges, bytemuck::cast_slice(&self.scene_edge_verts));
@@ -10224,7 +10169,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
 
         // The spheres the markers are drawn over, at the sizes as they are.
         let radii = [
-            self.group_marker_size,
+            self.render.group_marker_size,
             self.point_marker_size,
             self.point_marker_size * crate::render::VERTEX_MARKER_SCALE,
         ];
@@ -10547,12 +10492,12 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                     height: ch,
                     active_camera: self.active_camera.clone(),
                     show_viewport: self.show_viewport,
-                    wireframe: self.wireframe,
-                    geo_opacity: self.geo_opacity,
-                    wire_single_color: self.wire_single_color,
-                    wire_color: self.wire_color,
-                    wire_opacity: self.wire_opacity,
-                    wire_width: self.wire_width,
+                    wireframe: self.render.wireframe,
+                    geo_opacity: self.render.geo_opacity,
+                    wire_single_color: self.render.wire_single_color,
+                    wire_color: self.render.wire_color,
+                    wire_opacity: self.render.wire_opacity,
+                    wire_width: self.render.wire_width,
                     rt_mode,
                 };
                 let viewport_changed = self.viewport_dirty || self.last_viewport != key;
@@ -10586,7 +10531,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                     // spheres) carries the Render node's Opacity; scene
                     // furniture stays opaque.
                     const NO_TINT: [f32; 4] = [0.0; 4];
-                    let geo_opacity = self.geo_opacity.clamp(0.0, 1.0);
+                    let geo_opacity = self.render.geo_opacity.clamp(0.0, 1.0);
 
                     // See-through fill: re-sort the triangles back to front
                     // for THIS eye and upload them over the flush's order,
@@ -10596,9 +10541,9 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                     let see_through = self.see_through_active();
                     if see_through && self.vertex_count_spheres > 0 {
                         let eye = (view_mat * model).inverse().transform_point3(Vec3::ZERO);
-                        let key = (self.rt_geometry_version, self.smooth_shading, eye.to_array());
+                        let key = (self.rt_geometry_version, self.render.smooth_shading, eye.to_array());
                         if self.sorted_fill_key != Some(key) {
-                            let src = if self.smooth_shading { &self.scene_smooth_verts } else { &self.rt_sphere_verts };
+                            let src = if self.render.smooth_shading { &self.scene_smooth_verts } else { &self.rt_sphere_verts };
                             let sorted = crate::geometry::sort_triangles_back_to_front(src, eye);
                             renderer.update_mesh(meshes.spheres, bytemuck::cast_slice(&sorted));
                             self.sorted_fill_key = Some(key);
@@ -10671,8 +10616,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                         }
                         // With wires coming, the fill is pushed back by its
                         // slope-scaled offset so the lattice reads solid.
-                        let base = if self.wireframe { self.wire_width } else { 0.0 };
-                        let mut fill = Some(SceneDraw { mesh: meshes.spheres, mvp, wireframe: false, wire_tint: NO_TINT, opacity: geo_opacity, line_width: 1.0, wire_base_width: base, prelit: self.smooth_shading, see_through, instances: None, screen_space: false });
+                        let base = if self.render.wireframe { self.render.wire_width } else { 0.0 };
+                        let mut fill = Some(SceneDraw { mesh: meshes.spheres, mvp, wireframe: false, wire_tint: NO_TINT, opacity: geo_opacity, line_width: 1.0, wire_base_width: base, prelit: self.render.smooth_shading, see_through, instances: None, screen_space: false });
                         // A see-through fill writes no depth, so wires drawn
                         // AFTER it pass everywhere and the far side's paint
                         // over the near faces. Seen through, the wires go
@@ -10684,7 +10629,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                         if !see_through {
                             draws.extend(fill.take());
                         }
-                        if self.wireframe {
+                        if self.render.wireframe {
                             // The wire pass rides ON TOP of the fill (never
                             // replaces it). Single-color mode replaces the
                             // fragment color outright; geometry-color mode
@@ -10696,13 +10641,13 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                             // The wires' opacity is Wire Opacity in both
                             // modes; the geometry Opacity slider is
                             // polygons-only.
-                            let tint = if self.wire_single_color {
-                                [self.wire_color[0], self.wire_color[1], self.wire_color[2], 1.0]
+                            let tint = if self.render.wire_single_color {
+                                [self.render.wire_color[0], self.render.wire_color[1], self.render.wire_color[2], 1.0]
                             } else {
                                 [0.0, 0.0, 0.0, 0.0]
                             };
-                            let wire_alpha = self.wire_opacity.clamp(0.0, 1.0);
-                            draws.push(SceneDraw { mesh: meshes.sphere_edges, mvp, wireframe: true, wire_tint: tint, opacity: wire_alpha, line_width: self.wire_width, wire_base_width: 0.0, prelit: false, see_through, instances: None, screen_space: false });
+                            let wire_alpha = self.render.wire_opacity.clamp(0.0, 1.0);
+                            draws.push(SceneDraw { mesh: meshes.sphere_edges, mvp, wireframe: true, wire_tint: tint, opacity: wire_alpha, line_width: self.render.wire_width, wire_base_width: 0.0, prelit: false, see_through, instances: None, screen_space: false });
                         }
                         draws.extend(fill);
                     }

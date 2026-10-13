@@ -151,16 +151,24 @@ pub(crate) fn default_world_unit() -> String {
 }
 
 /// How the geometry itself is drawn — the wire pass and the point display.
+/// The live copy is `State::render`, which the stage pass, the dialog's rows
+/// and the viewport menu's sliders read and write in place.
 ///
 /// These lived on the root meta node's `render` utility subnet until
 /// 2026-09-23, which made them per-PROJECT: opening someone else's scene
 /// reset how you looked at geometry. They are display preferences like the
 /// guides, so they persist here, and the dialog's Settings half is where
-/// they are edited.
+/// they are edited. (Since 2026-09-24 a project carries them too, in its
+/// display block.)
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(from = "StoredRenderSettings")]
 pub struct RenderSettings {
+    /// Wireframe display of the node geometry ("Show Wireframe"): a wire
+    /// pass drawn IN ADDITION to the filled geometry, never instead of it.
     pub wireframe: bool,
+    /// "Wire Single Color": on, the wires draw in `wire_color`; off, they
+    /// carry the geometry's vertex colours unlit — brighter than the lit
+    /// fill beneath, which is what separates them.
     pub wire_single_color: bool,
     /// RGB; used in single-colour mode only.
     pub wire_color: [f32; 3],
@@ -169,7 +177,10 @@ pub struct RenderSettings {
     /// made it a setting reachable only through a colour picker's alpha
     /// channel; [`StoredRenderSettings`] moves an old alpha here.
     pub wire_opacity: f32,
+    /// Wire line width in framebuffer pixels ("Wire Thickness").
     pub wire_width: f32,
+    /// Opacity of the rendered geometry's polygons ("Opacity"): 1.0 opaque,
+    /// straight-alpha blended toward the viewport background.
     pub geo_opacity: f32,
     /// The Selected-Group markers' radius, in world units. Until
     /// 2026-09-29 it was Point Size times Group Marker Scale, Point Size
@@ -182,13 +193,16 @@ pub struct RenderSettings {
     /// small beside the model. Display only — the pull itself is untouched.
     pub pull_arrow_scale: f32,
     /// Smooth (vertex-normal) shading of the scene fill, where off is the
-    /// faceted look the raster pass has always had. Absent in older files:
-    /// flat.
+    /// faceted look the raster pass has always had. While on,
+    /// `State::scene_smooth_verts` holds the lit fill and the draw is
+    /// `prelit`. Absent in older files: flat.
     pub smooth_shading: bool,
     /// See-through fill: below full opacity the fill draws with no culling
     /// and no depth writes, triangles sorted back to front for the eye, so
     /// what it occludes — its own far side, the wires, the scene behind —
-    /// shows through. Absent in older files: off.
+    /// shows through. In effect only below full opacity
+    /// (`State::see_through_active`): at 100% the ordinary depth-writing
+    /// fill is exact. Absent in older files: off.
     pub show_occluded: bool,
 }
 
