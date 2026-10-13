@@ -224,12 +224,18 @@ engine's shaping/glyph pass (the app has no `FontSystem` or buffer cache of its 
 `cce_ui::cosmic_text`; `glyphon` is not a dependency of this crate at all, having
 gone from cce-ui with the wgpu path).
 
-- `src/app.rs` (~10.8k lines) — the heart: `State` (the entire app model), `McpAction` /
+- `src/app.rs` (~9.2k lines) — the heart: `State` (the entire app model), `McpAction` /
   `CustomEvent`, pane layout. `tick_frame` (simulation:
   config polling, inertia, widget ticks) and `stage_frame` (renderer staging) are the
   two halves of the old render loop. GPU mesh updates are staged CPU-side
   (`pending_*` fields, `spheres_dirty`) and flushed in `stage_frame` because only
   the engine hooks see the renderer.
+- `src/app/input.rs` — `State::handle_event`, the one entry every window event
+  takes (from `process_window_event` and the tests), split by the kind of event:
+  `on_wheel`, `on_pointer_moved`, `on_mouse_button`, `on_key`. A child module of
+  `app`, so it reaches `State`'s private fields and methods as `app.rs` does; the
+  source scans that list files by name (`nothing_shells_out_to_cce_cloud_any_more`,
+  `the_dialog_plate_is_the_menu_plate`) list it beside `app.rs`.
 - `src/model.rs` (~1.6k lines) — the node tree and the project file, with no window or
   GPU: `FsNode`, `Project` (load, migrations, template merge), node ids, the wire and
   splice operations, parameter rows, `load_fs_tree` (node-template loading).
