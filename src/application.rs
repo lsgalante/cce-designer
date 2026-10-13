@@ -143,6 +143,14 @@ impl State {
 impl Application for State {
     type Message = CustomEvent;
 
+    fn csd(&mut self) -> Option<&mut dyn cce_ui::engine::Csd> {
+        Some(self)
+    }
+
+    fn app_3d(&mut self) -> Option<&mut dyn cce_ui::engine::App3D> {
+        Some(self)
+    }
+
     fn create(sender: cce_ui::engine::AppSender<CustomEvent>) -> Self {
         // The app keeps calloop's sender; `AppSender` converts into it.
         let sender: calloop::channel::Sender<CustomEvent> = sender.into();
@@ -380,17 +388,8 @@ impl Application for State {
         self.renderer_handed_over();
     }
 
-    fn stage_renderer(&mut self, renderer: &mut VkRenderer, _size: LogicalSize, _scale: f64) -> bool {
-        self.stage_frame(renderer)
-    }
-
     fn handle_resize(&mut self, width: f32, height: f32, scale: f64) {
         self.resize(width, height, scale);
-    }
-
-    fn standard_csd(&self) -> bool {
-        // The detached window's chrome is the circle, not the rect.
-        !self.is_detached_network
     }
 
     fn cursor_icon(&self, x: f32, y: f32) -> Option<CursorIcon> {
@@ -416,11 +415,24 @@ impl Application for State {
         })
     }
 
+    fn on_exit(&mut self) {
+        self.autosave_on_exit();
+    }
+}
+
+impl cce_ui::engine::Csd for State {
+    fn standard_csd(&self) -> bool {
+        // The detached window's chrome is the circle, not the rect.
+        !self.is_detached_network
+    }
+
     fn take_window_action(&mut self) -> Option<WindowAction> {
         self.window_action.take()
     }
+}
 
-    fn on_exit(&mut self) {
-        self.autosave_on_exit();
+impl cce_ui::engine::App3D for State {
+    fn stage_renderer(&mut self, renderer: &mut VkRenderer, _size: LogicalSize, _scale: f64) -> bool {
+        self.stage_frame(renderer)
     }
 }

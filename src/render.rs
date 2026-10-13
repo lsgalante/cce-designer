@@ -986,7 +986,7 @@ impl State {
     /// where configured — the knobs that differ between a node body and the
     /// plate it sits on. The name floors wear it too.
     fn node_material(&self) -> cce_ui::scene::Material {
-        let mut m = cce_ui::scene::Material::from_fill(cce_ui::color::param_plate_fill());
+        let mut m = cce_ui::scene::Material::from_fill(cce_ui::scene::param_plate_fill());
         if let (Some(k), cce_ui::scene::Frost::Frosted { compression, .. }) = (self.node_compression, &mut m.frost) {
             *compression = k;
         }

@@ -240,7 +240,7 @@ impl cce_ui::widget::Paint for PassivePlate {
 
     fn color(&self) -> [f32; 4] {
         // `param_plate_fill` folds in the plate opacity and the blur marker.
-        cce_ui::color::param_plate_fill()
+        cce_ui::scene::param_plate_fill()
     }
 
     fn corner_style(&self, _rect: cce_ui::scene::layout::Rect) -> Option<(f32, (bool, bool, bool, bool))> {

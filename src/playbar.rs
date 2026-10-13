@@ -206,7 +206,7 @@ impl Paint for Playbar {
     /// (`style.surface.param.color`) with the other panes, where the old
     /// hand-rolled PARAM_BG copy froze this pane at the built-in default.
     fn color(&self) -> [f32; 4] {
-        color::param_plate_fill()
+        cce_ui::scene::param_plate_fill()
     }
 
     fn solid_border(&self) -> Option<([f32; 4], f32)> {

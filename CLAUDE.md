@@ -211,10 +211,12 @@ The designer runs on cce-ui's standard `Application` trait / `engine::run` patte
 (`src/application.rs` holds the impl; the engine owns the Wayland plumbing, calloop
 loop, and the `VkRenderer`). Because it draws a 3D scene and shapes its own text, it
 uses the engine's extended hooks — it is the reference consumer for them:
-`renderer_init` (create persistent meshes), `stage_renderer` (flush pending mesh
-updates, stage the raster scene / RT pane; returns true while the path tracer
-refines), `handle_resize`, and `standard_csd` / `cursor_icon` / `take_window_action`
-(the detached circular window's radial border resize + top-arc move). The 2D frame —
+`renderer_init` (create persistent meshes), `App3D::stage_renderer` (flush pending
+mesh updates, stage the raster scene / RT pane; returns true while the path tracer
+refines), `handle_resize`, `cursor_icon`, and `Csd::standard_csd` /
+`Csd::take_window_action` (the detached circular window's radial border resize +
+top-arc move); the two extensions are reached through `Application::app_3d` and
+`Application::csd` (application.rs). The 2D frame —
 geometry AND text — is the engine's single paint path: `display_list` returns
 `State::collect_display_list()` and `display_list_text` opts the text into the
 engine's shaping/glyph pass (the app has no `FontSystem` or buffer cache of its own
@@ -2648,7 +2650,7 @@ and that collapse is the whole premise of "fifty operators, ten nodes".
 Every plate the designer draws — the network panel, params, spreadsheet,
 playbar, and every collapsed stub — goes through
 `append_widget_plate_radii` in `render.rs`, and every one of those widgets
-answers `color()` with `cce_ui::colors::param_plate_fill`, which is
+answers `color()` with `cce_ui::scene::param_plate_fill`, which is
 `Material::pane()`: the toolkit's PANE rung. So there is ONE material for
 the designer's plates, configured in the `style.surface` block of
 `~/.config/cce/config.kdl` (a `~/.config/cce/cce-designer/config.kdl`

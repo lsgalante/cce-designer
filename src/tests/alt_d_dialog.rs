@@ -880,8 +880,8 @@ fn dialog_settings_write_reaches_the_owning_subnet() {
 fn the_palette_offers_the_recent_projects() {
     use crate::dialog::RECENT_ROW_PREFIX;
     let mut state = State::new(false);
-    let a = std::path::PathBuf::from("/tmp/cce-recent-alpha");
-    let b = std::path::PathBuf::from("/tmp/cce-recent-beta");
+    let a = std::path::PathBuf::from("/srv/designs/cce-recent-alpha");
+    let b = std::path::PathBuf::from("/srv/designs/cce-recent-beta");
     state.recent_files = vec![a.clone(), b.clone()];
 
     state.open_dialog();
