@@ -159,6 +159,8 @@ pub struct ChainBox {
     pub ids: Vec<String>,
     /// 0..1, scaling the outline's and the wash's alpha.
     pub alpha: f32,
+    /// Fading out: the pointer has left it.
+    pub leaving: bool,
 }
 
 /// The target a scroll gesture over the plateless network was given at its
@@ -1403,7 +1405,8 @@ impl State {
 
     /// The chain to outline: the one under a free pointer that no floating
     /// pane covers, as its sorted node ids. A captured pointer — an orbit,
-    /// a drag, the dialog — outlines none.
+    /// a drag, the dialog — outlines none; but a network gesture leaves the
+    /// outline it began in standing (`network_gesture_held`).
     pub(crate) fn chain_box_target(&self) -> Option<Vec<String>> {
         if self.pointer_captured() || self.over_floating_pane_at(self.cursor_x, self.cursor_y) {
             return None;
@@ -1415,10 +1418,26 @@ impl State {
         Some(ids)
     }
 
+    /// Whether a gesture of the NETWORK'S holds the pointer: a node drag,
+    /// the grid cursor's expansion drag, a group drag or a pan — what a
+    /// press in a chain's outline begins. The outline stands through one
+    /// as it was at the press (`animate_chain_box`), where every other
+    /// capture — an orbit, the dialog — takes it away.
+    pub(crate) fn network_gesture_held(&self) -> bool {
+        self.drag_widget == Some(CONTENT_IDX)
+            || self.net.grid_cursor_drag.is_some()
+            || self.net.node_drag_group.is_some()
+            || self.net.is_panning
+    }
+
     /// Whether the box shown is not the one the pointer asks for: what
     /// pointer motion repaints for, since the tick that eases the box runs
-    /// only on a frame something asked for.
+    /// only on a frame something asked for. Never while a network gesture
+    /// holds it, which leaves the outline as it stands.
     pub(crate) fn chain_box_stale(&self) -> bool {
+        if self.network_gesture_held() {
+            return false;
+        }
         let target = self.chain_box_target();
         match (&self.net.chain_box, target) {
             (Some(b), Some(ids)) => b.ids != ids || b.alpha < 1.0,
@@ -1483,10 +1502,31 @@ impl State {
     /// outlines the other at once. True while it fades.
     pub(crate) fn animate_chain_box(&mut self, dt: f32) -> bool {
         let ease = |k: f32| 1.0 - (-k * dt.max(1e-4)).exp();
+        // A press in an outline begins a network gesture, and the outline
+        // stands through it — a click, a node dragged, the grid cursor
+        // grown — on the chain it was on, however far the pointer goes, and
+        // is looked at again on the release. One the pointer had already
+        // left goes on fading.
+        if self.network_gesture_held() {
+            let Some(b) = &mut self.net.chain_box else { return false };
+            if !b.leaving {
+                b.alpha += (1.0 - b.alpha) * ease(16.0);
+                if b.alpha > 0.995 {
+                    b.alpha = 1.0;
+                }
+                return b.alpha < 1.0;
+            }
+            b.alpha -= b.alpha * ease(12.0);
+            if b.alpha < 0.02 {
+                self.net.chain_box = None;
+            }
+            return true;
+        }
         let target = self.chain_box_target();
         match (&mut self.net.chain_box, target) {
             (Some(b), Some(ids)) => {
                 b.ids = ids;
+                b.leaving = false;
                 b.alpha += (1.0 - b.alpha) * ease(16.0);
                 if b.alpha > 0.995 {
                     b.alpha = 1.0;
@@ -1494,6 +1534,7 @@ impl State {
                 b.alpha < 1.0
             }
             (Some(b), None) => {
+                b.leaving = true;
                 b.alpha -= b.alpha * ease(12.0);
                 if b.alpha < 0.02 {
                     self.net.chain_box = None;
@@ -1501,7 +1542,7 @@ impl State {
                 true
             }
             (None, Some(ids)) => {
-                self.net.chain_box = Some(ChainBox { ids, alpha: 0.0 });
+                self.net.chain_box = Some(ChainBox { ids, alpha: 0.0, leaving: false });
                 true
             }
             (None, None) => false,

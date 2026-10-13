@@ -684,11 +684,26 @@ fn a_chain_under_the_pointer_has_a_box_and_its_input_is_the_networks() {
     // A press there is the grid's: the cursor goes to the cell, nothing orbits.
     state.focused_pane = RIGHT_MENUBAR_IDX;
     at(&mut state, px, py);
+    state.tick_frame(1.0);
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
     assert!(state.camera.orbit_drag.is_none(), "a press in the box arms no orbit");
     assert_eq!((state.net.grid_cursor_col, state.net.grid_cursor_row), state.cell_at(px, py));
     assert_eq!(state.focused_pane, LEFT_MENUBAR_IDX, "the network takes the focus");
+    // The press began a network gesture, and the outline stands through
+    // it — however far the pointer drags — and after the release.
+    let held = state.net.chain_box.clone().expect("the outline is up at the press");
+    let (cx, cy, cw, _) = state.positions[CONTENT_IDX];
+    at(&mut state, cx + cw * 0.02, cy + 5.0);
+    for _ in 0..30 {
+        state.tick_frame(1.0 / 30.0);
+    }
+    assert_eq!(state.net.chain_box.as_ref().map(|b| (&b.ids, b.alpha)), Some((&held.ids, 1.0)), "held through the drag");
+    at(&mut state, px, py);
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
+    for _ in 0..30 {
+        state.tick_frame(1.0 / 30.0);
+    }
+    assert_eq!(state.net.chain_box.as_ref().map(|b| b.alpha), Some(1.0), "and still up after the click");
 
     // A right press there opens the network's menu, not the viewport's.
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Right });
