@@ -281,7 +281,7 @@ fn a_plates_rows_are_in_its_right_click_menu() {
     let slot = geo(&state.doc.fs_root).children.iter().position(|c| c.node_type == "sphere").unwrap();
     state.apply_action(crate::app::McpAction::Select { slot }, &mut redraw).unwrap();
     state.apply_layout();
-    state.params_plate = true;
+    state.params.params_plate = true;
     let (x, y, w, h) = state.slots.get_dyn(&state.ui_context, PARAM_IDX).rect();
     let free = (0..(h as i32))
         .rev()
@@ -293,7 +293,7 @@ fn a_plates_rows_are_in_its_right_click_menu() {
     assert!(state.plate_menu_actions.contains(&PlateMenuAction::Detach));
     assert!(!state.plate_menu_actions.contains(&PlateMenuAction::Collapse), "the HUD does not collapse");
     press_at(&mut state, 2.0, 2.0, MouseButton::Left);
-    state.params_plate = false;
+    state.params.params_plate = false;
 
     // The network: its menu is the viewport menu's Network page (empty
     // graph space is the scene's), and it has no Plate page — the
@@ -377,7 +377,7 @@ fn the_plates_have_no_docks() {
     b.load_from_file(&dir).expect("load");
     let (bx, _, bw, _) = b.positions[SPREADSHEET_IDX];
     assert_eq!((bx, bw), (18.0, b.floating_spreadsheet_rect().2), "along the bottom");
-    assert!((b.params_hud_width - 400.0).abs() < 0.5, "an older save's params width is the HUD's: {}", b.params_hud_width);
+    assert!((b.params.params_hud_width - 400.0).abs() < 0.5, "an older save's params width is the HUD's: {}", b.params.params_hud_width);
     assert!((b.floating_spreadsheet_height - 270.0).abs() < 0.5);
     let _ = fs::remove_dir_all(&dir);
 }

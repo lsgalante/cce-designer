@@ -1108,7 +1108,7 @@ fn the_params_plate_collapses_to_a_circle_with_no_rows() {
     assert_eq!(fitted[4], 0.0, "the plate fitted to the rows");
     // Settle on it.
     while state.animate_params_plate(1.0 / 60.0) {}
-    assert_eq!(state.params_plate_shown, Some(fitted));
+    assert_eq!(state.params.params_plate_shown, Some(fitted));
 
     // Nothing selected: the target is the circle at the HUD's top right.
     state.deselect_node();
@@ -1123,7 +1123,7 @@ fn the_params_plate_collapses_to_a_circle_with_no_rows() {
     assert!(!state.on_param_resize_edge(hx, hy + 10.0), "a circle has no edge to drag");
     // Eased: one tick goes part of the way, and it arrives.
     assert!(state.animate_params_plate(1.0 / 60.0));
-    let mid = state.params_plate_shown.unwrap();
+    let mid = state.params.params_plate_shown.unwrap();
     assert!(mid[2] < fitted[2] && mid[2] > dot[2], "on its way: {mid:?}");
     let (_, r) = state.params_plate_drawn().unwrap();
     assert!(r < mid[2].min(mid[3]) * 0.5 + 0.01);
@@ -1132,15 +1132,15 @@ fn the_params_plate_collapses_to_a_circle_with_no_rows() {
         ticks += 1;
         assert!(ticks < 120, "it settles");
     }
-    assert_eq!(state.params_plate_shown, Some(dot));
+    assert_eq!(state.params.params_plate_shown, Some(dot));
     let (_, r) = state.params_plate_drawn().unwrap();
     assert_eq!(r, d * 0.5, "a circle: corners half its side");
 
     // The plate off: no plate at all.
-    state.params_plate = false;
+    state.params.params_plate = false;
     assert!(state.params_plate_target().is_none());
     state.animate_params_plate(1.0 / 60.0);
-    assert!(state.params_plate_shown.is_none());
+    assert!(state.params.params_plate_shown.is_none());
 }
 
 /// A config.kdl edit to the grid's spacing shows at once, at the zoom
@@ -2124,7 +2124,7 @@ fn command_palette_opens_the_dialog_on_commands() {
 /// start, which is indistinguishable from one that failed to.
 #[test]
 fn nothing_shells_out_to_cce_cloud_any_more() {
-    for name in ["app.rs", "app/input.rs", "app/document.rs", "app/network.rs", "app/camera.rs", "app/view.rs", "app/scene.rs", "app/stage.rs", "app/markers.rs", "window.rs", "dialog.rs", "render.rs", "api.rs", "slots.rs"] {
+    for name in ["app.rs", "app/input.rs", "app/document.rs", "app/network.rs", "app/camera.rs", "app/view.rs", "app/scene.rs", "app/stage.rs", "app/markers.rs", "app/params.rs", "window.rs", "dialog.rs", "render.rs", "api.rs", "slots.rs"] {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(name);
         let src = std::fs::read_to_string(&path).expect("read source");
         for needle in ["CloudPopup", "run_dmenu", "CloudPopupTracker"] {

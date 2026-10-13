@@ -141,7 +141,7 @@ impl State {
             }
             // The plate as drawn — fitted to the rows, the circle, or on
             // its way between them — so the rows are revealed as it grows.
-            PARAM_IDX if self.params_plate => match self.params_plate_drawn() {
+            PARAM_IDX if self.params.params_plate => match self.params_plate_drawn() {
                 Some(([x, y, w, h, _], r)) => return (w > 0.0 && h > 0.0).then_some((rect(x, y, w, h), r)),
                 None => return None,
             },
@@ -921,7 +921,7 @@ impl State {
             }
             PARAM_MENUBAR_IDX => {
                 // No plate, no edge to ring; the plate is fitted to the rows.
-                if !self.show_parameters || relief || !self.params_plate {
+                if !self.show_parameters || relief || !self.params.params_plate {
                     return;
                 }
                 self.params_claim()

@@ -164,6 +164,9 @@ pub use stage::{SceneMeshes, SceneStage, StageKey, StagedMesh};
 // `State::markers`: the marker instances, pull arrows and overlay labels.
 mod markers;
 pub use markers::SceneMarkers;
+// `State::params`: the params pane's node, plate, spans, pickers, HUD.
+mod params;
+pub use params::ParamsPane;
 
 /// Which node the params pane is showing: the editor's level, the slot
 /// there, and the node's id. All three, because no one of them is an
@@ -720,11 +723,9 @@ pub struct State {
     /// The open project: the node tree, the editor's path into it, undo
     /// and what it was last saved as (`src/app/document.rs`).
     pub doc: Document,
-    /// The node the params pane's rows were loaded FROM — set by
-    /// `sync_parameters_pane`, checked by `sync_parameters_to_project`, which
-    /// writes nothing when the selection has moved on since. See
-    /// [`State::param_pane_target`].
-    pub(crate) param_pane_source: Option<ParamPaneTarget>,
+    /// The params pane's own state: the node it shows, its plate, the row spans
+    /// and pickers, the visualizer HUD, the copied parameter (`src/app/params.rs`).
+    pub params: ParamsPane,
 
     pub shortcut_manager: ShortcutManager,
     /// A chord matched this frame, run on the next tick — the command's
@@ -772,9 +773,6 @@ pub struct State {
     pub playbar_menu_active: bool,
     pub playbar_menu_actions: Vec<PlaybarMenuAction>,
     pub param_menu_target: Option<(String, String)>,
-    /// Copy Parameter's clipboard: (node id, parameter name). An id, so a
-    /// rename between the copy and the paste still pastes the right path.
-    pub copied_param: Option<(String, String)>,
     /// The node the rename dialog is open on, by id.
     pub rename_target: Option<String>,
     /// The network editor's right-click menu — the same thread-local again,
@@ -838,11 +836,6 @@ pub struct State {
     /// the viewer state, the view last staged (`src/app/camera.rs`).
     pub camera: CameraView,
     pub show_network: bool,
-    /// Whether the params pane draws its PLATE. With it off the rows stand
-    /// directly over the scene, and the pane claims only what its rows
-    /// cover (`params_claim`), so the scene under the rest of its rect
-    /// orbits, takes the wheel and shows its point numbers.
-    pub params_plate: bool,
     pub show_viewport: bool,
     pub show_parameters: bool,
     pub show_spreadsheet: bool,
@@ -879,19 +872,10 @@ pub struct State {
     pub last_project_check: std::time::Instant,
     pub needs_autosave: bool,
     pub last_autosave_time: std::time::Instant,
-    /// The params plate as drawn: `[x, y, w, h, round]`, eased each tick
-    /// toward `params_plate_target` — `round` 0 is the plate fitted to the
-    /// rows, 1 the small circle it collapses to with no rows to show. `None`
-    /// with no plate, and before the first tick (the target is drawn then).
-    pub params_plate_shown: Option<[f32; 5]>,
     pub last_design_mod_time: Option<std::time::SystemTime>,
     pub last_config_mod_time: Option<std::time::SystemTime>,
     /// The active app-mode drag (pane edge resize), if any. See [`AppDrag`].
     pub app_drag: Option<AppDrag>,
-    /// The params HUD's width as asked for (`params_hud_rect` fits it to
-    /// the viewport). It lives on the scene, not in a dock — there are none
-    /// (since 2026-10-07).
-    pub params_hud_width: f32,
     pub floating_spreadsheet_height: f32,
     /// Whether the compositor has told us the window's size yet. Until it
     /// has, `width`/`height` are `State::new`'s 1280x800 placeholder.
@@ -931,25 +915,6 @@ pub struct State {
     /// markers without an evaluation; the markers are staged by
     /// `rebuild_row_markers` and flushed to `meshes.row_points`.
     pub spreadsheet_points: Vec<[f32; 3]>,
-    /// The params HUD shows the attribute visualizers, editing visualizer
-    /// `i` (0 with none yet), in place of the selected node's parameters —
-    /// `visualizer::State::open_visualizers_hud`. `None` is the node.
-    pub vis_hud: Option<usize>,
-    /// What the HUD would have shown when the visualizers took it: picking
-    /// another node hands the HUD back to that node's parameters.
-    pub(crate) vis_hud_from: Option<ParamPaneTarget>,
-    /// The half-span the Attribute node's Value row runs over, with the
-    /// node it is for (`value_row_span`): kept between pane syncs so the row
-    /// re-scales only when its value leaves it.
-    pub value_row_span: Option<(String, f32)>,
-    /// The same for the shown node's `float2` rows, by parameter name, with
-    /// the node they are for (`present_float2_rows`).
-    pub float2_spans: Option<(String, Vec<(String, f32)>)>,
-    /// The param pane's completion lists — (input node name, geometry
-    /// version) → (group names, attribute names) read off that input's
-    /// evaluated geometry, feeding the textpick rows on group/attribute
-    /// params. One entry: the selected node's input.
-    pub pick_cache: Option<((String, u64), PickLists)>,
     pub ui_context: cce_ui::context::UiContext,
 }
 
@@ -1030,7 +995,7 @@ impl State {
     pub fn pane_layout_json(&self) -> String {
         let vs = self.project_view_state();
         let splitters = vs.splitters.map(|(a, b)| ((a * 1000.0).round(), (b * 1000.0).round()));
-        let plates = (self.params_hud_width.round(), self.floating_spreadsheet_height.round());
+        let plates = (self.params.params_hud_width.round(), self.floating_spreadsheet_height.round());
         // The display settings ride the file now, so changing one is an
         // edit the title's asterisk should show.
         let display = serde_json::to_string(&vs.display).unwrap_or_default();
@@ -1077,7 +1042,7 @@ impl State {
                 origin_size: self.view.origin_size,
                 grid_thickness: self.view.grid_thickness,
                 grid_color: self.viewport().grid_color,
-                params_plate: self.params_plate,
+                params_plate: self.params.params_plate,
                 node_wire_style: self.ui_context[self.slots.content].inner().chosen_wire_style().map(|w| w.name().to_string()).unwrap_or_default(),
                 show_point_markers: self.view.show_point_markers,
                 show_point_numbers: self.view.show_point_numbers,
@@ -1146,7 +1111,7 @@ impl State {
         self.view.camera_pivot_size = v.camera_pivot_size;
         self.view.origin_size = v.origin_size;
         self.view.grid_thickness = v.grid_thickness;
-        self.params_plate = v.params_plate;
+        self.params.params_plate = v.params_plate;
         self.set_node_wire_style(cce_ui::widget::display::WireStyle::parse(&v.node_wire_style));
         self.circular_network_pane = self.is_detached_network || v.circular_pane;
         self.view.show_point_markers = v.show_point_markers;
@@ -1616,10 +1581,10 @@ impl State {
         let Some(first) = rows.iter().map(|r| r.1).reduce(f32::min) else {
             // No rows: the plate is the small circle it collapses to, and
             // with no plate there is nothing at all.
-            return if self.params_plate { self.params_dot_rect() } else { (x, y, w, 0.0) };
+            return if self.params.params_plate { self.params_dot_rect() } else { (x, y, w, 0.0) };
         };
         let last = rows.iter().map(|r| r.1 + r.3).fold(y, f32::max);
-        let pad = if self.params_plate { (first - y).max(PARAMS_CLAIM_PAD) } else { PARAMS_CLAIM_PAD };
+        let pad = if self.params.params_plate { (first - y).max(PARAMS_CLAIM_PAD) } else { PARAMS_CLAIM_PAD };
         (x, y, w, (last + pad).min(y + h) - y)
     }
 
@@ -1641,7 +1606,7 @@ impl State {
     /// 1). `None` with the plate off or the HUD not shown.
     pub fn params_plate_target(&self) -> Option<[f32; 5]> {
         let (_, _, w, h) = self.positions[PARAM_IDX];
-        if !self.params_plate || w <= 0.0 || h <= 0.0 || self.pane_is_stubbed(PARAM_IDX) || !self.ui_context[self.slots.param].visible() {
+        if !self.params.params_plate || w <= 0.0 || h <= 0.0 || self.pane_is_stubbed(PARAM_IDX) || !self.ui_context[self.slots.param].visible() {
             return None;
         }
         let (cx, cy, cw, ch) = self.params_claim();
@@ -1653,10 +1618,10 @@ impl State {
     /// exponential, so frame-rate independent. True while it moves.
     pub fn animate_params_plate(&mut self, dt: f32) -> bool {
         let Some(target) = self.params_plate_target() else {
-            return self.params_plate_shown.take().is_some();
+            return self.params.params_plate_shown.take().is_some();
         };
-        let Some(shown) = self.params_plate_shown.as_mut() else {
-            self.params_plate_shown = Some(target);
+        let Some(shown) = self.params.params_plate_shown.as_mut() else {
+            self.params.params_plate_shown = Some(target);
             return true;
         };
         let k = 1.0 - (-16.0 * dt.max(1e-4)).exp();
@@ -1675,7 +1640,7 @@ impl State {
 
     /// The params plate as it is drawn this frame, and its corner radii.
     pub fn params_plate_drawn(&self) -> Option<([f32; 5], f32)> {
-        let shown = self.params_plate_shown.or_else(|| self.params_plate_target())?;
+        let shown = self.params.params_plate_shown.or_else(|| self.params_plate_target())?;
         let [_, _, w, h, round] = shown;
         let plate_r = cce_ui::layout::plate_corner_radius();
         let r = plate_r + ((w.min(h) * 0.5) - plate_r) * round.clamp(0.0, 1.0);
@@ -1978,7 +1943,7 @@ impl State {
         let gap = 18.0_f32;
         let (vx, vy, vw, vh) = self.positions[VIEWPORT_IDX];
         let (vx, vy, vw, vh) = if vw > 0.0 && vh > 0.0 { (vx, vy, vw, vh) } else { (0.0, 0.0, self.width, self.height - STATUS_H) };
-        let w = self.params_hud_width.clamp(PARAMS_HUD_MIN_W, (vw - 2.0 * gap).max(PARAMS_HUD_MIN_W));
+        let w = self.params.params_hud_width.clamp(PARAMS_HUD_MIN_W, (vw - 2.0 * gap).max(PARAMS_HUD_MIN_W));
         let (x, top) = (vx + vw - gap - w, vy + gap);
         let mut bottom = vy + vh - gap;
         for idx in [SPREADSHEET_IDX, PLAYBAR_IDX] {
@@ -2165,12 +2130,12 @@ impl State {
     /// writing nothing is the only right thing to do with them.
     pub fn sync_parameters_to_project(&mut self) {
         // The HUD showing the visualizers writes back to them, not a node.
-        if self.vis_hud.is_some() {
+        if self.params.vis_hud.is_some() {
             self.sync_visualizer_hud_back();
             return;
         }
         let mut file_to_open = None;
-        if !self.is_detached_network && self.param_pane_source == self.param_pane_target() {
+        if !self.is_detached_network && self.params.param_pane_source == self.param_pane_target() {
             if let Some(slot_idx) = self.param_editor_selected() {
                 let updated_params = self.param().node_params();
                 // Live pane state, so a pane toggle only fires the visibility
@@ -2766,13 +2731,13 @@ impl State {
     pub fn sync_parameters_pane(&mut self) {
         // The attribute visualizers, when the HUD shows them — until another
         // node is picked, which takes the HUD back.
-        if self.vis_hud.is_some() && self.param_pane_target() != self.vis_hud_from {
-            self.vis_hud = None;
+        if self.params.vis_hud.is_some() && self.param_pane_target() != self.params.vis_hud_from {
+            self.params.vis_hud = None;
         }
-        if self.vis_hud.is_some() && !self.is_detached_network {
+        if self.params.vis_hud.is_some() && !self.is_detached_network {
             let rows = param_display(&self.visualizer_hud_params());
             self.param_mut().set_display_params(&rows);
-            self.param_pane_source = None;
+            self.params.param_pane_source = None;
             return;
         }
         // Selection reads through the param-editor accessors: whichever
@@ -2795,7 +2760,7 @@ impl State {
         let params = self.add_pick_lists(params);
         let params = self.present_float2_rows(params);
         self.param_mut().set_display_params(&params);
-        self.param_pane_source = if self.is_detached_network { None } else { self.param_pane_target() };
+        self.params.param_pane_source = if self.is_detached_network { None } else { self.param_pane_target() };
     }
 
     /// The shown node's `float2` rows over the span each already has:
@@ -2824,13 +2789,13 @@ impl State {
                 return params;
             }
             let id = node.id.clone();
-            if self.float2_spans.as_ref().is_none_or(|(n, _)| *n != id) {
-                self.float2_spans = Some((id, Vec::new()));
+            if self.params.float2_spans.as_ref().is_none_or(|(n, _)| *n != id) {
+                self.params.float2_spans = Some((id, Vec::new()));
             }
             rows
         };
         let held = self.drag_widget == Some(crate::slots::PARAM_IDX);
-        let Some((_, spans)) = self.float2_spans.as_mut() else { return params };
+        let Some((_, spans)) = self.params.float2_spans.as_mut() else { return params };
         for (key, name, v) in rows {
             let Some(row) = params.iter_mut().find(|r| r.0 == key && r.2.starts_with("float2")) else { continue };
             let kept = spans.iter().find(|(n, _)| *n == name).map(|(_, r)| *r);
@@ -2922,13 +2887,13 @@ impl State {
             };
             // The span the row already has stands through a drag: a new
             // one rebuilds the pane, which would drop the slider being held.
-            let kept = self.value_row_span.as_ref().filter(|(id, _)| *id == node_id).map(|(_, r)| *r);
+            let kept = self.params.value_row_span.as_ref().filter(|(id, _)| *id == node_id).map(|(_, r)| *r);
             let held = self.drag_widget == Some(crate::slots::PARAM_IDX);
             if let Some(row) = params.iter_mut().find(|r| r.0 == key && r.2 == "text") {
                 if let Some((ty, text, r)) = value_row_control(&row.1, width, ball, kept, held) {
                     row.2 = ty;
                     row.1 = text;
-                    self.value_row_span = Some((node_id.clone(), r));
+                    self.params.value_row_span = Some((node_id.clone(), r));
                 }
             }
         }
@@ -3001,7 +2966,7 @@ impl State {
             .map(|n| n.id.clone());
         let Some(input_id) = input_id else { return PickLists::default() };
         let key = (input_id.clone(), self.scene.rt_geometry_version);
-        if let Some((k, lists)) = &self.pick_cache {
+        if let Some((k, lists)) = &self.params.pick_cache {
             if *k == key {
                 return lists.clone();
             }
@@ -3051,7 +3016,7 @@ impl State {
         attrs.push("Pos".to_string());
         attrs.push("Col".to_string());
         let lists = PickLists { groups: groups.into_iter().collect(), attrs, widths };
-        self.pick_cache = Some((key, lists.clone()));
+        self.params.pick_cache = Some((key, lists.clone()));
         lists
     }
 
@@ -3647,7 +3612,7 @@ impl State {
         options.push("Copy Parameter".to_string());
         actions.push(ParamMenuAction::Separator);
         actions.push(ParamMenuAction::CopyParameter);
-        if self.copied_param.is_some() {
+        if self.params.copied_param.is_some() {
             options.push("Paste Relative Reference".to_string());
             actions.push(ParamMenuAction::PasteRelative);
             options.push("Paste Absolute Reference".to_string());
@@ -3928,12 +3893,12 @@ impl State {
         match action {
             ParamMenuAction::Separator | ParamMenuAction::Info => return,
             ParamMenuAction::CopyParameter => {
-                self.copied_param = Some((node_id.to_string(), pname.to_string()));
+                self.params.copied_param = Some((node_id.to_string(), pname.to_string()));
                 self.update_status_text(&format!("Copied {node_label}/{pname} — paste it as a reference on another parameter."));
                 return;
             }
             ParamMenuAction::PasteRelative | ParamMenuAction::PasteAbsolute => {
-                let Some((src_id, src_p)) = self.copied_param.clone() else {
+                let Some((src_id, src_p)) = self.params.copied_param.clone() else {
                     self.update_status_text("Nothing copied — Copy Parameter first.");
                     return;
                 };
@@ -5496,7 +5461,18 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 world_unit: cce_ui::units::Unit::parse(&settings.viewport.world_unit)
                     .unwrap_or(cce_ui::units::Unit::Mm),
             },
-            param_pane_source: None,
+            params: ParamsPane {
+                param_pane_source: None,
+                params_plate: settings.viewport.params_plate,
+                params_plate_shown: None,
+                params_hud_width: 300.0,
+                value_row_span: None,
+                float2_spans: None,
+                pick_cache: None,
+                vis_hud: None,
+                vis_hud_from: None,
+                copied_param: None,
+            },
             shortcut_manager,
             pending_command: None,
             exit_requested: false,
@@ -5517,7 +5493,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             playbar_menu_active: false,
             playbar_menu_actions: Vec::new(),
             param_menu_target: None,
-            copied_param: None,
             rename_target: None,
             network_menu_active: false,
             network_menu_actions: Vec::new(),
@@ -5621,7 +5596,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 number_alpha_key: None,
             },
             show_network: true,
-            params_plate: settings.viewport.params_plate,
             show_viewport: true,
             show_parameters: true,
             show_spreadsheet: false,
@@ -5650,10 +5624,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             last_project_check: std::time::Instant::now(),
             needs_autosave: false,
             last_autosave_time: std::time::Instant::now(),
-            // Cells and gaps render as ONE surface (the graph's bg_color is
-            // the cell tint): the checkerboard grout is off by design; the
-            // drop-target glow (render.rs) carries the only cell highlight.
-            params_plate_shown: None,
             last_design_mod_time: {
                 let design_path = DesignSettings::file_path();
                 std::fs::metadata(&design_path).and_then(|m| m.modified()).ok()
@@ -5675,7 +5645,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 mod_time
             },
             app_drag: None,
-            params_hud_width: 300.0,
             floating_spreadsheet_height: 250.0,
             window_configured: false,
             pending_plates: None,
@@ -5726,11 +5695,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 overlay_vertex_alpha: Vec::new(),
             },
             spreadsheet_points: Vec::new(),
-            vis_hud: None,
-            vis_hud_from: None,
-            value_row_span: None,
-            float2_spans: None,
-            pick_cache: None,
             ui_context,
         };
 
@@ -6326,8 +6290,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 self.network_pan_view(dc, dr);
             }
             Action::ToggleParamsPlate => {
-                self.params_plate = !self.params_plate;
-                self.update_status_text(if self.params_plate {
+                self.params.params_plate = !self.params.params_plate;
+                self.update_status_text(if self.params.params_plate {
                     "Parameters plate on, fitted to the rows."
                 } else {
                     "Parameters plate off — the controls stand on the scene."

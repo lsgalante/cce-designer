@@ -120,7 +120,7 @@ impl State {
         let plates = if self.width > 1.0 && self.height > 1.0 {
             Some(PlateGeometry {
                 spreadsheet_height: (self.floating_spreadsheet_height / self.height).min(1.0),
-                hud_width: Some((self.params_hud_width / self.width).min(1.0)),
+                hud_width: Some((self.params.params_hud_width / self.width).min(1.0)),
                 params_width: None,
             })
         } else {
@@ -330,7 +330,7 @@ impl State {
         let Some(hud) = pg.hud_width.or(pg.params_width) else { return };
         let all = [pg.spreadsheet_height, hud];
         if self.width > 1.0 && self.height > 1.0 && all.iter().all(|&f| sane(f)) {
-            self.params_hud_width = hud * self.width;
+            self.params.params_hud_width = hud * self.width;
             self.floating_spreadsheet_height = pg.spreadsheet_height * self.height;
             self.rebuild_positions();
             self.apply_layout();

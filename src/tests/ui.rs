@@ -837,7 +837,7 @@ fn test_plate_geometry_round_trips_through_save() {
     a.resize(1600.0, 900.0, 1.0);
     a.execute_menu_action("Show Spreadsheet Pane");
     assert!(a.show_spreadsheet);
-    a.params_hud_width = 420.0;
+    a.params.params_hud_width = 420.0;
     a.floating_spreadsheet_height = 300.0;
     a.rebuild_positions();
     a.save_to_file(&dir).expect("save");
@@ -849,21 +849,21 @@ fn test_plate_geometry_round_trips_through_save() {
     let mut b = State::new(false);
     b.resize(1600.0, 900.0, 1.0);
     b.load_from_file(&dir).expect("load");
-    assert!((b.params_hud_width - 420.0).abs() < 0.5, "HUD width: {}", b.params_hud_width);
+    assert!((b.params.params_hud_width - 420.0).abs() < 0.5, "HUD width: {}", b.params.params_hud_width);
     assert!((b.floating_spreadsheet_height - 300.0).abs() < 0.5, "spreadsheet height: {}", b.floating_spreadsheet_height);
 
     // Half the window: the same fractions land at half the pixels.
     let mut c = State::new(false);
     c.resize(800.0, 450.0, 1.0);
     c.load_from_file(&dir).expect("load half-size");
-    assert!((c.params_hud_width - 210.0).abs() < 0.5, "scaled HUD width: {}", c.params_hud_width);
+    assert!((c.params.params_hud_width - 210.0).abs() < 0.5, "scaled HUD width: {}", c.params.params_hud_width);
     assert!((c.floating_spreadsheet_height - 150.0).abs() < 0.5, "scaled spreadsheet height: {}", c.floating_spreadsheet_height);
 
     // A detached pane window keeps its own plates.
     let mut d = State::new(true);
-    let before = d.params_hud_width;
+    let before = d.params.params_hud_width;
     d.load_from_file(&dir).expect("load detached");
-    assert_eq!(d.params_hud_width, before);
+    assert_eq!(d.params.params_hud_width, before);
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -881,7 +881,7 @@ fn plates_loaded_before_the_first_configure_fit_the_real_window() {
     let mut a = State::new(false);
     a.resize(1400.0, 1080.0, 1.0);
     a.execute_menu_action("Show Spreadsheet Pane");
-    a.params_hud_width = 310.0;
+    a.params.params_hud_width = 310.0;
     a.floating_spreadsheet_height = 100.0;
     a.rebuild_positions();
     a.save_to_file(&dir).expect("save");
@@ -891,7 +891,7 @@ fn plates_loaded_before_the_first_configure_fit_the_real_window() {
     assert!(!b.window_configured);
     b.load_from_file(&dir).expect("load");
     b.resize(1400.0, 1080.0, 1.0);
-    assert!((b.params_hud_width - 310.0).abs() < 0.5, "HUD width: {}", b.params_hud_width);
+    assert!((b.params.params_hud_width - 310.0).abs() < 0.5, "HUD width: {}", b.params.params_hud_width);
     assert!((b.floating_spreadsheet_height - 100.0).abs() < 0.5, "spreadsheet height: {}", b.floating_spreadsheet_height);
     let pg = b.project_view_state().plates.expect("plates");
     assert!((pg.hud_width.unwrap() - 310.0 / 1400.0).abs() < 1e-4, "a save writes back what was loaded: {:?}", pg);
@@ -899,7 +899,7 @@ fn plates_loaded_before_the_first_configure_fit_the_real_window() {
     // Only the FIRST configure: a later window resize keeps the plates'
     // pixels, as it always has.
     b.resize(1000.0, 1080.0, 1.0);
-    assert!((b.params_hud_width - 310.0).abs() < 0.5, "a later resize rescaled the plate: {}", b.params_hud_width);
+    assert!((b.params.params_hud_width - 310.0).abs() < 0.5, "a later resize rescaled the plate: {}", b.params.params_hud_width);
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -915,7 +915,7 @@ fn a_project_loaded_before_the_first_configure_opens_clean() {
     fs::create_dir_all(&dir).unwrap();
     let mut a = State::new(false);
     a.resize(1400.0, 1080.0, 1.0);
-    a.params_hud_width = 310.0;
+    a.params.params_hud_width = 310.0;
     a.floating_spreadsheet_height = 180.0;
     a.rebuild_positions();
     a.save_to_file(&dir).expect("save");
@@ -945,7 +945,7 @@ fn a_shrunk_window_does_not_shrink_the_plates_for_good() {
     let mut s = State::new(false);
     s.resize(1600.0, 900.0, 1.0);
     s.execute_menu_action("Show Spreadsheet Pane");
-    s.params_hud_width = 650.0;
+    s.params.params_hud_width = 650.0;
     s.floating_spreadsheet_height = 600.0;
     s.rebuild_positions();
 
@@ -958,7 +958,7 @@ fn a_shrunk_window_does_not_shrink_the_plates_for_good() {
 
     s.resize(1600.0, 900.0, 1.0);
     s.rebuild_positions();
-    assert!((s.params_hud_width - 650.0).abs() < 0.5, "HUD width: {}", s.params_hud_width);
+    assert!((s.params.params_hud_width - 650.0).abs() < 0.5, "HUD width: {}", s.params.params_hud_width);
     assert!((s.floating_spreadsheet_rect().3 - 600.0).abs() < 0.5, "spreadsheet height: {:?}", s.floating_spreadsheet_rect());
     assert!((s.positions[crate::slots::PARAM_IDX].2 - 650.0).abs() < 0.5, "drawn HUD width: {:?}", s.positions[crate::slots::PARAM_IDX]);
 }
@@ -976,7 +976,7 @@ fn a_detached_windows_save_does_not_reset_the_main_layout() {
 
     let mut main = State::new(false);
     main.resize(1600.0, 900.0, 1.0);
-    main.params_hud_width = 650.0;
+    main.params.params_hud_width = 650.0;
     main.floating_spreadsheet_height = 420.0;
     main.viewport_mut().rotation_x = 0.7;
     main.rebuild_positions();
@@ -992,7 +992,7 @@ fn a_detached_windows_save_does_not_reset_the_main_layout() {
     main.load_sync_channel(&channel, true).expect("main reloads");
 
     assert!(main.doc.fs_root.children.iter().any(|c| c.name == "synced_edit"), "the tree edit must sync");
-    assert!((main.params_hud_width - 650.0).abs() < 0.5, "HUD width: {}", main.params_hud_width);
+    assert!((main.params.params_hud_width - 650.0).abs() < 0.5, "HUD width: {}", main.params.params_hud_width);
     assert!((main.floating_spreadsheet_height - 420.0).abs() < 0.5, "spreadsheet height: {}", main.floating_spreadsheet_height);
     assert!((main.viewport().rotation_x - 0.7).abs() < 1e-6, "camera: {}", main.viewport().rotation_x);
     assert!(main.app_drag.is_some(), "a plate drag in progress survives the reload");
@@ -1013,7 +1013,7 @@ fn a_detached_window_leaves_the_channels_layout_alone() {
 
     let mut main = State::new(false);
     main.resize(1600.0, 900.0, 1.0);
-    main.params_hud_width = 650.0;
+    main.params.params_hud_width = 650.0;
     main.viewport_mut().rotation_x = 0.7;
     main.rebuild_positions();
     main.save_to_file(&channel).expect("main writes the channel");
@@ -1076,7 +1076,7 @@ fn test_plate_resize_dirties_the_title_until_saved() {
     state.set_pane_collapsed(crate::slots::SPREADSHEET_IDX, true);
     assert!(state.has_unsaved_changes(), "a collapse is saved state too");
     state.save_to_file(&dir).expect("save");
-    state.params_hud_width += 40.0;
+    state.params.params_hud_width += 40.0;
     assert!(state.has_unsaved_changes(), "a HUD resize is saved state too");
 
     let _ = fs::remove_dir_all(&dir);
@@ -1226,7 +1226,7 @@ fn a_point_number_under_a_plate_is_not_drawn() {
     let mut redraw = false;
     let slot = geo(&state.doc.fs_root).children.iter().position(|c| c.node_type == "sphere").unwrap();
     state.apply_action(McpAction::Select { slot }, &mut redraw).unwrap();
-    state.params_plate = true;
+    state.params.params_plate = true;
     state.positions[crate::slots::PARAM_IDX] = (800.0, 200.0, 200.0, 690.0);
     state.slots.get_dyn_mut(&mut state.ui_context, crate::slots::PARAM_IDX).set_rect(800.0, 200.0, 200.0, 690.0);
     let plate = state.params_claim();
@@ -1239,9 +1239,9 @@ fn a_point_number_under_a_plate_is_not_drawn() {
 
     // Without its plate the HUD hides only what its rows stand on: the
     // band it claims is narrower, and more numbers show.
-    state.params_plate = false;
+    state.params.params_plate = false;
     assert!(state.point_number_labels().len() >= fewer.len());
-    state.params_plate = true;
+    state.params.params_plate = true;
     state.positions[crate::slots::PARAM_IDX] = (px, py, pw, ph);
     state.slots.get_dyn_mut(&mut state.ui_context, crate::slots::PARAM_IDX).set_rect(px, py, pw, ph);
     assert_eq!(state.point_number_labels().len(), all.len());
@@ -1339,7 +1339,7 @@ fn the_params_hud_is_under_the_plates_and_stops_above_the_bottom_ones() {
     assert_eq!(hy3 + hh3, state.positions[PLAYBAR_IDX].1 - 18.0, "above the playbar");
     state.execute_menu_action("Show Spreadsheet Pane");
     // Its own width still sizes it, about its right edge.
-    state.params_hud_width = 420.0;
+    state.params.params_hud_width = 420.0;
     state.rebuild_positions();
     assert_eq!(state.positions[PARAM_IDX].2, 420.0);
     assert_eq!(state.positions[PARAM_IDX].0 + 420.0, hud.0 + hud.2, "it keeps its right edge");
@@ -1351,7 +1351,7 @@ fn the_params_hud_is_under_the_plates_and_stops_above_the_bottom_ones() {
     let mut redraw = false;
     let slot = geo(&state.doc.fs_root).children.iter().position(|c| c.node_type == "sphere").unwrap();
     state.apply_action(McpAction::Select { slot }, &mut redraw).unwrap();
-    state.params_plate = true;
+    state.params.params_plate = true;
     state.rebuild_positions();
     state.apply_layout();
     let (hx, hy, hw, hh) = state.positions[PARAM_IDX];
@@ -1408,7 +1408,7 @@ fn a_node_name_on_a_light_floor_is_written_dark() {
 #[test]
 fn the_params_plate_fits_its_rows() {
     let mut state = State::new(false);
-    assert!(state.params_plate, "the plate is on by default");
+    assert!(state.params.params_plate, "the plate is on by default");
     assert_eq!(state.command_toggle_state("toggle_params_plate"), Some(true));
     // A HUD with no rows collapses its plate to the small circle, and
     // claims that; with the plate off it claims nothing.
@@ -1419,7 +1419,7 @@ fn the_params_plate_fits_its_rows() {
         assert_eq!(state.params_claim(), state.params_dot_rect());
     }
     assert!(state.run_command("toggle_params_plate"));
-    assert!(!state.params_plate);
+    assert!(!state.params.params_plate);
     if !state.params_have_rows() {
         assert_eq!(state.params_claim().3, 0.0);
     }
@@ -1449,7 +1449,7 @@ fn the_params_plate_fits_its_rows() {
     // With the plate: it runs as far under the last row as the first
     // row stands under the HUD's top, and no further.
     assert!(state.run_command("toggle_params_plate"));
-    assert!(state.params_plate);
+    assert!(state.params.params_plate);
     let (_, cy, _, ch) = state.params_claim();
     let first = rows.iter().filter(|r| r.3 > 0.0).map(|r| r.1).fold(f32::INFINITY, f32::min);
     assert_eq!(cy, py);
@@ -1990,7 +1990,7 @@ fn the_viewport_menu_turns_into_its_pages_and_back() {
     move_to(&mut state, context_menu::x() + 20.0, context_menu::row_y(vis) + 12.0);
     press(&mut state);
     assert!(!state.viewport_menu_open() && !state.dialog_visible());
-    assert!(state.vis_hud.is_some(), "the visualizers are in the params HUD");
+    assert!(state.params.vis_hud.is_some(), "the visualizers are in the params HUD");
 }
 
 /// The primitive and vertex overlays read off the scene as the points'
@@ -2679,7 +2679,7 @@ fn the_dialog_plate_is_the_menu_plate() {
     let r = cce_ui::layout::menu_corner_radius();
     let rect = cce_ui::scene::layout::Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 };
     assert_eq!(dialog.corner_style(rect).map(|(r, _)| r), (r > 0.0).then_some(r));
-    for file in ["src/dialog.rs", "src/render.rs", "src/app.rs", "src/app/input.rs", "src/app/document.rs", "src/app/network.rs", "src/app/camera.rs", "src/app/view.rs", "src/app/scene.rs", "src/app/stage.rs", "src/app/markers.rs"] {
+    for file in ["src/dialog.rs", "src/render.rs", "src/app.rs", "src/app/input.rs", "src/app/document.rs", "src/app/network.rs", "src/app/camera.rs", "src/app/view.rs", "src/app/scene.rs", "src/app/stage.rs", "src/app/markers.rs", "src/app/params.rs"] {
         let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(file)).unwrap();
         assert!(!src.contains("dialog/compression") && !src.contains("DIALOG_COMPRESSION"), "{file} overrides the menu material");
     }

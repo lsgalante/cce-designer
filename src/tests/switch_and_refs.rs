@@ -836,7 +836,7 @@ fn the_row_menu_copies_and_pastes_references() {
     let sphere_id = state.current_dir().children[sphere].id.clone();
     let ball_id = state.current_dir().children[ball].id.clone();
     state.run_param_action(&sphere_id, "radius", ParamMenuAction::CopyParameter);
-    assert_eq!(state.copied_param, Some((sphere_id.clone(), "radius".to_string())));
+    assert_eq!(state.params.copied_param, Some((sphere_id.clone(), "radius".to_string())));
     show(&mut state, ball);
     let (x, y) = row_center(&state, "Radius");
     state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });

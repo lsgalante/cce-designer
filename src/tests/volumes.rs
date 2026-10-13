@@ -1254,7 +1254,7 @@ fn attribute_visualizers_are_edited_in_the_params_hud() {
     // In the HUD, not the dialog: Add and Done, nothing to edit yet.
     assert!(state.run_command("attribute_visualizers"));
     assert!(!state.dialog_visible());
-    assert_eq!(state.vis_hud, Some(0));
+    assert_eq!(state.params.vis_hud, Some(0));
     assert_eq!(keys(&state), ["Add Visualizer", "Done"]);
 
     // Add one: it is edited, on the first attribute worth showing.
@@ -1286,9 +1286,9 @@ fn attribute_visualizers_are_edited_in_the_params_hud() {
     pane(&mut state, "Enabled", "false");
     assert!(!state.view.visualizers[0].enabled);
     pane(&mut state, "Add Visualizer", "clicked");
-    assert_eq!((state.view.visualizers.len(), state.vis_hud), (2, Some(1)));
+    assert_eq!((state.view.visualizers.len(), state.params.vis_hud), (2, Some(1)));
     pane(&mut state, "Visualizer", "#1 N");
-    assert_eq!(state.vis_hud, Some(0));
+    assert_eq!(state.params.vis_hud, Some(0));
 
     // Kept with the display settings, at the frame.
     state.save_settings();
@@ -1300,7 +1300,7 @@ fn attribute_visualizers_are_edited_in_the_params_hud() {
     pane(&mut state, "Delete Visualizer", "clicked");
     assert_eq!(state.view.visualizers.len(), 1);
     pane(&mut state, "Done", "clicked");
-    assert_eq!(state.vis_hud, None);
+    assert_eq!(state.params.vis_hud, None);
 
     // Picking a node also hands the HUD back.
     assert!(state.run_command("attribute_visualizers"));
@@ -1308,7 +1308,7 @@ fn attribute_visualizers_are_edited_in_the_params_hud() {
     let slot = geo(&state.doc.fs_root).children.iter().position(|c| c.node_type == "sphere").unwrap();
     state.apply_action(McpAction::Select { slot }, &mut redraw).unwrap();
     state.sync_parameters_pane();
-    assert_eq!(state.vis_hud, None);
+    assert_eq!(state.params.vis_hud, None);
     assert!(keys(&state).contains(&"Radius".to_string()), "the sphere's rows");
 }
 
@@ -2207,9 +2207,9 @@ fn the_suite_does_not_write_the_users_own_settings() {
     // dirty and `execute_action` saves at the end of the action. (It was
     // the network plate's toggle, retired with the plate.)
     let mut state = State::new(false);
-    let plate = state.params_plate;
+    let plate = state.params.params_plate;
     assert!(state.run_command("toggle_params_plate"));
-    assert_ne!(state.params_plate, plate, "the toggle did not flip the plate");
+    assert_ne!(state.params.params_plate, plate, "the toggle did not flip the plate");
 
     // Without this the test passes on a save that never happened, which
     // is exactly the bug wearing a different face.

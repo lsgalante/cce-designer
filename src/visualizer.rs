@@ -14,7 +14,7 @@
 //! `attribute_visualizers` command). Several apply in order, the later over
 //! the earlier, as a chain of Visualize nodes composites.
 //!
-//! They are edited in the params HUD (`State::vis_hud`, since 2026-10-06;
+//! They are edited in the params HUD (`State::params.vis_hud`, since 2026-10-06;
 //! they were the dialog's Visualizers / VisualizerEdit modes): a Visualizer
 //! dropdown picks the one edited, Add and Delete beside it, its settings as
 //! ordinary rows under it, and Done back to the selected node. The rows are
@@ -371,8 +371,8 @@ impl State {
     /// Show the attribute visualizers in the params HUD, editing the first
     /// (or `i`), in place of the selected node's parameters.
     pub(crate) fn open_visualizers_hud(&mut self) {
-        self.vis_hud = Some(self.vis_hud.unwrap_or(0).min(self.view.visualizers.len().saturating_sub(1)));
-        self.vis_hud_from = self.param_pane_target();
+        self.params.vis_hud = Some(self.params.vis_hud.unwrap_or(0).min(self.view.visualizers.len().saturating_sub(1)));
+        self.params.vis_hud_from = self.param_pane_target();
         if !self.show_parameters {
             self.execute_menu_action("Show Parameters Pane");
         }
@@ -382,7 +382,7 @@ impl State {
 
     /// Back to the selected node's parameters.
     pub(crate) fn close_visualizers_hud(&mut self) {
-        if self.vis_hud.take().is_some() {
+        if self.params.vis_hud.take().is_some() {
             self.sync_parameters_pane();
         }
     }
@@ -405,7 +405,7 @@ impl State {
             d
         };
         let mut out = Vec::new();
-        let editing = self.vis_hud.filter(|&i| i < self.view.visualizers.len());
+        let editing = self.params.vis_hud.filter(|&i| i < self.view.visualizers.len());
         if let Some(i) = editing {
             let labels: Vec<String> = (0..self.view.visualizers.len()).map(|k| self.visualizer_pick_label(k)).collect();
             out.push(grouped(p(HUD_PICK, format!("choice:{}", labels.join(",")), labels[i].clone(), "Visualizer"), "pick"));
@@ -461,22 +461,22 @@ impl State {
             if def.text() == value {
                 continue;
             }
-            let i = self.vis_hud.unwrap_or(0);
+            let i = self.params.vis_hud.unwrap_or(0);
             match def.name.as_str() {
                 HUD_PICK => {
                     if let Some(k) = (0..self.view.visualizers.len()).find(|&k| self.visualizer_pick_label(k) == value) {
-                        self.vis_hud = Some(k);
+                        self.params.vis_hud = Some(k);
                     }
                     reread = true;
                 }
                 HUD_ADD if value == "clicked" => {
                     let k = self.add_visualizer();
-                    self.vis_hud = Some(k);
+                    self.params.vis_hud = Some(k);
                     reread = true;
                 }
                 HUD_DELETE if value == "clicked" => {
                     self.delete_visualizer(i);
-                    self.vis_hud = Some(i.min(self.view.visualizers.len().saturating_sub(1)));
+                    self.params.vis_hud = Some(i.min(self.view.visualizers.len().saturating_sub(1)));
                     reread = true;
                 }
                 HUD_DONE if value == "clicked" => {

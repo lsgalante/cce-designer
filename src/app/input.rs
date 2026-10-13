@@ -452,8 +452,8 @@ impl State {
         match drag {
             AppDrag::HudResize { start_w, start_mouse_x } => {
                 let dx = self.cursor_x - start_mouse_x;
-                self.params_hud_width = (start_w - dx).max(PARAMS_HUD_MIN_W);
-                self.params_hud_width = self.params_hud_rect().2;
+                self.params.params_hud_width = (start_w - dx).max(PARAMS_HUD_MIN_W);
+                self.params.params_hud_width = self.params_hud_rect().2;
                 self.rebuild_positions();
                 self.apply_layout();
             }

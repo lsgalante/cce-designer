@@ -951,7 +951,7 @@ old text Center a float3 from the load on. Tests build parameters with
   same day; it was a fixed ±1000, which a drag crossed in hundreds): ± the
   smallest power of ten, at least one, whose middle half holds every
   component — 1.00 drags over ±10, 9.6 over ±100. The span in use
-  (`State::value_row_span`, by node) is KEPT while the value stays between
+  (`State::params.value_row_span`, by node) is KEPT while the value stays between
   a twentieth and nineteen twentieths of it, and is never re-chosen during
   a drag in the pane (`drag_widget == PARAM_IDX`): a new span is a new
   row type, which rebuilds the pane and would drop the slider being held.
@@ -1026,7 +1026,7 @@ old text Center a float3 from the load on. Tests build parameters with
   the Value row's rule (`value_row_span`): ± the smallest power of ten
   whose middle half holds both ends, kept while the value stays in it and
   through a drag in the pane (`State::present_float2_rows`, per
-  parameter, `State::float2_spans`), and widened rather than clamped by a
+  parameter, `State::params.float2_spans`), and widened rather than clamped by a
   value typed past an end. So it holds what a `float` held. It has no
   `range()`: the pane chooses the span. Read with `node_param_vec2`. Each
   component may be an expression, as a float3's are, and `.x` / `.y` read
@@ -2976,7 +2976,7 @@ the HUD's rect, which runs the viewport's height. **With no rows to show
 circle** (`PARAMS_DOT_D`, 36 px) in the HUD's top right corner, which the
 HUD claims, and grows back out of it when rows return. `params_plate_target`
 is where it is heading, `[x, y, w, h, round]` (round 1 the circle);
-`State::params_plate_shown` eases toward it each tick
+`State::params.params_plate_shown` eases toward it each tick
 (`animate_params_plate`, exponential like the drop glow);
 `params_plate_drawn` is the frame's, its corners rounding toward half the
 side. Settled on the rows it is the bevelled plate every pane wears; the
@@ -2986,7 +2986,7 @@ radius is a rounded square and not a circle — and the rolled edge toward a
 dot's, cce-browser's bar-from-its-corner-control morph. The rows are
 clipped to the plate as drawn, so they are revealed as it grows. A circle
 has no edge to resize. `the_params_plate_collapses_to_a_circle_with_no_rows`. It can go, as the network's can, leaving the controls
-directly on the scene: `params_plate` on `State` and `ViewportSettings`
+directly on the scene: `params_plate` on `State::params` and `ViewportSettings`
 (state.kdl and the project's display block; ON by default and when absent
 — it was off for an afternoon, so a state.kdl from then says `false`), the
 `toggle_params_plate` command (**Parameters Plate**, a switch in the
@@ -3979,7 +3979,7 @@ the later over the earlier, as a chain of Visualize nodes composites.
   with the dialog's two-slider `Float2` control that only the Manual Range
   used). The `attribute_visualizers` command — the palette's row, which
   closes the palette, and a plain row of the viewport menu — sets
-  `State::vis_hud`, and the HUD shows, in place of the selected node's
+  `State::params.vis_hud`, and the HUD shows, in place of the selected node's
   parameters: a **Visualizer** dropdown picking the one edited (`#1 uv`),
   **Add Visualizer** and **Delete Visualizer**, its settings — Enabled,
   Attribute and Group as dropdowns over the scene's attributes and
