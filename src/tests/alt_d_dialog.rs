@@ -503,15 +503,15 @@ fn a_dialog_slider_drag_lands_without_re_evaluating_the_graph() {
 
     // The spin rows land the same way: a whole number over the row's
     // unit, re-baking only the guide mesh that reads it.
-    state.pending_grid = None;
-    state.pending_origin = None;
-    state.pending_pivot = None;
+    state.stage.pending_grid = None;
+    state.stage.pending_origin = None;
+    state.stage.pending_pivot = None;
     state.land_dialog_slider(&setting_row_id("Grid Thickness"), 40.0);
     assert!((state.view.grid_thickness - 0.04).abs() < 1e-6, "{}", state.view.grid_thickness);
-    assert!(state.pending_grid.is_some(), "the grid re-baked");
+    assert!(state.stage.pending_grid.is_some(), "the grid re-baked");
     state.land_dialog_slider(&setting_row_id("Origin Size"), 25.0);
     assert!((state.view.origin_size - 2.5).abs() < 1e-6, "{}", state.view.origin_size);
-    assert!(state.pending_origin.is_some(), "the origin re-baked");
+    assert!(state.stage.pending_origin.is_some(), "the origin re-baked");
     // Point Marker Size reads in world units, as Group Marker Size does
     // — one radius, one number in both rows.
     state.land_dialog_slider(&setting_row_id("Point Marker Size"), 0.05);
@@ -880,11 +880,11 @@ fn dialog_settings_write_reaches_the_owning_subnet() {
 fn a_grid_color_edit_reaches_the_grid_mesh() {
     let mut state = State::new(false);
     state.run_command("toggle_dialog");
-    state.pending_grid = None;
+    state.stage.pending_grid = None;
     state.apply_setting("Grid Color", "#ff0000");
     assert_eq!(state.viewport().grid_color, [1.0, 0.0, 0.0], "the row wrote the live colour");
     let want = cce_ui::color::to_linear_rgb([1.0, 0.0, 0.0]);
-    let grid = state.pending_grid.as_ref().expect("the grid re-baked");
+    let grid = state.stage.pending_grid.as_ref().expect("the grid re-baked");
     assert!(!grid.is_empty());
     assert!(grid.iter().all(|v| v.color == want), "the grid is baked in the edited colour");
 }
@@ -2124,7 +2124,7 @@ fn command_palette_opens_the_dialog_on_commands() {
 /// start, which is indistinguishable from one that failed to.
 #[test]
 fn nothing_shells_out_to_cce_cloud_any_more() {
-    for name in ["app.rs", "app/input.rs", "app/document.rs", "app/network.rs", "app/camera.rs", "app/view.rs", "app/scene.rs", "window.rs", "dialog.rs", "render.rs", "api.rs", "slots.rs"] {
+    for name in ["app.rs", "app/input.rs", "app/document.rs", "app/network.rs", "app/camera.rs", "app/view.rs", "app/scene.rs", "app/stage.rs", "window.rs", "dialog.rs", "render.rs", "api.rs", "slots.rs"] {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(name);
         let src = std::fs::read_to_string(&path).expect("read source");
         for needle in ["CloudPopup", "run_dmenu", "CloudPopupTracker"] {

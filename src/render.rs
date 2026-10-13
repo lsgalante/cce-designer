@@ -1475,7 +1475,7 @@ impl State {
         };
 
         let verts = crate::geometry::detail_vertices(&geom);
-        self.vertex_count_spheres = verts.len() as u32;
+        self.stage.vertex_count_spheres = verts.len() as u32;
         // Smooth shading bakes the light into a raster copy of the fill;
         // `verts` stays unlit for the path tracer, whose materials are
         // these colours. Same triangles in the same order, so the count
@@ -1492,7 +1492,7 @@ impl State {
         // The raster mesh uploads from this same cache on the next
         // `stage_renderer` flush.
         self.scene.rt_sphere_verts = verts;
-        self.spheres_dirty = true;
+        self.stage.spheres_dirty = true;
         self.scene.rt_geometry_version += 1;
         self.viewport_dirty = true;
 

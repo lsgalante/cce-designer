@@ -471,21 +471,21 @@ fn view_one_to_one_reaches_true_scale() {
     // render pass (a camera node's Position rewrite is cached by one).
     state.camera.active_camera = "Default Camera".to_string();
     state.scale = 1.0;
-    state.last_viewport.width = 1200;
-    state.last_viewport.height = 800;
-    state.last_viewport.camera_pos = Vec3::new(2.5, 1.8, 2.5);
-    state.last_viewport.pivot = Vec3::ZERO;
-    state.last_viewport.zoom = state.viewport().zoom;
+    state.stage.last_viewport.width = 1200;
+    state.stage.last_viewport.height = 800;
+    state.stage.last_viewport.camera_pos = Vec3::new(2.5, 1.8, 2.5);
+    state.stage.last_viewport.pivot = Vec3::ZERO;
+    state.stage.last_viewport.zoom = state.viewport().zoom;
     let before = state.view_scale_ratio();
     state.view_one_to_one();
-    state.last_viewport.zoom = state.viewport().zoom;
+    state.stage.last_viewport.zoom = state.viewport().zoom;
     let after = state.view_scale_ratio();
     assert!((after - 1.0).abs() < 1e-3, "ratio {after} (was {before})");
     assert!((state.world_unit_mm() - 10.0).abs() < 1e-4);
     // A millimetre unit needs the camera ~10× farther; still reachable.
     state.doc.world_unit = cce_ui::units::Unit::Mm;
     state.view_one_to_one();
-    state.last_viewport.zoom = state.viewport().zoom;
+    state.stage.last_viewport.zoom = state.viewport().zoom;
     let mm = state.view_scale_ratio();
     assert!((mm - 1.0).abs() < 1e-3, "mm ratio {mm}");
 }
@@ -2376,7 +2376,7 @@ fn the_viewport_menu_sets_the_camera_pivot_size() {
     use cce_ui::widget::{context_menu, MouseScrollDelta};
     let mut state = State::new(false);
     state.view.camera_pivot_size = 0.5;
-    state.pending_pivot = None;
+    state.stage.pending_pivot = None;
     let version = state.scene.rt_geometry_version;
     state.cursor_x = 300.0;
     state.cursor_y = 200.0;
@@ -2392,7 +2392,7 @@ fn the_viewport_menu_sets_the_camera_pivot_size() {
     state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
     state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 5.0) });
     assert!((state.view.camera_pivot_size - 0.75).abs() < 1e-5, "{}", state.view.camera_pivot_size);
-    assert!(state.pending_pivot.is_some(), "the marker re-bakes");
+    assert!(state.stage.pending_pivot.is_some(), "the marker re-bakes");
     assert_eq!(state.scene.rt_geometry_version, version, "and the graph is not evaluated");
     assert!(context_menu::is_visible(), "a slider row keeps the menu up");
     let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
@@ -2679,7 +2679,7 @@ fn the_dialog_plate_is_the_menu_plate() {
     let r = cce_ui::layout::menu_corner_radius();
     let rect = cce_ui::scene::layout::Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 };
     assert_eq!(dialog.corner_style(rect).map(|(r, _)| r), (r > 0.0).then_some(r));
-    for file in ["src/dialog.rs", "src/render.rs", "src/app.rs", "src/app/input.rs", "src/app/document.rs", "src/app/network.rs", "src/app/camera.rs", "src/app/view.rs", "src/app/scene.rs"] {
+    for file in ["src/dialog.rs", "src/render.rs", "src/app.rs", "src/app/input.rs", "src/app/document.rs", "src/app/network.rs", "src/app/camera.rs", "src/app/view.rs", "src/app/scene.rs", "src/app/stage.rs"] {
         let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(file)).unwrap();
         assert!(!src.contains("dialog/compression") && !src.contains("DIALOG_COMPRESSION"), "{file} overrides the menu material");
     }

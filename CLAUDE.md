@@ -2672,7 +2672,7 @@ The GPU image is owned by `State::scene.page_image` and freed when replaced.
 **A replacement renderer invalidates that id.** There is no reconnect
 callback: the runner calls `renderer_init` once per renderer, so the first call
 is this process's own and every later one is a replacement — remembering is the
-only way to tell them apart (`State::seen_renderer`, via
+only way to tell them apart (`State::stage.seen_renderer`, via
 `renderer_handed_over`, which is split out of the callback so it can be tested
 without a live `VkRenderer`). Images uploaded outside that callback are not
 replayed, so a cached id names nothing and its draws are skipped in SILENCE:
@@ -3876,7 +3876,7 @@ re-sorts the fill's triangles FARTHEST FIRST from the eye
 (`geometry::sort_triangles_back_to_front`, centroid distance — painter's
 order, exact for non-intersecting triangles and close for the rest) and
 re-uploads them whenever the geometry version, the shading or the eye moves
-(`State::sorted_fill_key`), which during an orbit is every frame. The eye
+(`State::stage.sorted_fill_key`), which during an orbit is every frame. The eye
 is taken in MESH space, the inverse of view × model. Leaving see-through
 clears the key and re-uploads nothing: sorted order is still a valid
 opaque mesh.

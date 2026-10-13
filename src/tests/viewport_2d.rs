@@ -303,8 +303,8 @@ fn the_display_flag_is_exclusive_within_its_context() {
 /// 1200 x 800.
 pub(super) fn state_showing_image(w: u32, h: u32, dpi: u32) -> State {
     let mut state = State::new(false);
-    state.last_viewport.width = 1200;
-    state.last_viewport.height = 800;
+    state.stage.last_viewport.width = 1200;
+    state.stage.last_viewport.height = 800;
     let slot = state.new_image().expect("the Page template is missing");
     let node = &mut state.current_dir_mut().children[slot];
     for (name, value) in [
@@ -323,7 +323,7 @@ pub(super) fn state_showing_image(w: u32, h: u32, dpi: u32) -> State {
 /// NDC x and y of top-left, top-right, bottom-right, bottom-left.
 fn image_corners_in_view(state: &State) -> [[f32; 2]; 4] {
     let (pos, rot, pivot) = state.active_camera_pose();
-    let aspect = state.last_viewport.width as f32 / state.last_viewport.height as f32;
+    let aspect = state.stage.last_viewport.width as f32 / state.stage.last_viewport.height as f32;
     let (proj, view, model) = state.viewport().get_matrices(aspect, Some(pos), Some(rot), Some(pivot));
     let mvp = proj * view * model;
     state.image_world_corners().expect("no image is shown").map(|c| {
@@ -427,8 +427,8 @@ fn view_image_pixels_is_one_pixel_to_one() {
     let mut state = state_showing_image(300, 200, 100);
     assert!(state.run_command("view_image_pixels"));
     let [tl, tr, _, bl] = image_corners_in_view(&state);
-    let wide = (tr[0] - tl[0]) * 0.5 * state.last_viewport.width as f32;
-    let tall = (tl[1] - bl[1]) * 0.5 * state.last_viewport.height as f32;
+    let wide = (tr[0] - tl[0]) * 0.5 * state.stage.last_viewport.width as f32;
+    let tall = (tl[1] - bl[1]) * 0.5 * state.stage.last_viewport.height as f32;
     assert!((wide - 300.0).abs() < 0.5 && (tall - 200.0).abs() < 0.5, "the image covers {wide} x {tall} px");
 }
 

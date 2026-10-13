@@ -158,6 +158,9 @@ pub use view::ViewDisplay;
 // `State::scene`: the scene as last built, its page image, the sim cache.
 mod scene;
 pub use scene::SceneData;
+// `State::stage`: the GPU meshes, the uploads pending, the last stage's key.
+mod stage;
+pub use stage::{SceneMeshes, SceneStage, StageKey, StagedMesh};
 
 /// Which node the params pane is showing: the editor's level, the slot
 /// there, and the node's id. All three, because no one of them is an
@@ -676,146 +679,6 @@ pub struct ViewportUniforms {
     pub _padding: f32,
 }
 
-/// Everything the raster scene is staged from, as `stage_frame` compares
-/// it frame to frame: the camera's pose, the viewport widget's view and
-/// guides, the pane's size in physical px, and the draw-time render
-/// settings. A frame whose key equals the last one staged (and that
-/// nothing marked `viewport_dirty`) reuses the staged backdrop.
-///
-/// `show_viewport` is false until the first stage and wherever a hidden or
-/// zero-area pane cleared the backdrop, which forces the next stage: the
-/// staging branch only runs while the viewport is shown. The rest stay
-/// readable — Frame All and the image commands read the pane size and the
-/// camera off the last stage.
-#[derive(Clone, PartialEq)]
-pub struct StageKey {
-    pub camera_pos: Vec3,
-    pub camera_rx: f32,
-    pub camera_ry: f32,
-    pub camera_rz: f32,
-    pub pivot: Vec3,
-    pub zoom: f32,
-    pub rotation_x: f32,
-    pub rotation_y: f32,
-    pub bg_color: [f32; 3],
-    pub show_grid: bool,
-    pub show_origin: bool,
-    pub show_camera_pivot: bool,
-    pub width: u32,
-    pub height: u32,
-    pub active_camera: String,
-    pub show_viewport: bool,
-    pub wireframe: bool,
-    pub geo_opacity: f32,
-    pub wire_single_color: bool,
-    pub wire_color: [f32; 3],
-    pub wire_opacity: f32,
-    pub wire_width: f32,
-    pub rt_mode: bool,
-}
-
-impl Default for StageKey {
-    /// Before the first stage: nothing staged, and a key no frame matches.
-    fn default() -> Self {
-        Self {
-            camera_pos: Vec3::ZERO,
-            camera_rx: 0.0,
-            camera_ry: 0.0,
-            camera_rz: 0.0,
-            pivot: Vec3::ZERO,
-            zoom: 0.0,
-            rotation_x: 0.0,
-            rotation_y: 0.0,
-            bg_color: [0.0; 3],
-            show_grid: false,
-            show_origin: false,
-            show_camera_pivot: false,
-            width: 0,
-            height: 0,
-            active_camera: String::new(),
-            show_viewport: false,
-            wireframe: false,
-            geo_opacity: 1.0,
-            wire_single_color: false,
-            wire_color: [1.0, 1.0, 1.0],
-            wire_opacity: 1.0,
-            wire_width: 1.0,
-            rt_mode: false,
-        }
-    }
-}
-
-/// One mesh's contents, staged CPU-side for the next flush
-/// (`flush_pending_meshes`), since only the engine's hooks see the renderer:
-/// the list, whether it changed since the GPU had it, and how many the GPU
-/// holds — the count a draw reads, which is the list's length at the last
-/// upload rather than now. The markers' lists are INSTANCES (cce-ui's
-/// `SceneDraw::instances`: a marker's place and colour, drawn over its
-/// sphere); the normals' whiskers and the pull arrows are LINE_LIST
-/// vertices.
-#[derive(Default)]
-pub struct StagedMesh {
-    pub verts: Vec<Vertex3D>,
-    pub dirty: bool,
-    pub count: u32,
-}
-
-impl StagedMesh {
-    /// Upload the list to `mesh` if it changed since the last upload, and
-    /// say whether it did.
-    pub fn flush(&mut self, renderer: &mut cce_ui::vk::VkRenderer, mesh: cce_ui::vk::MeshId) -> bool {
-        if !std::mem::take(&mut self.dirty) {
-            return false;
-        }
-        renderer.update_mesh(mesh, bytemuck::cast_slice(&self.verts));
-        self.count = self.verts.len() as u32;
-        true
-    }
-}
-
-/// The designer's persistent 3D meshes, created in `renderer_init` once the
-/// engine's renderer exists.
-#[derive(Clone, Copy)]
-pub struct SceneMeshes {
-    pub viewport_bg: cce_ui::vk::MeshId,
-    pub spheres: cce_ui::vk::MeshId,
-    /// LINE_LIST edge expansion of `spheres` (vertex pairs per triangle
-    /// edge) — the wire pass draws real line primitives, never
-    /// PolygonMode::LINE (driver-broken; see cce-ui's scene stage).
-    pub sphere_edges: cce_ui::vk::MeshId,
-    pub grid: cce_ui::vk::MeshId,
-    pub origin: cce_ui::vk::MeshId,
-    pub pivot: cce_ui::vk::MeshId,
-    /// The marker spheres the marker draws instance (`geometry::marker_sphere`,
-    /// white): the group markers' at Group Marker Size — the selected group,
-    /// the marked groups and the spreadsheet's rows share it — the points'
-    /// at Point Marker Size and the vertices' at `VERTEX_MARKER_SCALE` of
-    /// it. Re-uploaded when a size moves (`State::marker_sphere_radii`),
-    /// which is 240 vertices whatever the scene.
-    pub group_sphere: cce_ui::vk::MeshId,
-    pub point_sphere: cce_ui::vk::MeshId,
-    pub vertex_sphere: cce_ui::vk::MeshId,
-    /// Selected-Group membership markers: while a Group node is selected, one
-    /// marker per vertex it tags, so the selection SHOWS the group. This and
-    /// the other marker meshes below hold INSTANCES (cce-ui's
-    /// `SceneDraw::instances`) — a marker's place and colour — drawn over
-    /// their sphere.
-    pub group_points: cce_ui::vk::MeshId,
-    /// Markers on the points whose rows are selected in the spreadsheet.
-    pub row_points: cce_ui::vk::MeshId,
-    /// Markers on the members of the marked groups (the Group Markers dialog).
-    pub marked_points: cce_ui::vk::MeshId,
-    /// The Show Point Markers overlay.
-    pub overlay_points: cce_ui::vk::MeshId,
-    /// The Show Vertex Markers overlay.
-    pub vertex_points: cce_ui::vk::MeshId,
-    /// The Show Point Normals overlay (LINE_LIST whiskers).
-    pub overlay_normals: cce_ui::vk::MeshId,
-    /// Pull arrows (LINE_LIST): while a point-moving Attribute node is
-    /// selected, how far and which way it moves a spread of the points.
-    pub pull_arrows: cce_ui::vk::MeshId,
-}
-
 /// Which markers [`State::drawn_markers`] reads.
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -844,18 +707,12 @@ pub struct State {
     /// Window title; the engine polls `Application::settings` and applies it.
     pub title: String,
 
-    /// GPU meshes — `None` until `renderer_init`.
-    pub meshes: Option<SceneMeshes>,
-    /// CPU-staged mesh updates, flushed in `stage_renderer`.
-    pub pending_grid: Option<Vec<Vertex3D>>,
-    pub pending_origin: Option<Vec<Vertex3D>>,
-    pub pending_pivot: Option<Vec<Vertex3D>>,
-    pub pending_viewport_bg: Option<Vec<Vertex3D>>,
-    /// The spheres mesh needs re-upload from `rt_sphere_verts`.
-    pub spheres_dirty: bool,
+    /// What is staged for the renderer: the GPU meshes, the uploads
+    /// waiting for the next flush, what the scene was last staged from
+    /// (`src/app/stage.rs`).
+    pub stage: SceneStage,
     pub pending_window_drag: Option<PendingWindowDrag>,
     pub window_action: Option<cce_ui::engine::WindowAction>,
-    pub vertex_count_spheres: u32,
 
     /// The open project: the node tree, the editor's path into it, undo
     /// and what it was last saved as (`src/app/document.rs`).
@@ -934,11 +791,6 @@ pub struct State {
     /// attributes and groups, the fill and edges, the light, the page
     /// image, the sim cache (`src/app/scene.rs`).
     pub scene: SceneData,
-    /// Whether `renderer_init` has run before. There is no separate reconnect
-    /// callback: the runner calls `renderer_init` once per renderer, so the
-    /// first call is this process's own and every later one is a REPLACEMENT
-    /// after a reconnect. Remembering is the only way to tell them apart.
-    pub seen_renderer: bool,
     /// The window title wants re-deriving (`update_window_title`), at most
     /// once a frame: deriving it serializes the whole tree to compare with
     /// the save, and the event path asked on every changed pointer event.
@@ -1061,22 +913,12 @@ pub struct State {
     pub gpu_at_launch: String,
     pub viewport_dirty: bool,
     pub last_status_text: String,
-    /// What the raster scene was last staged from (`stage_frame`): a
-    /// frame whose `StageKey` is this one, and that nothing marked
-    /// `viewport_dirty`, keeps the staged backdrop.
-    pub last_viewport: StageKey,
     /// The draw-time render settings — the wireframe pass, the fill's
     /// opacity, shading and see-through, the group markers' size and the
     /// pull arrows' scale: the render block of state.kdl and of a project's
     /// display block, field for field (`settings::RenderSettings`, where
     /// each is described).
     pub render: RenderSettings,
-    /// What the fill mesh was last SORTED for: (geometry version, smooth,
-    /// eye in mesh space). The stage pass re-sorts and re-uploads when any
-    /// of the three moves while see-through is in effect — which during an
-    /// orbit is every frame — and clears it when see-through ends, so the
-    /// next entry sorts afresh.
-    pub sorted_fill_key: Option<(u64, bool, [f32; 3])>,
     /// Selected-Group membership markers: marker vertices staged CPU-side by
     /// `sync_nodes` whenever the selection is a Group node (empty otherwise),
     /// flushed to `meshes.group_points`; its count gates the draw. The key
@@ -1180,10 +1022,6 @@ pub struct State {
     /// evaluated geometry, feeding the textpick rows on group/attribute
     /// params. One entry: the selected node's input.
     pub pick_cache: Option<((String, u64), PickLists)>,
-    /// The `rt_geometry_version` the RT scene was last built from.
-    /// The traced scene as it was last handed over: the geometry's version,
-    /// the image's, and the world unit's bits, which size the image.
-    pub last_rt_scene_key: Option<(u64, u64, u32)>,
     pub ui_context: cce_ui::context::UiContext,
 }
 
@@ -1430,23 +1268,23 @@ impl State {
 
     pub fn update_grid_geometry(&mut self) {
         let linear_grid_color = cce_ui::color::to_linear_rgb(self.viewport().grid_color);
-        self.pending_grid = Some(grid_vertices(self.view.grid_thickness, linear_grid_color));
+        self.stage.pending_grid = Some(grid_vertices(self.view.grid_thickness, linear_grid_color));
         self.viewport_dirty = true;
     }
 
     pub fn update_origin_geometry(&mut self) {
-        self.pending_origin = Some(origin_vectors_vertices(self.view.origin_size));
+        self.stage.pending_origin = Some(origin_vectors_vertices(self.view.origin_size));
         self.viewport_dirty = true;
     }
 
     pub fn update_pivot_geometry(&mut self) {
-        self.pending_pivot = Some(camera_pivot_vertices(self.view.camera_pivot_size));
+        self.stage.pending_pivot = Some(camera_pivot_vertices(self.view.camera_pivot_size));
         self.viewport_dirty = true;
     }
 
     pub fn update_viewport_bg_geometry(&mut self) {
         let bg_color = cce_ui::color::to_linear_rgb(self.viewport().bg_color);
-        self.pending_viewport_bg = Some(Self::viewport_bg_vertices(bg_color));
+        self.stage.pending_viewport_bg = Some(Self::viewport_bg_vertices(bg_color));
         self.viewport_dirty = true;
     }
 
@@ -3589,7 +3427,7 @@ impl State {
 
         // Fit the bounding sphere inside the narrower frustum axis
         // (get_matrices: vertical FOV 0.9 rad), with a little breathing room.
-        let (w, h) = (self.last_viewport.width.max(1) as f32, self.last_viewport.height.max(1) as f32);
+        let (w, h) = (self.stage.last_viewport.width.max(1) as f32, self.stage.last_viewport.height.max(1) as f32);
         let aspect = if self.view.square_viewport { 1.0 } else { w / h };
         let half_v = 0.45f32;
         let half_h = (half_v.tan() * aspect).atan();
@@ -3672,7 +3510,7 @@ impl State {
     /// of those px is.
     fn one_to_one_distance(&self) -> f32 {
         let m = cce_ui::units::metric();
-        let vh_logical = (self.last_viewport.height.max(1) as f32) / (self.scale as f32).max(0.001);
+        let vh_logical = (self.stage.last_viewport.height.max(1) as f32) / (self.scale as f32).max(0.001);
         let unit_mm = self.world_unit_mm().max(1e-6);
         m.mm_per_px() * vh_logical / (2.0 * 0.45f32.tan() * unit_mm)
     }
@@ -3681,9 +3519,9 @@ impl State {
     /// one millimetre of screen shows (1.0 = true size, 2.0 = half size).
     pub fn view_scale_ratio(&self) -> f32 {
         let m = cce_ui::units::metric();
-        let vh_logical = (self.last_viewport.height.max(1) as f32) / (self.scale as f32).max(0.001);
-        let base = self.last_viewport.camera_pos - self.last_viewport.pivot;
-        let d = base.length().max(1e-4) * self.last_viewport.zoom;
+        let vh_logical = (self.stage.last_viewport.height.max(1) as f32) / (self.scale as f32).max(0.001);
+        let base = self.stage.last_viewport.camera_pos - self.stage.last_viewport.pivot;
+        let d = base.length().max(1e-4) * self.stage.last_viewport.zoom;
         let world_mm_per_px = 2.0 * d * 0.45f32.tan() / vh_logical.max(1.0) * self.world_unit_mm();
         world_mm_per_px / m.mm_per_px().max(1e-6)
     }
@@ -5715,15 +5553,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
 
         let mut state = Self {
             title: String::new(),
-            meshes: None,
-            pending_grid: None,
-            pending_origin: None,
-            pending_pivot: None,
-            pending_viewport_bg: None,
-            spheres_dirty: false,
             pending_window_drag: None,
             window_action: None,
-            vertex_count_spheres: 0,
             doc: Document {
                 fs_root: fs_root.clone(),
                 node_templates,
@@ -5782,7 +5613,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 last_sim_frame: i32::MIN,
                 playbar_cache_key: None,
             },
-            seen_renderer: false,
             title_dirty: false,
             settings_save_pending: false,
             plate_menu_slot: None,
@@ -5930,10 +5760,21 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 .unwrap_or_else(default_gpu),
             viewport_dirty: true,
             last_status_text: String::new(),
-            last_viewport: StageKey::default(),
+            stage: SceneStage {
+                meshes: None,
+                pending_grid: None,
+                pending_origin: None,
+                pending_pivot: None,
+                pending_viewport_bg: None,
+                spheres_dirty: false,
+                vertex_count_spheres: 0,
+                last_viewport: StageKey::default(),
+                sorted_fill_key: None,
+                last_rt_scene_key: None,
+                seen_renderer: false,
+            },
             render: settings.render.clone(),
             pull_arrow_pairs: Vec::new(),
-            sorted_fill_key: None,
             group_markers: StagedMesh::default(),
             spreadsheet_points: Vec::new(),
             row_markers: StagedMesh::default(),
@@ -5960,7 +5801,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             float2_spans: None,
             marked_group_markers: StagedMesh::default(),
             pick_cache: None,
-            last_rt_scene_key: None,
             ui_context,
         };
 
@@ -7261,21 +7101,21 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
 
     /// Flush CPU-staged mesh updates to the renderer's persistent meshes.
     fn flush_pending_meshes(&mut self, renderer: &mut cce_ui::vk::VkRenderer) {
-        let Some(meshes) = self.meshes else { return };
-        if let Some(verts) = self.pending_grid.take() {
+        let Some(meshes) = self.stage.meshes else { return };
+        if let Some(verts) = self.stage.pending_grid.take() {
             renderer.update_mesh(meshes.grid, bytemuck::cast_slice(&verts));
         }
-        if let Some(verts) = self.pending_origin.take() {
+        if let Some(verts) = self.stage.pending_origin.take() {
             renderer.update_mesh(meshes.origin, bytemuck::cast_slice(&verts));
         }
-        if let Some(verts) = self.pending_pivot.take() {
+        if let Some(verts) = self.stage.pending_pivot.take() {
             renderer.update_mesh(meshes.pivot, bytemuck::cast_slice(&verts));
         }
-        if let Some(verts) = self.pending_viewport_bg.take() {
+        if let Some(verts) = self.stage.pending_viewport_bg.take() {
             renderer.update_mesh(meshes.viewport_bg, bytemuck::cast_slice(&verts));
         }
-        if self.spheres_dirty {
-            self.spheres_dirty = false;
+        if self.stage.spheres_dirty {
+            self.stage.spheres_dirty = false;
             let fill = if self.render.smooth_shading { &self.scene.scene_smooth_verts } else { &self.scene.rt_sphere_verts };
             renderer.update_mesh(meshes.spheres, bytemuck::cast_slice(fill));
             // Edge mesh for the wire pass, collected with the scene.
@@ -7347,7 +7187,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     /// the raster recomposes from the node graph cheaply, so dropping and
     /// re-uploading beats trying to preserve anything.
     pub fn renderer_handed_over(&mut self) -> bool {
-        if !std::mem::replace(&mut self.seen_renderer, true) {
+        if !std::mem::replace(&mut self.stage.seen_renderer, true) {
             return false;
         }
         if let Some(old) = self.scene.page_image.take() {
@@ -7366,7 +7206,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         let pivot_verts = camera_pivot_vertices(self.view.camera_pivot_size);
         let bg_verts =
             Self::viewport_bg_vertices(cce_ui::color::to_linear_rgb(self.viewport().bg_color));
-        self.meshes = Some(SceneMeshes {
+        self.stage.meshes = Some(SceneMeshes {
             viewport_bg: renderer.create_mesh(bytemuck::cast_slice(&bg_verts)),
             spheres: renderer.create_mesh(&[]),
             sphere_edges: renderer.create_mesh(&[]),
@@ -7390,7 +7230,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         // Scene geometry built during `State::new` (before the renderer
         // existed) uploads on the first frame's flush, the markers with it:
         // the spheres at their sizes and the instances already staged.
-        self.spheres_dirty = !self.scene.rt_sphere_verts.is_empty();
+        self.stage.spheres_dirty = !self.scene.rt_sphere_verts.is_empty();
         self.marker_sphere_radii = None;
         self.group_markers.dirty = true;
         self.marked_group_markers.dirty = true;
@@ -7533,7 +7373,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
 
     pub fn stage_frame(&mut self, renderer: &mut cce_ui::vk::VkRenderer) -> bool {
         self.flush_pending_meshes(renderer);
-        let meshes = self.meshes.expect("stage_frame before renderer_init");
+        let meshes = self.stage.meshes.expect("stage_frame before renderer_init");
         // Whether the trackballs' view moved this pass. The pane may have
         // been painted for this frame already, so a moved view asks for one
         // more — the ball trails the camera by a frame, never by more.
@@ -7598,7 +7438,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                     wire_width: self.render.wire_width,
                     rt_mode,
                 };
-                let viewport_changed = self.viewport_dirty || self.last_viewport != key;
+                let viewport_changed = self.viewport_dirty || self.stage.last_viewport != key;
 
                 if viewport_changed {
                     if !rt_mode {
@@ -7637,19 +7477,19 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                     // The eye is taken in mesh space (the inverse of view *
                     // model), the space the triangles are in.
                     let see_through = self.see_through_active();
-                    if see_through && self.vertex_count_spheres > 0 {
+                    if see_through && self.stage.vertex_count_spheres > 0 {
                         let eye = (view_mat * model).inverse().transform_point3(Vec3::ZERO);
                         let key = (self.scene.rt_geometry_version, self.render.smooth_shading, eye.to_array());
-                        if self.sorted_fill_key != Some(key) {
+                        if self.stage.sorted_fill_key != Some(key) {
                             let src = if self.render.smooth_shading { &self.scene.scene_smooth_verts } else { &self.scene.rt_sphere_verts };
                             let sorted = crate::geometry::sort_triangles_back_to_front(src, eye);
                             renderer.update_mesh(meshes.spheres, bytemuck::cast_slice(&sorted));
-                            self.sorted_fill_key = Some(key);
+                            self.stage.sorted_fill_key = Some(key);
                         }
                     } else {
                         // The sorted order is still a valid opaque mesh, so
                         // nothing re-uploads; the next entry just sorts anew.
-                        self.sorted_fill_key = None;
+                        self.stage.sorted_fill_key = None;
                     }
                     let mut draws = vec![SceneDraw { mesh: meshes.viewport_bg, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: None, screen_space: true }];
                     if self.viewport().show_grid {
@@ -7688,7 +7528,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                     // opaque and may show through it, and before the
                     // geometry, whose fill may be translucent over it.
                     let image_slot = draws.len() as u32;
-                    if self.vertex_count_spheres > 0 {
+                    if self.stage.vertex_count_spheres > 0 {
                         // The line annotations go UNDER the geometry, as
                         // the markers above do, and write depth (the wire
                         // draw's `see_through` selects the depth-writing
@@ -7764,7 +7604,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                     }
 
                     // Update viewport cache
-                    self.last_viewport = key;
+                    self.stage.last_viewport = key;
                     self.viewport_dirty = false;
                 }
 
@@ -7775,7 +7615,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 if rt_mode {
                     let unit_mm = self.world_unit_mm();
                     let key = (self.scene.rt_geometry_version, self.scene.page_version, unit_mm.to_bits());
-                    if self.last_rt_scene_key != Some(key) {
+                    if self.stage.last_rt_scene_key != Some(key) {
                         let (rt_tris, rt_mats) = self.collect_rt_scene();
                         // The image the raster pass draws, traced: the same
                         // upload, at the same corners.
@@ -7787,7 +7627,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                             },
                         );
                         renderer.set_rt_scene_with_image(&rt_tris, &rt_mats, image);
-                        self.last_rt_scene_key = Some(key);
+                        self.stage.last_rt_scene_key = Some(key);
                     }
                     let aspect = cw as f32 / ch as f32;
                     let (proj, view_mat, model) = self.viewport().get_matrices(aspect, Some(camera_pos), Some(Vec3::new(rx, ry, rz)), Some(pivot));
@@ -7803,7 +7643,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 // Zero-area pane: clear the backdrop once.
                 renderer
                     .stage_scene((0, 0, self.physical_width, self.physical_height), Vec::new());
-                self.last_viewport.show_viewport = false;
+                self.stage.last_viewport.show_viewport = false;
                 self.viewport_dirty = false;
             }
         } else if !self.is_detached_network && self.viewport_dirty {
@@ -7811,7 +7651,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             // and force a re-stage when it comes back.
             renderer
                 .stage_scene((0, 0, self.physical_width, self.physical_height), Vec::new());
-            self.last_viewport.show_viewport = false;
+            self.stage.last_viewport.show_viewport = false;
             self.viewport_dirty = false;
         }
 

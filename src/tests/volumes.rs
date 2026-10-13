@@ -430,8 +430,8 @@ fn frame_all_frames_the_root_camera_from_inside_a_subnet() {
             Vertex3D { position: [c[0] + 0.25 * a.cos(), c[1] + 0.25 * a.sin(), c[2] + 0.1 * (i % 3) as f32], color: [1.0; 3] }
         })
         .collect();
-    state.last_viewport.width = 800;
-    state.last_viewport.height = 600;
+    state.stage.last_viewport.width = 800;
+    state.stage.last_viewport.height = 600;
     let zoom_before = state.viewport().zoom;
 
     state.frame_all();
@@ -2345,7 +2345,7 @@ fn guide_toggles_survive_the_settings_apply_pass() {
 #[test]
 fn test_a_replacement_renderer_drops_the_page_image() {
     let mut state = State::new(false);
-    assert!(!state.seen_renderer, "a fresh State has not been given a renderer");
+    assert!(!state.stage.seen_renderer, "a fresh State has not been given a renderer");
     assert!(!state.scene.page_dirty);
 
     // Stand in for a composed page: an id owned by State.
