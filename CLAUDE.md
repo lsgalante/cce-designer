@@ -268,8 +268,12 @@ gone from cce-ui with the wgpu path).
   their config reload, `zoom`, Arrange, deselect, the hjkl families, the group
   drag and its settle, copy and paste, framing (`frame_cursor`,
   `frame_all_nodes`), and the read-back of the graph widget
-  (`read_panel_offsets`, `sync_cursor_and_selection`). Also a child module,
-  and in the same two source scans.
+  (`read_panel_offsets`, `sync_cursor_and_selection`). The lattice and the
+  region ARITHMETIC is `NetworkView`'s own — `cell_center`, `cell_rect`,
+  `cell_at`, `grid_cursor_region` / `_rect` / `_covers` / `_expanded`,
+  `shift_grid_cursor` — taking the pane's origin where it answers in window
+  space, and `State`'s methods of those names forward with the content slot's
+  top-left. Also a child module, and in the same two source scans.
 - `src/model.rs` (~1.6k lines) — the node tree and the project file, with no window or
   GPU: `FsNode`, `Project` (load, migrations, template merge), node ids, the wire and
   splice operations, parameter rows, `load_fs_tree` (node-template loading).

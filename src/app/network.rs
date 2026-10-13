@@ -128,6 +128,95 @@ pub struct NetworkView {
     pub drop_glow: Option<DropGlow>,
 }
 
+// The lattice and the cursor region, as arithmetic on the view alone. A
+// window-space answer takes the pane's ORIGIN — the content slot's top-left,
+// which is the roster's — and `State` keeps forwarders that pass it.
+impl NetworkView {
+    /// The node body's size at the current zoom.
+    pub fn node_size(&self) -> (f32, f32) {
+        (self.grid.node_w, self.grid.node_h)
+    }
+
+    /// The window-space centre of lattice cell (col, row) in a pane whose
+    /// top-left is `origin`: the origin, plus the pan, plus the cell's
+    /// pitches. This is where a node at that position is centred, and what
+    /// the grid origin handed to the widget means.
+    pub fn cell_center(&self, (px, py): (f32, f32), col: i32, row: i32) -> (f32, f32) {
+        (
+            px + self.pan_x + col as f32 * self.grid.pitch_x,
+            py + self.pan_y + row as f32 * self.grid.pitch_y,
+        )
+    }
+
+    /// The window-space rect a node body occupies on lattice cell
+    /// (col, row) — centred on the intersection.
+    pub fn cell_rect(&self, origin: (f32, f32), col: i32, row: i32) -> (f32, f32, f32, f32) {
+        let (cx, cy) = self.cell_center(origin, col, row);
+        let (w, h) = self.node_size();
+        (cx - w * 0.5, cy - h * 0.5, w, h)
+    }
+
+    /// The lattice cell nearest a window-space point in the pane.
+    /// Nearest, not "the cell whose span contains it": a cell is centred on
+    /// its intersection, so a click between two nodes belongs to the closer.
+    pub fn cell_at(&self, (px, py): (f32, f32), x: f32, y: f32) -> (i32, i32) {
+        let col = if self.grid.pitch_x > 0.0 { ((x - px - self.pan_x) / self.grid.pitch_x).round() } else { 0.0 };
+        let row = if self.grid.pitch_y > 0.0 { ((y - py - self.pan_y) / self.grid.pitch_y).round() } else { 0.0 };
+        (col as i32, row as i32)
+    }
+
+    /// The lattice region the cursor covers: `(col, row, cols, rows)`, never
+    /// smaller than one cell. The expanse a drag left behind counts only
+    /// while its anchor is still where the cursor is — see
+    /// [`grid_cursor_expanse`](NetworkView::grid_cursor_expanse).
+    pub fn grid_cursor_region(&self) -> (i32, i32, i32, i32) {
+        let anchor = (self.grid_cursor_col, self.grid_cursor_row);
+        let far = match self.grid_cursor_expanse {
+            Some((a, far)) if a == anchor => far,
+            _ => anchor,
+        };
+        let (c0, c1) = (anchor.0.min(far.0), anchor.0.max(far.0));
+        let (r0, r1) = (anchor.1.min(far.1), anchor.1.max(far.1));
+        (c0, r0, c1 - c0 + 1, r1 - r0 + 1)
+    }
+
+    /// The window-space rect the cursor outline is drawn on: the union of the
+    /// region's corner cells, which for the usual one-cell cursor is exactly
+    /// `cell_rect` of it.
+    pub fn grid_cursor_rect(&self, origin: (f32, f32)) -> (f32, f32, f32, f32) {
+        let (col, row, cols, rows) = self.grid_cursor_region();
+        let (x0, y0, _, _) = self.cell_rect(origin, col, row);
+        let (x1, y1, w, h) = self.cell_rect(origin, col + cols - 1, row + rows - 1);
+        (x0, y0, x1 - x0 + w, y1 - y0 + h)
+    }
+
+    /// Whether the cursor's region stands on lattice cell `(col, row)`.
+    pub fn grid_cursor_covers(&self, col: i32, row: i32) -> bool {
+        let (c, r, cols, rows) = self.grid_cursor_region();
+        col >= c && col < c + cols && row >= r && row < r + rows
+    }
+
+    /// Whether the cursor is expanded past its one cell — what makes a
+    /// selection a MULTIPLE selection, and the one test the paint and the
+    /// operations share.
+    pub fn grid_cursor_expanded(&self) -> bool {
+        let (_, _, cols, rows) = self.grid_cursor_region();
+        cols > 1 || rows > 1
+    }
+
+    /// Move the cursor AND the region it carries by whole cells — what a
+    /// selection being dragged across the sheet needs, since stepping the
+    /// anchor alone is precisely the thing that collapses the region.
+    pub fn shift_grid_cursor(&mut self, dc: i32, dr: i32) {
+        self.grid_cursor_col += dc;
+        self.grid_cursor_row += dr;
+        if let Some((anchor, far)) = self.grid_cursor_expanse {
+            self.grid_cursor_expanse =
+                Some(((anchor.0 + dc, anchor.1 + dr), (far.0 + dc, far.1 + dr)));
+        }
+    }
+}
+
 // The network editor's methods: navigation and the tree operations it
 // drives, the lattice and the cursor region, the grid and scroll settings,
 // zoom, the keyboard families, copy and paste, framing, and the read-back
@@ -329,7 +418,7 @@ impl State {
     /// hands the widget, so the cursor drawn here and the nodes the widget
     /// draws cannot disagree.
     pub fn node_size(&self) -> (f32, f32) {
-        (self.net.grid.node_w, self.net.grid.node_h)
+        self.net.node_size()
     }
 
     /// Put the grid at a geometry outright (Reset Zoom, Frame All's fit).
@@ -343,73 +432,46 @@ impl State {
         self.net.grid = self.net.grid.scaled(f);
     }
 
-    /// The window-space centre of lattice cell (col, row) in the network
-    /// pane: the pane origin, plus the pan, plus the cell's pitches. This is
-    /// where a node at that position is centred, and what the grid origin
-    /// handed to the widget means.
+    /// Where the network pane's lattice is measured from: the content
+    /// slot's top-left, in window space.
+    fn network_origin(&self) -> (f32, f32) {
+        let (px, py, _, _) = self.positions[CONTENT_IDX];
+        (px, py)
+    }
+
+    /// [`NetworkView::cell_center`] in the network pane as laid out.
     pub fn cell_center(&self, col: i32, row: i32) -> (f32, f32) {
-        let (px, py, _, _) = self.positions[CONTENT_IDX];
-        (
-            px + self.net.pan_x + col as f32 * self.net.grid.pitch_x,
-            py + self.net.pan_y + row as f32 * self.net.grid.pitch_y,
-        )
+        self.net.cell_center(self.network_origin(), col, row)
     }
 
-    /// The window-space rect a node body occupies on lattice cell
-    /// (col, row) — centred on the intersection.
+    /// [`NetworkView::cell_rect`] in the network pane as laid out.
     pub fn cell_rect(&self, col: i32, row: i32) -> (f32, f32, f32, f32) {
-        let (cx, cy) = self.cell_center(col, row);
-        let (w, h) = self.node_size();
-        (cx - w * 0.5, cy - h * 0.5, w, h)
+        self.net.cell_rect(self.network_origin(), col, row)
     }
 
-    /// The lattice cell nearest a window-space point in the network pane.
-    /// Nearest, not "the cell whose span contains it": a cell is centred on
-    /// its intersection, so a click between two nodes belongs to the closer.
+    /// [`NetworkView::cell_at`] in the network pane as laid out.
     pub fn cell_at(&self, x: f32, y: f32) -> (i32, i32) {
-        let (px, py, _, _) = self.positions[CONTENT_IDX];
-        let col = if self.net.grid.pitch_x > 0.0 { ((x - px - self.net.pan_x) / self.net.grid.pitch_x).round() } else { 0.0 };
-        let row = if self.net.grid.pitch_y > 0.0 { ((y - py - self.net.pan_y) / self.net.grid.pitch_y).round() } else { 0.0 };
-        (col as i32, row as i32)
+        self.net.cell_at(self.network_origin(), x, y)
     }
 
-    /// The lattice region the cursor covers: `(col, row, cols, rows)`, never
-    /// smaller than one cell. The expanse a drag left behind counts only
-    /// while its anchor is still where the cursor is — see
-    /// [`grid_cursor_expanse`](NetworkView::grid_cursor_expanse).
+    /// [`NetworkView::grid_cursor_region`].
     pub fn grid_cursor_region(&self) -> (i32, i32, i32, i32) {
-        let anchor = (self.net.grid_cursor_col, self.net.grid_cursor_row);
-        let far = match self.net.grid_cursor_expanse {
-            Some((a, far)) if a == anchor => far,
-            _ => anchor,
-        };
-        let (c0, c1) = (anchor.0.min(far.0), anchor.0.max(far.0));
-        let (r0, r1) = (anchor.1.min(far.1), anchor.1.max(far.1));
-        (c0, r0, c1 - c0 + 1, r1 - r0 + 1)
+        self.net.grid_cursor_region()
     }
 
-    /// The window-space rect the cursor outline is drawn on: the union of the
-    /// region's corner cells, which for the usual one-cell cursor is exactly
-    /// `cell_rect` of it.
+    /// [`NetworkView::grid_cursor_rect`] in the network pane as laid out.
     pub fn grid_cursor_rect(&self) -> (f32, f32, f32, f32) {
-        let (col, row, cols, rows) = self.grid_cursor_region();
-        let (x0, y0, _, _) = self.cell_rect(col, row);
-        let (x1, y1, w, h) = self.cell_rect(col + cols - 1, row + rows - 1);
-        (x0, y0, x1 - x0 + w, y1 - y0 + h)
+        self.net.grid_cursor_rect(self.network_origin())
     }
 
-    /// Whether the cursor's region stands on lattice cell `(col, row)`.
+    /// [`NetworkView::grid_cursor_covers`].
     pub fn grid_cursor_covers(&self, col: i32, row: i32) -> bool {
-        let (c, r, cols, rows) = self.grid_cursor_region();
-        col >= c && col < c + cols && row >= r && row < r + rows
+        self.net.grid_cursor_covers(col, row)
     }
 
-    /// Whether the cursor is expanded past its one cell — what makes a
-    /// selection a MULTIPLE selection, and the one test the paint and the
-    /// operations share.
+    /// [`NetworkView::grid_cursor_expanded`].
     pub fn grid_cursor_expanded(&self) -> bool {
-        let (_, _, cols, rows) = self.grid_cursor_region();
-        cols > 1 || rows > 1
+        self.net.grid_cursor_expanded()
     }
 
     /// The nodes the cursor selects, as slots in the current level, in slot
@@ -435,16 +497,9 @@ impl State {
             .collect()
     }
 
-    /// Move the cursor AND the region it carries by whole cells — what a
-    /// selection being dragged across the sheet needs, since stepping the
-    /// anchor alone is precisely the thing that collapses the region.
+    /// [`NetworkView::shift_grid_cursor`].
     pub fn shift_grid_cursor(&mut self, dc: i32, dr: i32) {
-        self.net.grid_cursor_col += dc;
-        self.net.grid_cursor_row += dr;
-        if let Some((anchor, far)) = self.net.grid_cursor_expanse {
-            self.net.grid_cursor_expanse =
-                Some(((anchor.0 + dc, anchor.1 + dr), (far.0 + dc, far.1 + dr)));
-        }
+        self.net.shift_grid_cursor(dc, dr);
     }
 
     /// Grow the live expansion drag to the cell under the cursor. `true` when
