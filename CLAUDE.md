@@ -3110,7 +3110,15 @@ colour under the wires. The corners are CIRCLES on both: the line is
 `Prim::Arc`s, the wash `render::fill_strip_circular` (quads round quarter
 discs) — a rounded rect's corners are the DE's squircle and stood past the
 arcs — and an inner corner's fillet is washed a pixel row at a time up to
-its arc. A captured pointer or a floating pane over it shows none.
+its arc. A captured pointer or a floating pane over it shows none — but
+**a press in it does not take it away** (`network_gesture_held`, since later
+on 2026-10-13): the press begins a network gesture — a node drag, the grid
+cursor's expansion drag, a group drag, a pan — which captures the pointer,
+and every click used to fade the outline out and back. Through a network
+gesture the outline stands as it was, however far the pointer drags, and is
+looked at again on the release; one the pointer had already left
+(`ChainBox::leaving`) goes on fading. Every other capture — an orbit, the
+dialog — still takes it away.
 `chain_box_stale` is what pointer motion repaints for, since the tick runs
 only on a frame something asked for. Read off the graph widget's own
 nodes, so it is round what is drawn.
