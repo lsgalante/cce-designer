@@ -26,10 +26,11 @@ pub struct ParamsPane {
     /// the viewport). It lives on the scene, not in a dock — there are none
     /// (since 2026-10-07).
     pub params_hud_width: f32,
-    /// The half-span the Attribute node's Value row runs over, with the
-    /// node it is for (`value_row_span`): kept between pane syncs so the row
-    /// re-scales only when its value leaves it.
-    pub value_row_span: Option<(String, f32)>,
+    /// The half-span each of the shown node's value rows runs over — the
+    /// Attribute node's Value and its constant operands — by parameter
+    /// name, with the node they are for (`value_row_span`): kept between
+    /// pane syncs so a row re-scales only when its value leaves it.
+    pub value_row_span: Option<(String, Vec<(String, f32)>)>,
     /// The same for the shown node's `float2` rows, by parameter name, with
     /// the node they are for (`present_float2_rows`).
     pub float2_spans: Option<(String, Vec<(String, f32)>)>,

@@ -612,15 +612,17 @@ fn the_value_rows_span_adapts_to_the_value() {
     assert_eq!(span(&[0.0], Some(1.0)), 1.0, "one is the floor");
 }
 
-/// The Attribute node's Value stays a text parameter, but the pane
-/// presents it as a control as wide as its target — over the wide
-/// span around its value (`value_row_span`) — a slider for one, the float group with two, three
-/// or four rows for more: Modify on Pos (the pull node), on an input
-/// Float3 (N) or Float2 (uv), Create by its Type. A single number is
-/// spread over the components, as the node spreads it, and the pane
+/// The Attribute node's Value and its constant operands stay text
+/// parameters, but the pane presents each as a control as wide as what it
+/// meets — over the wide span around its value (`value_row_span`) — a
+/// slider for one, the float group with two, three or four rows for more:
+/// a Composite operand by Name's width, Pos (the pull node), an input
+/// Float3 (N) or Float2 (uv), Create's Value by its Type. A single number
+/// is spread over the components, as the node spreads it, and the pane
 /// writing it back unchanged is not an edit; an attribute the input lacks
 /// has no width, and the row is as wide as its text. A text that fits no
-/// width and an expression keep the text box;
+/// width and an expression keep the text box; an operand naming an
+/// attribute is a text box with the input's attributes to pick from, and
 /// read from an attribute, there is no Value row at all.
 #[test]
 fn an_attribute_value_row_is_a_control_as_wide_as_its_target() {
@@ -641,40 +643,53 @@ fn an_attribute_value_row_is_a_control_as_wide_as_its_target() {
         instance(find("Sphere"), "s", "Sphere 1", &[]),
         instance(find("Attribute"), "a", "pull1", &[
             ("input", "Sphere 1"),
-            ("operation", "Modify"),
+            ("operation", "Composite"),
+            ("combine_op", "Add"),
             ("attribute_name", "Pos"),
-            ("value", "0.00:0.06:0.00"),
-            ("combine", "Add"),
+            ("operand_1", "0.00:0.06:0.00"),
         ]),
     ];
     state.sync_nodes();
     state.graph_mut().set_selected_node(Some(1));
-    let value_row = |state: &mut State| {
+    let row_of = |state: &mut State, key: &str| {
         state.sync_parameters_pane();
-        state.param_mut().node_params().iter().find(|r| r.0 == "Value").expect("a Value row").2.clone()
+        state.param_mut().node_params().iter().find(|r| r.0 == key).unwrap_or_else(|| panic!("a {key} row")).2.clone()
     };
+    let operand_row = |state: &mut State| row_of(state, "Operand 1");
     // A vector gets the trackball beside its sliders by default.
     // 0.06 sits in the middle half of ±1.
     let wide = "float3:-1:1:trackball:soft".to_string();
-    assert_eq!(value_row(&mut state), wide, "Modify on Pos");
+    assert_eq!(operand_row(&mut state), wide, "an operand meeting Pos");
 
     let set = |state: &mut State, name: &str, val: &str| {
         state.current_dir_mut().children[1].params.iter_mut().find(|p| p.name == name).unwrap().set_text(val.to_string());
     };
     set(&mut state, "attribute_name", "N");
-    assert_eq!(value_row(&mut state), wide, "Modify on an input Float3");
+    assert_eq!(operand_row(&mut state), wide, "an operand meeting an input Float3");
     set(&mut state, "attribute_name", "uv");
-    assert_eq!(value_row(&mut state), "text", "three numbers do not fit an input Float2");
-    set(&mut state, "value", "1:2");
-    assert_eq!(value_row(&mut state), "float2:-10:10:soft", "Modify on an input Float2: 2 needs ±10");
-    set(&mut state, "value", "0.00:0.06:0.00");
+    assert_eq!(operand_row(&mut state), "text", "three numbers do not fit an input Float2");
+    set(&mut state, "operand_1", "1:2");
+    assert_eq!(operand_row(&mut state), "float2:-10:10:soft", "an operand meeting an input Float2: 2 needs ±10");
+    set(&mut state, "operand_1", "0.00:0.06:0.00");
     set(&mut state, "attribute_name", "nothing_here");
-    assert_eq!(value_row(&mut state), wide, "an attribute the input lacks is as wide as the text");
-    set(&mut state, "value", "1:2");
-    assert_eq!(value_row(&mut state), "float2:-10:10:soft", "two numbers for an attribute the input lacks");
-    set(&mut state, "value", "0.00:0.06:0.00");
+    assert_eq!(operand_row(&mut state), wide, "an attribute the input lacks is as wide as the text");
+    set(&mut state, "operand_1", "1:2");
+    assert_eq!(operand_row(&mut state), "float2:-10:10:soft", "two numbers for an attribute the input lacks");
+    set(&mut state, "attribute_name", "Col");
+    set(&mut state, "operand_1", "0.5");
+    assert_eq!(operand_row(&mut state), "float3:-10:10:soft", "a colour: one number spread, no ball, the span kept");
+    // An operand that names an attribute, or nothing yet, is picked.
+    for text in ["N", ""] {
+        set(&mut state, "operand_1", text);
+        let row = operand_row(&mut state);
+        assert!(row.starts_with("textpick:") && row["textpick:".len()..].split(',').any(|a| a == "N"), "{text:?}: {row}");
+    }
+    set(&mut state, "attribute_name", "Pos");
+    set(&mut state, "operand_1", "0.00:0.06:0.00");
+    let value_row = |state: &mut State| row_of(state, "Value");
 
     set(&mut state, "operation", "Create");
+    set(&mut state, "value", "0.00:0.06:0.00");
     set(&mut state, "attribute_name", "vel");
     set(&mut state, "type", "Float3");
     assert_eq!(value_row(&mut state), wide, "Create of a Float3");
@@ -752,7 +767,7 @@ fn a_trackpad_swipe_over_a_float3_band_turns_that_component() {
     let mut redraw = false;
     state.apply_action(McpAction::AddNode { template_name: "Attribute".into(), name: Some("pull1".into()), x: 5.0, y: 8.0 }, &mut redraw).unwrap();
     let pull = state.current_dir().children.iter().position(|c| c.name == "pull1").unwrap();
-    for (name, value) in [("input", "sphere1"), ("operation", "Modify"), ("attribute_name", "Pos"), ("value", "0.00:0.00:0.00")] {
+    for (name, value) in [("input", "sphere1"), ("operation", "Composite"), ("combine_op", "Set"), ("attribute_name", "Pos"), ("operand_1", "0.00:0.00:0.00")] {
         state.apply_action(McpAction::SetParam { slot: pull, name: name.into(), value: value.into() }, &mut redraw).unwrap();
     }
     state.graph_mut().set_selected_node(Some(pull));
@@ -769,7 +784,7 @@ fn a_trackpad_swipe_over_a_float3_band_turns_that_component() {
         (rx + (rw - 68.0) * 0.5, ry + rh * 0.5)
     };
     let value = |state: &State| -> Vec<f32> {
-        state.current_dir().children[pull].params.iter().find(|p| p.name == "value").unwrap()
+        state.current_dir().children[pull].params.iter().find(|p| p.name == "operand_1").unwrap()
             .text().split(':').map(|v| v.parse().unwrap()).collect()
     };
     state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: bx as f64, y: by as f64 } });
@@ -804,7 +819,7 @@ fn the_trackball_turns_the_pull_nodes_vector() {
     state.apply_action(McpAction::AddNode { template_name: "Group".into(), name: Some("group1".into()), x: 6.0, y: 8.0 }, &mut redraw).unwrap();
     let slot_of = |state: &State, name: &str| state.current_dir().children.iter().position(|c| c.name == name).expect(name);
     let (pull, group) = (slot_of(&state, "pull1"), slot_of(&state, "group1"));
-    for (name, value) in [("input", "sphere1"), ("operation", "Modify"), ("attribute_name", "Pos"), ("value", "0.00:0.00:0.06")] {
+    for (name, value) in [("input", "sphere1"), ("operation", "Composite"), ("combine_op", "Set"), ("attribute_name", "Pos"), ("operand_1", "0.00:0.00:0.06")] {
         state.apply_action(McpAction::SetParam { slot: pull, name: name.into(), value: value.into() }, &mut redraw).unwrap();
     }
     let show = |state: &mut State, slot: usize| {
@@ -819,22 +834,22 @@ fn the_trackball_turns_the_pull_nodes_vector() {
 
     // The pull's Value: a vector, so the ball is there; the menu hides it.
     show(&mut state, pull);
-    assert_eq!(row(&mut state, "Value"), format!("{}:soft", crate::app::float3_row(lo, hi, true)));
-    assert!(entries(&state, pull, "value").contains(&A::HideTrackball));
+    assert_eq!(row(&mut state, "Operand 1"), format!("{}:soft", crate::app::float3_row(lo, hi, true)));
+    assert!(entries(&state, pull, "operand_1").contains(&A::HideTrackball));
     let pull_id = state.current_dir().children[pull].id.clone();
-    state.run_param_action(&pull_id, "value", A::HideTrackball);
-    assert_eq!(row(&mut state, "Value"), format!("{}:soft", crate::app::float3_row(lo, hi, false)));
-    assert!(entries(&state, pull, "value").contains(&A::ShowTrackball));
+    state.run_param_action(&pull_id, "operand_1", A::HideTrackball);
+    assert_eq!(row(&mut state, "Operand 1"), format!("{}:soft", crate::app::float3_row(lo, hi, false)));
+    assert!(entries(&state, pull, "operand_1").contains(&A::ShowTrackball));
     let saved = serde_json::to_string(&state.current_dir().children[pull]).unwrap();
     assert!(saved.contains("\"view\":\"sliders\""), "the choice rides the file: {saved}");
-    state.run_param_action(&pull_id, "value", A::ShowTrackball);
-    assert_eq!(row(&mut state, "Value"), format!("{}:soft", crate::app::float3_row(lo, hi, true)));
+    state.run_param_action(&pull_id, "operand_1", A::ShowTrackball);
+    assert_eq!(row(&mut state, "Operand 1"), format!("{}:soft", crate::app::float3_row(lo, hi, true)));
 
     // Aimed at Col the three numbers are a colour: no ball by default.
     state.apply_action(McpAction::SetParam { slot: pull, name: "attribute_name".into(), value: "Col".into() }, &mut redraw).unwrap();
-    state.current_dir_mut().children[pull].params.iter_mut().find(|p| p.name == "value").unwrap().view.clear();
+    state.current_dir_mut().children[pull].params.iter_mut().find(|p| p.name == "operand_1").unwrap().view.clear();
     show(&mut state, pull);
-    assert_eq!(row(&mut state, "Value"), format!("{}:soft", crate::app::float3_row(lo, hi, false)));
+    assert_eq!(row(&mut state, "Operand 1"), format!("{}:soft", crate::app::float3_row(lo, hi, false)));
     state.apply_action(McpAction::SetParam { slot: pull, name: "attribute_name".into(), value: "Pos".into() }, &mut redraw).unwrap();
 
     // A position (the Group node's Center): no ball until asked, and a
@@ -863,7 +878,7 @@ fn the_trackball_turns_the_pull_nodes_vector() {
         state.handle_event(&at(cx + r * std::f32::consts::FRAC_PI_2 * i as f32 / 20.0, cy));
     }
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
-    let v: Vec<f32> = state.current_dir().children[pull].params.iter().find(|p| p.name == "value").unwrap()
+    let v: Vec<f32> = state.current_dir().children[pull].params.iter().find(|p| p.name == "operand_1").unwrap()
         .text().split(':').map(|c| c.parse().unwrap()).collect();
     assert!((v[0] - 0.06).abs() < 2e-3 && v[1].abs() < 2e-3 && v[2].abs() < 2e-3, "the pull points along +X: {v:?}");
 }
@@ -884,7 +899,7 @@ fn a_scroll_over_the_trackball_rolls_the_pull_nodes_vector() {
     let mut redraw = false;
     state.apply_action(McpAction::AddNode { template_name: "Attribute".into(), name: Some("pull1".into()), x: 5.0, y: 8.0 }, &mut redraw).unwrap();
     let pull = state.current_dir().children.iter().position(|c| c.name == "pull1").unwrap();
-    for (name, value) in [("input", "sphere1"), ("operation", "Modify"), ("attribute_name", "Pos"), ("value", "0.00:0.00:0.06")] {
+    for (name, value) in [("input", "sphere1"), ("operation", "Composite"), ("combine_op", "Set"), ("attribute_name", "Pos"), ("operand_1", "0.00:0.00:0.06")] {
         state.apply_action(McpAction::SetParam { slot: pull, name: name.into(), value: value.into() }, &mut redraw).unwrap();
     }
     state.graph_mut().set_selected_node(Some(pull));
@@ -896,7 +911,7 @@ fn a_scroll_over_the_trackball_rolls_the_pull_nodes_vector() {
         pane.float3s.iter().flatten().next().expect("the Value row").ball_circle().expect("its ball")
     };
     let value = |state: &State| -> Vec<f32> {
-        state.current_dir().children[pull].params.iter().find(|p| p.name == "value").unwrap()
+        state.current_dir().children[pull].params.iter().find(|p| p.name == "operand_1").unwrap()
             .text().split(':').map(|c| c.parse().unwrap()).collect()
     };
     let len = |v: &[f32]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
@@ -941,7 +956,7 @@ fn the_trackball_follows_the_viewport_camera() {
     let eye = Vec3::new(2.5, 1.8, 2.5);
     let at_camera = eye.normalize() * 0.6;
     let text = format!("{:.4}:{:.4}:{:.4}", at_camera.x, at_camera.y, at_camera.z);
-    for (name, value) in [("input", "sphere1"), ("operation", "Modify"), ("attribute_name", "Pos"), ("value", text.as_str())] {
+    for (name, value) in [("input", "sphere1"), ("operation", "Composite"), ("combine_op", "Set"), ("attribute_name", "Pos"), ("operand_1", text.as_str())] {
         state.apply_action(McpAction::SetParam { slot: pull, name: name.into(), value: value.into() }, &mut redraw).unwrap();
     }
     state.graph_mut().set_selected_node(Some(pull));
@@ -974,7 +989,7 @@ fn the_trackball_follows_the_viewport_camera() {
         state.handle_event(&at(cx + r * std::f32::consts::FRAC_PI_2 * i as f32 / 20.0, cy));
     }
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
-    let v: Vec<f32> = state.current_dir().children[pull].params.iter().find(|p| p.name == "value").unwrap()
+    let v: Vec<f32> = state.current_dir().children[pull].params.iter().find(|p| p.name == "operand_1").unwrap()
         .text().split(':').map(|c| c.parse().unwrap()).collect();
     let v = Vec3::new(v[0], v[1], v[2]);
     assert!(v.distance(right * 0.6) < 5e-3, "the pull lies along screen right: {v:?} against {:?}", right * 0.6);
@@ -1022,7 +1037,7 @@ fn a_detached_params_window_follows_the_selection_and_the_camera() {
     let mut redraw = false;
     main.apply_action(McpAction::AddNode { template_name: "Attribute".into(), name: Some("pull1".into()), x: 5.0, y: 8.0 }, &mut redraw).unwrap();
     let pull = main.current_dir().children.iter().position(|c| c.name == "pull1").unwrap();
-    for (name, value) in [("input", "sphere1"), ("operation", "Modify"), ("attribute_name", "Pos"), ("value", "0.00:0.60:0.00")] {
+    for (name, value) in [("input", "sphere1"), ("operation", "Composite"), ("combine_op", "Set"), ("attribute_name", "Pos"), ("operand_1", "0.00:0.60:0.00")] {
         main.apply_action(McpAction::SetParam { slot: pull, name: name.into(), value: value.into() }, &mut redraw).unwrap();
     }
     main.apply_action(McpAction::Select { slot: pull }, &mut redraw).unwrap();
@@ -1042,7 +1057,7 @@ fn a_detached_params_window_follows_the_selection_and_the_camera() {
     assert_eq!(child.param_mut().node_params().len(), 0, "a new state has nothing selected");
     child.seed_detached_window(&channel);
     assert_eq!(child.param_editor_selected(), Some(pull), "it opens on the main window's selection");
-    assert!(child.param_mut().node_params().iter().any(|r| r.0 == "Value" && r.2.contains(":trackball")), "with its rows");
+    assert!(child.param_mut().node_params().iter().any(|r| r.0 == "Operand 1" && r.2.contains(":trackball")), "with its rows");
     assert!(same(ball_view(&child), ball_view(&main)), "and sees the ball from the main window's camera");
     assert!(!child.detached.needs_autosave, "a detached window has no camera to tell of");
 
@@ -1068,7 +1083,7 @@ fn a_detached_params_window_follows_the_selection_and_the_camera() {
 
     // A detached window's own change is written too, for the main one.
     child.detached.needs_autosave = false;
-    child.apply_custom_event(crate::app::CustomEvent::RunAction(McpAction::SetParam { slot: pull, name: "value".into(), value: "0.10:0.20:0.30".into() }));
+    child.apply_custom_event(crate::app::CustomEvent::RunAction(McpAction::SetParam { slot: pull, name: "operand_1".into(), value: "0.10:0.20:0.30".into() }));
     assert!(child.detached.needs_autosave);
 
     let _ = fs::remove_dir_all(&dir);
@@ -1163,7 +1178,7 @@ fn rows_selected_inside_a_simnet_follow_the_simulation() {
         let mut pull = crate::app::load_fs_tree().children.into_iter().find(|t| t.node_type == "attribute").unwrap();
         pull.id = "pull-in-sim".into();
         pull.name = "pull1".into();
-        for (name, value) in [("input", "input1"), ("operation", "Modify"), ("attribute_name", "Pos"), ("value", "0.05:0.00:0.00"), ("combine", "Add")] {
+        for (name, value) in [("input", "input1"), ("operation", "Composite"), ("attribute_name", "Pos"), ("operand_1", "0.05:0.00:0.00"), ("combine_op", "Add")] {
             pull.params.iter_mut().find(|p| p.name == name).unwrap().set_text(value.to_string());
         }
         simnet.children.push(pull);
@@ -1226,7 +1241,7 @@ fn the_spreadsheet_and_group_markers_share_the_sim_cache() {
         let mut node = template.clone();
         node.id = "pull-in-sim".into();
         node.name = "pull1".into();
-        for (name, value) in [("input", "input1"), ("operation", "Modify"), ("attribute_name", "Pos"), ("value", "0.01:0.00:0.00"), ("combine", "Add")] {
+        for (name, value) in [("input", "input1"), ("operation", "Composite"), ("attribute_name", "Pos"), ("operand_1", "0.01:0.00:0.00"), ("combine_op", "Add")] {
             node.params.iter_mut().find(|p| p.name == name).unwrap().set_text(value.to_string());
         }
         simnet.children.push(node);
@@ -1324,7 +1339,7 @@ fn the_spreadsheet_and_markers_follow_the_frame_and_upstream_edits() {
         let mut pull = crate::app::load_fs_tree().children.into_iter().find(|t| t.node_type == "attribute").unwrap();
         pull.id = "pull-in-sim".into();
         pull.name = "pull1".into();
-        for (name, value) in [("input", "input1"), ("operation", "Modify"), ("attribute_name", "Pos"), ("value", "0.05:0.00:0.00"), ("combine", "Add")] {
+        for (name, value) in [("input", "input1"), ("operation", "Composite"), ("attribute_name", "Pos"), ("operand_1", "0.05:0.00:0.00"), ("combine_op", "Add")] {
             pull.params.iter_mut().find(|p| p.name == name).unwrap().set_text(value.to_string());
         }
         simnet.children.push(pull);

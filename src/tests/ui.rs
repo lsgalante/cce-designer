@@ -168,6 +168,60 @@ fn parameters_have_a_name_and_a_label() {
 /// list of attributes, `@Norm` in a wrangle (not `@Normal`) — once: a
 /// format-2 file naming `Norm` is left alone, since that attribute is
 /// someone's own.
+/// Format 9: the Attribute node's Modify is a Composite with its Combine
+/// as the operation and its Value — or, read from an attribute, its From
+/// Attribute — as the one operand; a Composite's Source B, C and D are its
+/// operands, the empty ones left out; and a channel path elsewhere that
+/// reads a row that moved reads the operand it became, its component kept.
+#[test]
+fn a_saved_modify_is_a_composite() {
+    use crate::app::{FsNode, ParamDef, Project};
+    let node = |id: &str, params: &[(&str, &str)]| FsNode {
+        id: id.into(),
+        name: id.into(),
+        node_type: "attribute".into(),
+        children: vec![],
+        params: params.iter().map(|(k, v)| ParamDef::new(*k, "text", *v)).collect(),
+        geometry_visible: true,
+        bypassed: false,
+        position: (0.0, 0.0),
+        inputs: 1,
+        outputs: 1,
+    };
+    let mut reader = node("reader", &[]);
+    reader.node_type = "sphere".into();
+    reader.params = vec![
+        ParamDef::new("radius", "slider", "ch(\"../pull/value.y\") * 2").as_expr(),
+        ParamDef::new("rows", "spinbox", "chs(\"../comp/source_d\")").as_expr(),
+    ];
+    let mut root = node("root", &[]);
+    root.node_type = "subnet".into();
+    root.children = vec![
+        node("pull", &[("operation", "Modify"), ("attribute_name", "Pos"), ("combine", "Add"), ("value_from", "Constant"), ("value", "0:0.1:0"), ("from_attribute", "")]),
+        node("by_attr", &[("operation", "Modify"), ("attribute_name", "mass"), ("value_from", "Attribute"), ("value", "1.00"), ("from_attribute", "b")]),
+        node("comp", &[("operation", "Composite"), ("attribute_name", "a"), ("combine_op", "Add"), ("source_b", "b"), ("source_c", ""), ("source_d", "d")]),
+        node("made", &[("operation", "Create"), ("attribute_name", "a"), ("value", "2"), ("combine", "Set"), ("source_b", "")]),
+        reader,
+    ];
+    let mut proj = Project { name: "p".into(), root, view_state: Default::default(), format: 8 };
+    proj.migrate_format();
+    let rows = |i: usize| -> Vec<(String, String)> {
+        proj.root.children[i].params.iter().map(|p| (p.name.clone(), p.text().to_string())).collect()
+    };
+    let has = |i: usize, n: &str, t: &str| rows(i).contains(&(n.to_string(), t.to_string()));
+    assert!(has(0, "operation", "Composite") && has(0, "combine_op", "Add") && has(0, "operand_1", "0:0.1:0"), "{:?}", rows(0));
+    assert!(has(1, "combine_op", "Set") && has(1, "operand_1", "b"), "read from an attribute: {:?}", rows(1));
+    assert!(has(2, "operand_1", "b") && has(2, "operand_2", "d") && !rows(2).iter().any(|(n, _)| n == "operand_3"), "{:?}", rows(2));
+    assert!(has(3, "operation", "Create") && has(3, "value", "2"), "a Create keeps its Value");
+    for i in 0..4 {
+        assert!(!rows(i).iter().any(|(n, _)| ["combine", "source_b", "source_c", "source_d"].contains(&n.as_str())), "{:?}", rows(i));
+    }
+    let reads = &proj.root.children[4].params;
+    assert_eq!(reads[0].text(), "ch(\"../pull/operand_1.y\") * 2");
+    assert_eq!(reads[1].text(), "chs(\"../comp/operand_2\")");
+    assert_eq!(proj.format, crate::model::PROJECT_FORMAT);
+}
+
 /// Format 7: Composite's Length is the length of Name. A save from
 /// before, which wrote |Source B| into Name (or Result), has Source B
 /// moved into Name and the written attribute named as Result, and
@@ -207,7 +261,7 @@ fn a_saved_composite_length_keeps_its_result() {
     assert_eq!((row(0, "attribute_name"), row(0, "result"), row(0, "source_b")), ("b".into(), "a".into(), "".into()));
     assert_eq!((row(1, "attribute_name"), row(1, "result")), ("b".into(), "r".into()), "a Result is kept");
     assert_eq!((row(2, "attribute_name"), row(2, "result")), ("a".into(), "".into()), "no Source B: left alone");
-    assert_eq!(row(3, "source_b"), "b", "only Length moves");
+    assert_eq!(row(3, "operand_1"), "b", "only Length moves (Source B is an operand since format 9)");
 
     // It computes what it did: |b| in every component of a.
     let mut geom = crate::geometry::sphere_detail(glam::Vec3::ZERO, 0.5, 4, 6);
@@ -4155,10 +4209,10 @@ fn test_attribute_node_operations() {
         ]),
         instance(attr_t, "a2", "Attr 2", &[
             ("input", "Attr 1"),
-            ("operation", "Modify"),
+            ("operation", "Composite"),
             ("attribute_name", "mass"),
-            ("combine", "Multiply"),
-            ("value", "2.00"),
+            ("combine_op", "Multiply"),
+            ("operand_1", "2.00"),
         ]),
         instance(attr_t, "a3", "Attr 3", &[
             ("input", "Attr 2"),
@@ -4192,10 +4246,10 @@ fn test_attribute_node_operations() {
         instance(sphere_t, "s", "Sphere 1", &[]),
         instance(attr_t, "a1", "Tint", &[
             ("input", "Sphere 1"),
-            ("operation", "Modify"),
+            ("operation", "Composite"),
             ("attribute_name", "Col"),
-            ("combine", "Multiply"),
-            ("value", "0.50"),
+            ("combine_op", "Multiply"),
+            ("operand_1", "0.50"),
         ]),
     ]);
     let (geom, err) = eval(&root, 1);
@@ -4212,10 +4266,10 @@ fn test_attribute_node_operations() {
         instance(sphere_t, "s", "Sphere 1", &[]),
         instance(attr_t, "a1", "Lift", &[
             ("input", "Sphere 1"),
-            ("operation", "Modify"),
+            ("operation", "Composite"),
             ("attribute_name", "Pos"),
-            ("combine", "Add"),
-            ("value", "0.00:0.10:0.00"),
+            ("combine_op", "Add"),
+            ("operand_1", "0.00:0.10:0.00"),
         ]),
     ]);
     let (geom, err) = eval(&root, 1);
@@ -4638,9 +4692,11 @@ fn params_serialize_as_they_always_did() {
             o.entry(k).or_insert(Value::Null);
         }
         o.entry("show_when").or_insert("".into());
-        // A template's description and group are read and never written.
+        // A template's description, group and family are read and never
+        // written.
         o.remove("description");
         o.remove("group");
+        o.remove("multi");
         if o.get("expr") == Some(&Value::Bool(false)) {
             o.remove("expr");
         }
@@ -4914,6 +4970,8 @@ fn template_params_carry_the_kind_they_hold() {
         assert_eq!(kind(ty, name), K::Float, "{ty}'s {name}");
     }
     assert_eq!(kind("neighbour", "constant"), K::Float3);
+    // A Composite's operand names an attribute or holds a constant.
+    assert_eq!(kind("attribute", "operand_1"), K::Operand);
     // The pull's Strength is a slider over none-to-double, one in the
     // middle: a number set by hand and by eye, where the `float` it
     // was for a day is a box to type into. It still takes an
@@ -4924,7 +4982,7 @@ fn template_params_carry_the_kind_they_hold() {
     assert_eq!(strength.range().map(|(lo, hi, _)| (lo, hi)), Some((0.0, 2.0)));
     assert_eq!(strength.text(), "1.00");
     for (ty, name) in [
-        ("attribute", "attribute_name"), ("attribute", "source_b"), ("visualize", "attribute"), ("neighbour", "attribute"),
+        ("attribute", "attribute_name"), ("visualize", "attribute"), ("neighbour", "attribute"),
         ("neighbour", "direction"), ("neighbour", "source"), ("distance", "direction"), ("develop", "direction"),
         ("copy", "scale_attribute"), ("normal", "attribute"), ("suture", "counter"), ("time", "attribute"),
     ] {

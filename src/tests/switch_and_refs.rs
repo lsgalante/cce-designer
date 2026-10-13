@@ -884,18 +884,18 @@ fn the_row_menu_copies_and_pastes_references() {
     // box is a string.
     state.apply_action(McpAction::AddNode { template_name: "Attribute".into(), name: Some("pull1".into()), x: 5.0, y: 8.0 }, &mut redraw).unwrap();
     let pull = slot_of(&state, "pull1");
-    for (name, value) in [("input", "sphere1"), ("operation", "Modify"), ("attribute_name", "Pos"), ("value", "0.00:0.06:0.00")] {
+    for (name, value) in [("input", "sphere1"), ("operation", "Composite"), ("combine_op", "Set"), ("attribute_name", "Pos"), ("operand_1", "0.00:0.06:0.00")] {
         state.apply_action(McpAction::SetParam { slot: pull, name: name.into(), value: value.into() }, &mut redraw).unwrap();
     }
     show(&mut state, pull);
-    let (rows, h) = fields(&state, pull, "value");
-    let want: Vec<String> = ["Name: value", "Label: Value", "Control: trackball and sliders", "Type: float3", "Expression: false"].iter().map(|s| s.to_string()).collect();
+    let (rows, h) = fields(&state, pull, "operand_1");
+    let want: Vec<String> = ["Name: operand_1", "Label: Operand 1", "Control: trackball and sliders", "Type: float3", "Expression: false"].iter().map(|s| s.to_string()).collect();
     assert_eq!(&rows[..5], &want[..], "{rows:?}");
     assert!(rows[..h].contains(&"Range: -1..1".to_string()), "the span around 0.06: {rows:?}");
     assert!(rows[..h].iter().all(|r| !r.starts_with("Value:")), "{rows:?}");
-    state.apply_action(McpAction::SetParam { slot: pull, name: "value".into(), value: "0.06".into() }, &mut redraw).unwrap();
+    state.apply_action(McpAction::SetParam { slot: pull, name: "operand_1".into(), value: "0.06".into() }, &mut redraw).unwrap();
     show(&mut state, pull);
-    let (rows, _) = fields(&state, pull, "value");
+    let (rows, _) = fields(&state, pull, "operand_1");
     assert_eq!(
         (&rows[2], &rows[3]),
         (&"Control: trackball and sliders".to_string(), &"Type: float3".to_string()),

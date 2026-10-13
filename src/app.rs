@@ -322,6 +322,9 @@ pub fn control_and_type(shown: &str, kind: ParamKind) -> (&'static str, &'static
             ParamKind::Node => "node",
             ParamKind::Attribute => "attribute",
             ParamKind::Group => "group",
+            // A constant is presented as sliders, which say float above;
+            // what is left in a text box is a name.
+            ParamKind::Operand => "attribute",
             ParamKind::Button => "none",
         },
     };
@@ -452,6 +455,27 @@ pub fn value_row_control(text: &str, width: usize, ball: bool, kept: Option<f32>
         n => format!("float{n}:{}:{}:soft", -r, r),
     };
     Some((ty, shown, r))
+}
+
+/// When `name` is a member of one of `node`'s families that the node does
+/// not have yet (`operand_3`, with one operand), the family and the member's
+/// number — what MCP's `set_param` grows the family to before it writes.
+/// The family is known from a member the node has, or from its template.
+pub fn missing_family_member(node: &FsNode, templates: &[NodeTemplate], name: &str) -> Option<(String, usize)> {
+    if node.params.iter().any(|p| p.name == name) {
+        return None;
+    }
+    let from_template = crate::model::template_for(node, templates).map(|t| t.params.as_slice()).unwrap_or(&[]);
+    node.params.iter().chain(from_template).filter(|p| !p.multi.is_empty()).find_map(|p| {
+        let k = crate::param::family_index_of(name, &p.multi)?;
+        // Up to a few past the last, so a typo does not make a hundred rows.
+        (k <= family_size(node, &p.multi) + 16).then(|| (p.multi.clone(), k))
+    })
+}
+
+/// How many members of `family` node `node` has.
+pub fn family_size(node: &FsNode, family: &str) -> usize {
+    node.params.iter().filter(|p| crate::param::family_index_of(&p.name, family).is_some()).count()
 }
 
 /// Whether `shown` is `kept` as a value row presents it — the same numbers,
@@ -2006,7 +2030,9 @@ impl State {
                             // A value row presents a single number spread
                             // over its components; read back unchanged, it
                             // is the text it was, not an edit.
-                            let presented = p.name == "value" && !p.is_expr() && same_value_row_text(p.text(), u_val);
+                            let presented = (p.name == "value" || p.kind() == ParamKind::Operand)
+                                && !p.is_expr()
+                                && same_value_row_text(p.text(), u_val);
                             if p.text() != *u_val && !presented {
                                 // A reference typed into a plain row becomes
                                 // an expression — the one way to make one
@@ -2242,8 +2268,111 @@ impl State {
             "export" => self.run_export(),
             "detect_range" => self.detect_remap_range(),
             _ => {
-                self.execute_menu_action(name);
+                // A family's button adds a member to it.
+                let family = self.param_editor_selected().and_then(|slot| {
+                    let node = self.param_editor_dir().children.get(slot)?;
+                    let p = node.params.iter().find(|p| p.name == name && p.kind() == ParamKind::Button)?;
+                    (!p.multi.is_empty()).then(|| (node.id.clone(), p.multi.clone()))
+                });
+                match family {
+                    Some((id, family)) => {
+                        self.add_family_member(&id, &family);
+                    }
+                    None => {
+                        self.execute_menu_action(name);
+                    }
+                }
             }
+        }
+    }
+
+    /// Add a member to `family` on node `node_id`, after its last: the
+    /// template's first member under the next name and number, holding the
+    /// template's default, or — where the template has no such family —
+    /// the last member, emptied. One undo step. The new member's name, or
+    /// `None` when the node or the family is not there.
+    pub fn add_family_member(&mut self, node_id: &str, family: &str) -> Option<String> {
+        let node = crate::viewer_state::find_node_by_id(&self.doc.fs_root, node_id)?;
+        let members: Vec<(usize, usize)> = node
+            .params
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| crate::param::family_index_of(&p.name, family).map(|k| (i, k)))
+            .collect();
+        let template = crate::model::template_for(node, &self.doc.node_templates)
+            .and_then(|t| t.params.iter().find(|p| p.multi == family && p.family_index() == Some(1)))
+            .cloned();
+        let k = members.iter().map(|(_, k)| *k).max().unwrap_or(0) + 1;
+        let mut fresh = match (template, members.last()) {
+            (Some(t), _) => t,
+            (None, Some((i, _))) => {
+                let mut p = node.params[*i].clone();
+                p.set_expr(false);
+                p.set_text(String::new());
+                p
+            }
+            (None, None) => return None,
+        };
+        let first_label = fresh.label.clone();
+        fresh.name = crate::param::family_member_name(family, k);
+        fresh.label = crate::param::family_member_label(&first_label, k);
+        fresh.multi = family.to_string();
+        fresh.view = String::new();
+        // After the last member, or ahead of the family's button.
+        let at = members.last().map(|(i, _)| i + 1).or_else(|| {
+            node.params.iter().position(|p| p.multi == family && p.kind() == ParamKind::Button)
+        })?;
+        let before = crate::edit_history::ParamSnapshot {
+            node_id: node_id.to_string(),
+            params: node.params.clone(),
+            what: format!("Add {}", fresh.label),
+        };
+        let name = fresh.name.clone();
+        let node = crate::viewer_state::find_node_by_id_mut(&mut self.doc.fs_root, node_id)?;
+        node.params.insert(at, fresh);
+        self.record_rows(before);
+        self.after_rows_changed();
+        Some(name)
+    }
+
+    /// Take member `pname` of its family away from node `node_id`; the
+    /// members after it move up a number (`operand_3` becomes `operand_2`,
+    /// its label with it), so a family is always numbered from one without
+    /// gaps. The last member of a family is not taken: the template lists
+    /// one, and the merge would put it back on the next load. False when
+    /// nothing was taken.
+    pub fn remove_family_member(&mut self, node_id: &str, pname: &str) -> bool {
+        let Some(node) = crate::viewer_state::find_node_by_id(&self.doc.fs_root, node_id) else { return false };
+        let Some(p) = node.params.iter().find(|p| p.name == pname) else { return false };
+        let family = p.multi.clone();
+        let Some(k) = p.family_index() else { return false };
+        if family_size(node, &family) < 2 {
+            self.update_status_text(&format!("{} is the only one; it can be emptied, not taken away.", p.shown_name()));
+            return false;
+        }
+        let what = format!("Remove {}", p.shown_name());
+        let before = crate::edit_history::ParamSnapshot { node_id: node_id.to_string(), params: node.params.clone(), what };
+        let Some(node) = crate::viewer_state::find_node_by_id_mut(&mut self.doc.fs_root, node_id) else { return false };
+        node.params.retain(|p| p.name != pname);
+        for p in node.params.iter_mut() {
+            if let Some(j) = crate::param::family_index_of(&p.name, &family).filter(|j| *j > k) {
+                p.name = crate::param::family_member_name(&family, j - 1);
+                p.label = crate::param::family_member_label(&p.label, j - 1);
+            }
+        }
+        self.record_rows(before);
+        self.after_rows_changed();
+        true
+    }
+
+    /// What follows a row coming or going: the scene, the network's view of
+    /// the node and the pane, read again.
+    fn after_rows_changed(&mut self) {
+        self.rebuild_scene_geometry();
+        self.sync_nodes();
+        self.sync_parameters_pane();
+        if self.syncing_windows() {
+            self.detached.needs_autosave = true;
         }
     }
 
@@ -2663,14 +2792,15 @@ impl State {
     /// now (`ParamKind::Attribute` / `Group`), so a row gets the picker by
     /// declaring it, and a new template needs no entry here.
     ///
-    /// The same pass PRESENTS the Attribute node's `Value` as a float3 row
-    /// when its target is three wide (since 2026-09-28). The parameter
-    /// itself stays `text`, because its width is the target's — the Type
-    /// row under Create, the named attribute under Modify — which no fixed
-    /// kind can say (see "Parameter kinds" in CLAUDE.md); what changes is
-    /// the control, as the pickers change it. Three wide means Create with
-    /// Type Float3, or Modify aimed at Pos, Col or an input attribute the
-    /// evaluated input holds as a Float3. The text must already hold three
+    /// The same pass PRESENTS the Attribute node's `Value`, and each of
+    /// its Composite operands that holds a constant, as a float3 row when
+    /// what it meets is three wide (since 2026-09-28). The parameter itself
+    /// stays text, because its width is the target's — the Type row under
+    /// Create, Name for an operand — which no fixed kind can say (see
+    /// "Parameter kinds" in CLAUDE.md); what changes is the control, as the
+    /// pickers change it. Three wide means Create with Type Float3, or an
+    /// operand meeting Pos, Col or an input attribute the evaluated input
+    /// holds as a Float3. An operand naming an attribute gets the picker. The text must already hold three
     /// numbers: a single number BROADCASTS to every component, and a row
     /// that showed it as `(n, 0, 0)` would write that triple back on the
     /// first drag; an expression is shown as its text like any other. The
@@ -2684,64 +2814,104 @@ impl State {
         // Rows are keyed as `param_display` keys them — by label when
         // there is one, by name otherwise — so the kind is looked up the
         // same way the pane's write-back resolves a row.
-        let (node_id, kinds, value_row) = {
+        let (node_id, kinds, value_row, operands) = {
             if self.detached.is_detached_network {
                 return params;
             }
             let Some(slot) = self.param_editor_selected() else { return params };
             let dir = self.param_editor_dir();
             let Some(node) = dir.children.get(slot) else { return params };
+            // An operand naming an attribute — or naming nothing yet — gets
+            // the picker; one holding a constant is presented below.
             let kinds: Vec<(String, ParamKind)> = node
                 .params
                 .iter()
-                .filter(|p| matches!(p.kind(), ParamKind::Attribute | ParamKind::Group))
+                .filter(|p| match p.kind() {
+                    ParamKind::Attribute | ParamKind::Group => true,
+                    ParamKind::Operand => !matches!(crate::geometry::Operand::parse(p.text()), Some(crate::geometry::Operand::Constant(_))),
+                    _ => false,
+                })
                 .map(|p| (p.shown_name().to_string(), p.kind()))
                 .collect();
             let value_row = Self::attribute_value_target(node);
-            if kinds.is_empty() && value_row.is_none() {
+            let operands = Self::operand_rows(node);
+            if kinds.is_empty() && value_row.is_none() && operands.is_empty() {
                 return params;
             }
-            (node.id.clone(), kinds, value_row)
+            (node.id.clone(), kinds, value_row, operands)
         };
         let lists = self.input_pick_lists(&node_id);
         for row in params.iter_mut() {
             let Some((_, kind)) = kinds.iter().find(|(key, _)| *key == row.0) else { continue };
             let list = match kind {
-                ParamKind::Attribute => &lists.attrs,
-                _ => &lists.groups,
+                ParamKind::Group => &lists.groups,
+                _ => &lists.attrs,
             };
             if row.2 == "text" && !list.is_empty() {
                 row.2 = format!("textpick:{}", list.join(","));
             }
         }
-        if let Some((key, target, ball)) = value_row {
-            // An attribute the input lacks has no width to read: the row
-            // is presented as wide as its text, which is what the node
-            // would create were the attribute there (Modify on a missing
-            // attribute writes nothing, so the controls cost nothing).
-            let written = |text: &str| text.split([':', ',', ' ']).filter(|s| !s.is_empty()).count();
-            let width = match target {
-                ValueTarget::Width(w) => w,
-                ValueTarget::Named(name) => lists
-                    .widths
-                    .iter()
-                    .find(|(n, _)| n.eq_ignore_ascii_case(&name))
-                    .map(|(_, w)| *w)
-                    .unwrap_or_else(|| params.iter().find(|r| r.0 == key).map_or(0, |r| written(&r.1))),
-            };
-            // The span the row already has stands through a drag: a new
-            // one rebuilds the pane, which would drop the slider being held.
-            let kept = self.params.value_row_span.as_ref().filter(|(id, _)| *id == node_id).map(|(_, r)| *r);
-            let held = self.drag_widget == Some(crate::slots::PARAM_IDX);
-            if let Some(row) = params.iter_mut().find(|r| r.0 == key && r.2 == "text") {
-                if let Some((ty, text, r)) = value_row_control(&row.1, width, ball, kept, held) {
-                    row.2 = ty;
-                    row.1 = text;
-                    self.params.value_row_span = Some((node_id.clone(), r));
-                }
+        // Each row's span stands through a drag: a new one rebuilds the
+        // pane, which would drop the slider being held.
+        if self.params.value_row_span.as_ref().is_none_or(|(id, _)| *id != node_id) {
+            self.params.value_row_span = Some((node_id.clone(), Vec::new()));
+        }
+        let held = self.drag_widget == Some(crate::slots::PARAM_IDX);
+        // An attribute the input lacks has no width to read: the row is
+        // presented as wide as its text, which is what the node would
+        // create were the attribute there.
+        let written = |text: &str| text.split([':', ',', ' ']).filter(|s| !s.is_empty()).count();
+        let width_of = |target: &ValueTarget, text: &str| match target {
+            ValueTarget::Width(w) => *w,
+            ValueTarget::Named(name) => lists
+                .widths
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(name))
+                .map(|(_, w)| *w)
+                .unwrap_or_else(|| written(text)),
+        };
+        let rows = value_row.into_iter().chain(operands);
+        for (key, pname, target, ball) in rows {
+            let Some(row) = params.iter_mut().find(|r| r.0 == key && r.2 == "text") else { continue };
+            let width = width_of(&target, &row.1);
+            let Some((_, spans)) = self.params.value_row_span.as_mut() else { break };
+            let kept = spans.iter().find(|(n, _)| *n == pname).map(|(_, r)| *r);
+            if let Some((ty, text, r)) = value_row_control(&row.1, width, ball, kept, held) {
+                row.2 = ty;
+                row.1 = text;
+                spans.retain(|(n, _)| *n != pname);
+                spans.push((pname, r));
             }
         }
         params
+    }
+
+    /// The Composite operand rows of an Attribute node that hold a
+    /// constant, as `add_pick_lists` presents them: display key, name, what
+    /// the constant meets — Name, whose width it takes — and whether the
+    /// row shows the trackball (on for a vector, off for Col, the
+    /// parameter's own choice first, as for the Value row).
+    fn operand_rows(node: &FsNode) -> Vec<(String, String, ValueTarget, bool)> {
+        if !node.node_type.eq_ignore_ascii_case("attribute")
+            || !node_param_str(node, "operation", "").trim().eq_ignore_ascii_case("composite")
+        {
+            return Vec::new();
+        }
+        let name = node_param_str(node, "attribute_name", "").trim().to_string();
+        let col = name.eq_ignore_ascii_case("Col") || name == "Cd";
+        node.params
+            .iter()
+            .filter(|p| p.kind() == ParamKind::Operand && !p.is_expr())
+            .filter(|p| matches!(crate::geometry::Operand::parse(p.text()), Some(crate::geometry::Operand::Constant(_))))
+            .map(|p| {
+                let target = if crate::geometry::is_builtin_point_attr(&name) {
+                    ValueTarget::Width(3)
+                } else {
+                    ValueTarget::Named(name.clone())
+                };
+                (p.shown_name().to_string(), p.name.clone(), target, p.wants_trackball(!col))
+            })
+            .collect()
     }
 
     /// What an Attribute node's `Value` is aimed at — its display key and
@@ -2754,7 +2924,7 @@ impl State {
     /// parameter's own choice (`ParamDef::view`), else on for a vector —
     /// a displacement of Pos, a Float3 attribute — and off for Col, whose
     /// three numbers are a colour and point nowhere.
-    fn attribute_value_target(node: &FsNode) -> Option<(String, ValueTarget, bool)> {
+    fn attribute_value_target(node: &FsNode) -> Option<(String, String, ValueTarget, bool)> {
         if !node.node_type.eq_ignore_ascii_case("attribute") {
             return None;
         }
@@ -2787,11 +2957,9 @@ impl State {
                 "float4" => 4,
                 _ => 1,
             }),
-            "modify" if name.eq_ignore_ascii_case("Pos") || name.eq_ignore_ascii_case("Col") => ValueTarget::Width(3),
-            "modify" => ValueTarget::Named(name),
             _ => return None,
         };
-        Some((key, target, ball))
+        Some((key, p.name.clone(), target, ball))
     }
 
     /// The (groups, attributes) present on the evaluated geometry of node
@@ -2800,7 +2968,7 @@ impl State {
     /// resolves sibling-first like the wire itself (`geometry::param_node`);
     /// a whole-tree search by name offered the groups of a same-named node in
     /// some other subnet. Attribute names get the Pos/Col built-ins appended
-    /// (the Attribute node can Modify them); names carrying a comma are
+    /// (the Attribute node combines them); names carrying a comma are
     /// dropped — they cannot ride the type spec-string.
     /// Beside the names, each point attribute's WIDTH in components, which
     /// is what decides the control the Attribute node's Value row gets.
@@ -3363,9 +3531,11 @@ impl State {
         let from_subnet = template_for(dir, &self.doc.node_templates)
             .and_then(|t| t.children.iter().find(|c| c.name.eq_ignore_ascii_case(&node.name)))
             .and_then(|c| c.params.iter().find(|p| p.name == pname));
-        from_subnet.or_else(|| {
-            template_for(node, &self.doc.node_templates).and_then(|t| t.params.iter().find(|p| p.name == pname))
-        })
+        // A family's member past the first is the template's first.
+        let is = |p: &ParamDef| {
+            p.name == pname || (p.family_index() == Some(1) && crate::param::family_index_of(pname, &p.multi).is_some())
+        };
+        from_subnet.or_else(|| template_for(node, &self.doc.node_templates).and_then(|t| t.params.iter().find(|p| is(p))))
     }
 
     /// The rows of a parameter's right-click menu: labels, the action each
@@ -3481,6 +3651,26 @@ impl State {
         } else {
             options.push("Edit Expression".to_string());
             actions.push(ParamMenuAction::EditExpression);
+        }
+        // An operand reads an attribute or holds a constant; the entry is
+        // the other of the two.
+        if let Some(p) = param.filter(|p| p.kind() == ParamKind::Operand && !p.is_expr()) {
+            if matches!(crate::geometry::Operand::parse(p.text()), Some(crate::geometry::Operand::Constant(_))) {
+                options.push("Read an Attribute".to_string());
+                actions.push(ParamMenuAction::OperandAttribute);
+            } else {
+                options.push("Use a Constant".to_string());
+                actions.push(ParamMenuAction::OperandConstant);
+            }
+        }
+        // A family's member can be taken away while it is not the last.
+        if let Some(p) = param.filter(|p| p.family_index().is_some() && family_size(child, &p.multi) > 1) {
+            options.push("-".to_string());
+            actions.push(ParamMenuAction::Separator);
+            let base = crate::param::family_member_label(&p.label, 1);
+            let base = base.trim_end_matches(|c: char| c.is_ascii_digit()).trim_end();
+            options.push(format!("Remove {}", if base.is_empty() { p.name.as_str() } else { base }));
+            actions.push(ParamMenuAction::RemoveMember);
         }
         (options, actions, headers)
     }
@@ -3718,6 +3908,11 @@ impl State {
     /// One row-menu action on one parameter, by node id and name — the
     /// entry the menu, a test and any future command share.
     pub fn run_param_action(&mut self, node_id: &str, pname: &str, action: ParamMenuAction) {
+        // A row taken away is a step of the whole list, not of the row.
+        if action == ParamMenuAction::RemoveMember {
+            self.remove_family_member(node_id, pname);
+            return;
+        }
         let before = crate::viewer_state::find_node_by_id(&self.doc.fs_root, node_id)
             .and_then(|n| n.params.iter().find(|p| p.name == pname))
             .cloned();
@@ -3822,6 +4017,30 @@ impl State {
                 if let Some(n) = note {
                     self.update_status_text(&n);
                 }
+            }
+            ParamMenuAction::OperandAttribute | ParamMenuAction::OperandConstant => {
+                let constant = action == ParamMenuAction::OperandConstant;
+                let Some(node) = crate::viewer_state::find_node_by_id_mut(&mut self.doc.fs_root, node_id) else { return };
+                // One, where the operands scale: zero would wipe the value.
+                let scales = matches!(
+                    node_param_str(node, "combine_op", "").trim().to_lowercase().as_str(),
+                    "multiply" | "divide"
+                );
+                if let Some(p) = node.params.iter_mut().find(|p| p.name == pname) {
+                    p.set_expr(false);
+                    // An empty row is a text box with the input's
+                    // attributes to pick from.
+                    p.set_text(if !constant { "" } else if scales { "1" } else { "0" }.to_string());
+                }
+                self.update_status_text(&if constant {
+                    format!("{pname} is a constant: one number for every component, or one for each.")
+                } else {
+                    format!("{pname}: pick an attribute, or type its name.")
+                });
+            }
+            ParamMenuAction::RemoveMember => {
+                self.remove_family_member(node_id, pname);
+                return;
             }
         }
         // The SetParam resync sequence.

@@ -75,13 +75,23 @@ pub enum ParamKind {
     /// pane offers the input's groups. Empty means every point, which is
     /// what every Group row's default is.
     Group,
+    /// What an operation is applied WITH: a point attribute's name, or a
+    /// constant — one number, or as many as the value it meets has
+    /// components (`0:1:0`). Told apart by the text: numbers are a
+    /// constant, anything else names an attribute, and an attribute name
+    /// cannot be a number. Any text is a valid value, as for `attribute`;
+    /// what the kind changes is the pane, which shows a constant as sliders
+    /// as wide as the value it meets and a name as a text box with the
+    /// input's attributes to pick from (`State::add_pick_lists`). The
+    /// Attribute node's Composite operands.
+    Operand,
 }
 
 impl ParamKind {
     /// The type-string heads [`ParamKind::parse`] accepts, for messages.
     /// `string` is left out: it is an alias, not something to ask for.
     pub const NAMES: &'static [&'static str] =
-        &["text", "float", "slider", "spinbox", "float2", "float3", "choice", "toggle", "button", "code", "node", "attribute", "group"];
+        &["text", "float", "slider", "spinbox", "float2", "float3", "choice", "toggle", "button", "code", "node", "attribute", "group", "operand"];
 
     /// The kind's name — the type-string head that names it.
     pub fn name(self) -> &'static str {
@@ -99,6 +109,7 @@ impl ParamKind {
             Self::Node => "node",
             Self::Attribute => "attribute",
             Self::Group => "group",
+            Self::Operand => "operand",
         }
     }
 
@@ -119,6 +130,7 @@ impl ParamKind {
             "node" => Self::Node,
             "attribute" => Self::Attribute,
             "group" => Self::Group,
+            "operand" => Self::Operand,
             _ => return None,
         })
     }
@@ -176,6 +188,30 @@ pub enum ParamSlot {
 /// thing: `../sphere1/radius`.
 pub fn is_param_name(s: &str) -> bool {
     !s.is_empty() && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+}
+
+/// `k` when `name` is the k-th member of `family` — `operand_3` of
+/// `operand` is 3 — counted from one; `None` otherwise, and for an empty
+/// family.
+pub fn family_index_of(name: &str, family: &str) -> Option<usize> {
+    if family.is_empty() {
+        return None;
+    }
+    let k: usize = name.strip_prefix(family)?.strip_prefix('_')?.parse().ok()?;
+    (k >= 1).then_some(k)
+}
+
+/// The name of a family's k-th member.
+pub fn family_member_name(family: &str, k: usize) -> String {
+    format!("{family}_{k}")
+}
+
+/// The label of a family's k-th member, from the template's label for its
+/// first: whatever number that ends in is replaced by `k` (`Operand 1` →
+/// `Operand 3`), and one is added where it ends in none.
+pub fn family_member_label(first: &str, k: usize) -> String {
+    let base = first.trim_end_matches(|c: char| c.is_ascii_digit()).trim_end();
+    if base.is_empty() { String::new() } else { format!("{base} {k}") }
 }
 
 /// The parameter name a label or an older name becomes: lowercased, every
@@ -251,6 +287,15 @@ pub struct ParamDef {
     /// written, as the description is. Empty is the node's ungrouped run;
     /// the leading wires are a group of their own without saying so.
     pub group: String,
+    /// The FAMILY this parameter belongs to, when it is one of a run of
+    /// rows that can be added and taken away (Houdini's multiparm): the
+    /// family's name, `operand`. Its members are named `operand_1`,
+    /// `operand_2`, … ([`ParamDef::family_index`]) and a template lists
+    /// the first; a `button` of the family (`add_operand`) adds another.
+    /// The TEMPLATE's, read and never written, as the group is — the
+    /// template merge hands it to every member by name
+    /// (`merge_template_defs`). See CLAUDE.md, "A run of rows can grow".
+    pub multi: String,
 }
 
 /// The file shape of a [`ParamDef`] — the struct as it was before the value
@@ -292,6 +337,9 @@ struct ParamDefRepr {
     /// [`ParamDef::group`]; read, never written.
     #[serde(default, skip_serializing)]
     group: String,
+    /// [`ParamDef::multi`]; read, never written.
+    #[serde(default, skip_serializing)]
+    multi: String,
 }
 
 fn default_param_type() -> String {
@@ -315,6 +363,7 @@ impl<'de> Deserialize<'de> for ParamDef {
             view: r.view,
             description: r.description,
             group: r.group,
+            multi: r.multi,
         };
         if !r.expr {
             p.reparse();
@@ -339,6 +388,7 @@ impl Serialize for ParamDef {
             view: self.view.clone(),
             description: String::new(),
             group: String::new(),
+            multi: String::new(),
         }
         .serialize(s)
     }
@@ -349,9 +399,13 @@ pub fn parse_value(kind: ParamKind, text: &str, options: &[String]) -> Result<Pa
     let t = text.trim();
     let number = |t: &str| t.parse::<f32>().ok().filter(|n| n.is_finite());
     match kind {
-        ParamKind::Text | ParamKind::Node | ParamKind::Attribute | ParamKind::Group | ParamKind::Code | ParamKind::Button => {
-            Ok(ParamValue::Text(text.to_string()))
-        }
+        ParamKind::Text
+        | ParamKind::Node
+        | ParamKind::Attribute
+        | ParamKind::Group
+        | ParamKind::Operand
+        | ParamKind::Code
+        | ParamKind::Button => Ok(ParamValue::Text(text.to_string())),
         ParamKind::Float | ParamKind::Slider => {
             number(t).map(ParamValue::Number).ok_or_else(|| format!("'{text}' is not a number"))
         }
@@ -419,9 +473,17 @@ impl ParamDef {
             view: String::new(),
             description: String::new(),
             group: String::new(),
+            multi: String::new(),
         };
         p.reparse();
         p
+    }
+
+    /// Which member of its family this parameter is — `k` of `operand_k`,
+    /// counted from one — or `None` for a parameter in no family, and for
+    /// the family's button.
+    pub fn family_index(&self) -> Option<usize> {
+        family_index_of(&self.name, &self.multi)
     }
 
     /// Whether a float3-valued row of this parameter shows the trackball:
@@ -443,6 +505,12 @@ impl ParamDef {
         } else {
             &self.label
         }
+    }
+
+    /// One of a family (see [`ParamDef::multi`]).
+    pub fn with_multi(mut self, family: impl Into<String>) -> Self {
+        self.multi = family.into();
+        self
     }
 
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
@@ -651,6 +719,7 @@ impl ParamDef {
         self.show_when = template.show_when.clone();
         self.description = template.description.clone();
         self.group = template.group.clone();
+        self.multi = template.multi.clone();
         // The view is the instance's to choose; the template's is what it
         // starts from.
         if self.view.is_empty() {

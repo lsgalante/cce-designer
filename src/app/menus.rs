@@ -95,6 +95,14 @@ pub enum ParamMenuAction {
     /// alone — the parameter's `view`, kept with the instance.
     ShowTrackball,
     HideTrackball,
+    /// Take this member of a family away (see `ParamDef::multi`); the
+    /// members after it move up a number.
+    RemoveMember,
+    /// An operand row (`ParamKind::Operand`) set to read an attribute, or
+    /// to a constant: what the text holds decides which it is, and these
+    /// write a text of the other sort.
+    OperandAttribute,
+    OperandConstant,
     Separator,
     /// A header row that reads something out — the control's kind, the
     /// value's type — and runs nothing.

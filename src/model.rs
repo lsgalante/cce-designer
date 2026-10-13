@@ -298,7 +298,9 @@ pub struct Project {
     /// one `float2` (`Project::migrate_range_rows`); 7 (the same day)
     /// Composite's Length as the length of Name, not of Source B
     /// (`Project::migrate_composite_length`); 8 (the same day) Develop's
-    /// Direction as an attribute name (`Project::migrate_develop_direction`).
+    /// Direction as an attribute name (`Project::migrate_develop_direction`);
+    /// 9 (2026-10-13) the Attribute node's Modify as a Composite, whose
+    /// operands are a family of rows (`Project::migrate_modify_into_composite`).
     /// `migrate_format` takes a file through each step it is behind, and a
     /// step must not run twice.
     #[serde(default)]
@@ -306,7 +308,7 @@ pub struct Project {
 }
 
 /// The format `Project` saves in — see its `format` field.
-pub const PROJECT_FORMAT: u32 = 8;
+pub const PROJECT_FORMAT: u32 = 9;
 
 
 /// A node's wires as the network draws them: every parameter of the `node`
@@ -540,7 +542,7 @@ pub(crate) fn param_row(p: &ParamDef) -> (String, String, String) {
         // then write zero back over it.
         let ptype = if p.is_expr() {
             "text".to_string()
-        } else if matches!(kind, ParamKind::Text | ParamKind::Float | ParamKind::Node | ParamKind::Attribute | ParamKind::Group) {
+        } else if matches!(kind, ParamKind::Text | ParamKind::Float | ParamKind::Node | ParamKind::Attribute | ParamKind::Group | ParamKind::Operand) {
             // The pane has no numeric-text or node-picker row; both are a
             // text box there. `string` (an absent type) is one too — the
             // pane does not know that word and would draw nothing. An
@@ -894,7 +896,88 @@ impl Project {
         if self.format < 8 {
             self.migrate_develop_direction();
         }
+        if self.format < 9 {
+            self.migrate_modify_into_composite();
+        }
         self.format = PROJECT_FORMAT;
+    }
+
+    /// Format 8 → 9: the Attribute node's Modify is Composite, and
+    /// Composite's operands are a family of rows (`operand_1`, …) where
+    /// they were Source B, C and D. Every Attribute node is rewritten by
+    /// `geometry::composite_from_legacy` — the rule the evaluator reads a
+    /// node in the old shape by — and a channel path that reads a row that
+    /// moved is RESOLVED from its holder and pointed at the row it moved to,
+    /// its component kept: a Modify's `value` (or its `from_attribute`,
+    /// read by attribute) is `operand_1`, a Composite's Source rows the
+    /// operands they became.
+    fn migrate_modify_into_composite(&mut self) {
+        // What a moved row is now, on the node that has it.
+        fn now(node: &FsNode, param: &str) -> Option<String> {
+            let (base, comp) = match param.rsplit_once('.') {
+                Some((b, c)) if !node.params.iter().any(|p| p.name == param) => (b, Some(c)),
+                _ => (param, None),
+            };
+            let migrated = crate::geometry::composite_from_legacy(node)?;
+            let op = node_param_str(node, "operation", "").trim().to_lowercase();
+            let by_attr = node_param_str(node, "value_from", "Constant").trim().eq_ignore_ascii_case("attribute");
+            let new = match base {
+                "value" if op == "modify" && !by_attr => "operand_1".to_string(),
+                "from_attribute" if op == "modify" && by_attr => "operand_1".to_string(),
+                "source_b" | "source_c" | "source_d" if op == "composite" => {
+                    let text = node.params.iter().find(|p| p.name == base)?.text().trim().to_string();
+                    let k = ["source_b", "source_c", "source_d"]
+                        .iter()
+                        .take_while(|s| **s != base)
+                        .filter(|s| node.params.iter().any(|p| p.name == **s && !p.text().trim().is_empty()))
+                        .count();
+                    (!text.is_empty()).then(|| crate::param::family_member_name(crate::geometry::OPERAND_FAMILY, k + 1))?
+                }
+                _ => return None,
+            };
+            migrated.params.iter().any(|p| p.name == new).then(|| match comp {
+                Some(c) => format!("{new}.{c}"),
+                None => new,
+            })
+        }
+        fn collect(root: &FsNode, node: &FsNode, edits: &mut Vec<(String, String, String)>) {
+            for p in node.params.iter().filter(|p| p.is_expr() || p.kind() == ParamKind::Code) {
+                let text = crate::expr::rewrite_paths(p.text(), |path| {
+                    let (id, _, param) = crate::geometry::ref_path_target(root, node, path)?;
+                    let target = crate::viewer_state::find_node_by_id(root, &id)?;
+                    let new = now(target, &param)?;
+                    Some(match path.trim().rsplit_once('/') {
+                        Some((head, _)) => format!("{head}/{new}"),
+                        None => new,
+                    })
+                });
+                if text != p.text() {
+                    edits.push((node.id.clone(), p.name.clone(), text));
+                }
+            }
+            for c in &node.children {
+                collect(root, c, edits);
+            }
+        }
+        let mut edits = Vec::new();
+        collect(&self.root, &self.root, &mut edits);
+        for (id, name, text) in edits {
+            let node = if self.root.id == id { Some(&mut self.root) } else { crate::viewer_state::find_node_by_id_mut(&mut self.root, &id) };
+            if let Some(p) = node.and_then(|n| n.params.iter_mut().find(|p| p.name == name)) {
+                p.set_text(text);
+            }
+        }
+        fn walk(node: &mut FsNode) {
+            if let Some(n) = crate::geometry::composite_from_legacy(node) {
+                let children = std::mem::take(&mut node.children);
+                *node = n;
+                node.children = children;
+            }
+            for c in &mut node.children {
+                walk(c);
+            }
+        }
+        walk(&mut self.root);
     }
 
     /// Format 7 → 8: Develop's Direction names the vector attribute points
@@ -1382,6 +1465,41 @@ pub fn merge_template_defs(root: &mut FsNode, templates: &[NodeTemplate]) {
                 node.params.insert(cursor, tp.clone());
                 cursor += 1;
             }
+        }
+        merge_families(&mut node.params, &template.params);
+    }
+    // A FAMILY's members past the first are the instance's alone — the
+    // template lists one — so they take the first's UI metadata here, under
+    // their own numbered label, and the family is put back together, in
+    // order, ahead of its button: the walk above inserts a parameter the
+    // instance lacks after the last one it has, which for a family is its
+    // first member.
+    fn merge_families(params: &mut Vec<ParamDef>, template: &[ParamDef]) {
+        for tp in template.iter().filter(|tp| tp.family_index() == Some(1)) {
+            let family = tp.multi.clone();
+            for p in params.iter_mut() {
+                if let Some(k) = crate::param::family_index_of(&p.name, &family) {
+                    p.adopt_ui_from(tp);
+                    p.label = crate::param::family_member_label(&tp.label, k);
+                }
+            }
+            let Some(first) = params.iter().position(|p| p.family_index().is_some() && p.multi == family) else {
+                continue;
+            };
+            let mut members: Vec<ParamDef> = Vec::new();
+            params.retain(|p| {
+                let member = p.multi == family && p.family_index().is_some();
+                if member {
+                    members.push(p.clone());
+                }
+                !member
+            });
+            members.sort_by_key(|p| p.family_index());
+            let at = params
+                .iter()
+                .position(|p| p.multi == family && p.kind() == ParamKind::Button)
+                .unwrap_or(first.min(params.len()));
+            params.splice(at..at, members);
         }
     }
     fn merge_node(node: &mut FsNode, templates: &[NodeTemplate]) {

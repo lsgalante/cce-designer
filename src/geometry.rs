@@ -4095,12 +4095,22 @@ pub fn vis_marker_vertices(geom: &Detail, linearize: impl Fn([f32; 3]) -> [f32; 
     out
 }
 
-/// Whether `node` is an Attribute node that moves points — one writing the
-/// built-in `Pos`. Those are the nodes whose effect the viewport draws as
-/// pull arrows while one is selected.
+/// Whether `node` is an Attribute node that moves points — a Composite (or
+/// the Modify it absorbed) writing the built-in `Pos`: its Result, or its
+/// Name when Result is empty. Those are the nodes whose effect the viewport
+/// draws as pull arrows while one is selected.
 pub fn moves_points(node: &FsNode) -> bool {
-    node.node_type.eq_ignore_ascii_case("attribute")
-        && node_param_str(node, "attribute_name", "").trim().eq_ignore_ascii_case("Pos")
+    if !node.node_type.eq_ignore_ascii_case("attribute") {
+        return false;
+    }
+    let op = node_param_str(node, "operation", "").trim().to_lowercase();
+    if op != "composite" && op != "modify" {
+        return false;
+    }
+    let result = node_param_str(node, "result", "").trim().to_string();
+    let written = if result.is_empty() || op == "modify" { node_param_str(node, "attribute_name", "") } else { result };
+    let written = written.trim();
+    written.eq_ignore_ascii_case("Pos") || written == "P"
 }
 
 /// `target`'s geometry as the scene SHOWS it: a node inside a simnet as the
@@ -5174,11 +5184,13 @@ fn neighbours_of(geom: &Detail, p: usize, hood: &Hood) -> Vec<u32> {
 ///
 /// - **Create** inserts `Attribute Name` as the chosen Type parsed from Value,
 ///   overwriting an existing attribute of that name.
-/// - **Modify** combines Value into an attribute that already exists
-///   (Combine = Set / Add / Multiply, componentwise). The built-ins `Pos` and
-///   `Col` are reachable by name here (Float3), so the node can displace or
-///   tint geometry; they cannot be created or deleted.
 /// - **Delete** removes the attribute.
+/// - **Composite** combines the attribute with any number of operands —
+///   attributes or constants, `operand_1`, … — by Combine (Set, Add,
+///   Multiply and the rest), into Result or back into Name. The built-ins
+///   `Pos` and `Col` are reachable by name here (Float3), so the node can
+///   displace or tint geometry; they cannot be created or deleted. It took
+///   in Modify on 2026-10-13 (`composite_from_legacy`).
 ///
 /// Value splits on `:`/`,`/space like every vector param; a single-component
 /// Value broadcasts across wider types (`0.5` scales a Float3 uniformly). A
@@ -5213,15 +5225,23 @@ pub fn resolve_attribute_geometry_with_errors(
 /// The Attribute operator itself, over geometry already in hand — split from
 /// the resolver for the same reason `apply_neighbour` is.
 pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mut Option<String>) {
+    // A Modify, or a Composite with the Source B/C/D rows, is read as the
+    // Composite it is now — the one rule format 9 writes on load, so a
+    // hand-built node and a saved one cannot mean two things.
+    let migrated;
+    let target = match composite_from_legacy(target) {
+        Some(n) => {
+            migrated = n;
+            &migrated
+        }
+        None => target,
+    };
     let name = node_param_str(target, "attribute_name", "attr1").trim().to_string();
     if name.is_empty() {
         return;
     }
     let op = node_param_str(target, "operation", "Create").to_lowercase();
-    let combine_mode = node_param_str(target, "combine", "Set").to_lowercase();
-    let is_pos = name.eq_ignore_ascii_case("Pos");
-    let is_col = name.eq_ignore_ascii_case("Col");
-    let builtin = is_pos || is_col;
+    let builtin = is_builtin_point_attr(&name);
 
     let mut fail = String::new();
     let group = node_param_str(target, "group", "");
@@ -5230,8 +5250,8 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
         .filter(|&p| group.is_empty() || geom.points().in_group(&group, p))
         .collect();
 
-    // Value, as raw components. Delete never reads it; Create/Modify reject
-    // the edit outright when any component fails to parse.
+    // Value, as raw components: Create's. It rejects the edit outright
+    // when any component fails to parse.
     let value_str = node_param_str(target, "value", "");
     let raw: Vec<&str> = value_str
         .split([':', ',', ' '])
@@ -5254,7 +5274,7 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
     // Attribute, read BEFORE anything is written, since it may be the very
     // attribute being written. Pos and Col (P and Cd) are the position and
     // the colour. `None` for a constant Value.
-    let from_attr = matches!(op.as_str(), "create" | "modify")
+    let from_attr = op == "create"
         && node_param_str(target, "value_from", "Constant").eq_ignore_ascii_case("attribute");
     let src_name = node_param_str(target, "from_attribute", "").trim().to_string();
     let src_rows: Option<Vec<Vec<f32>>> = if !from_attr {
@@ -5293,15 +5313,6 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
     };
     // Constant values must parse; a value read from an attribute has.
     let value_ok = value_ok || src_rows.is_some();
-    let combine = |dst: &mut [f32], src: &[f32]| {
-        for (d, s) in dst.iter_mut().zip(src) {
-            match combine_mode.as_str() {
-                "add" => *d += s,
-                "multiply" => *d *= s,
-                _ => *d = *s,
-            }
-        }
-    };
 
     match op.as_str() {
         "delete" => {
@@ -5309,107 +5320,6 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
                 fail = format!("'{}' is built-in and cannot be deleted", name);
             } else {
                 geom.points_mut().remove(&name);
-            }
-        }
-        "modify" => {
-            // How much of the change lands, per point: Strength, times the
-            // point's value of the Scale By attribute when one is named.
-            // They scale the EFFECT — the difference the node makes — so
-            // they mean the same under every Combine: an Add moves by that
-            // much of Value, a Set goes that far toward it, a Multiply that
-            // far toward the product. At exactly one the combined value is
-            // written as it always was, bit for bit.
-            let strength = node_param_f32(target, "strength", 1.0);
-            let scale_by = node_param_str(target, "scale_by", "");
-            let scale_by = scale_by.trim().to_string();
-            let weights: Option<Vec<f32>> = if scale_by.is_empty() {
-                None
-            } else if !geom.points().has(&scale_by) {
-                fail = format!("Scale By '{}' is not a point attribute", scale_by);
-                None
-            } else {
-                Some(affected.iter().map(|&p| geom.points().value(&scale_by, p).map_or(0.0, |v| v.as_f32())).collect())
-            };
-            let amount = |i: usize| strength * weights.as_ref().map_or(1.0, |w| w[i]);
-            // The step's size. Inside a simnet the chain runs once per
-            // SUBSTEP and the solver leaves `dt` on the state — a frame
-            // over the substep count — so a change that ACCUMULATES has to
-            // be a rate, or four substeps pull four times as far a frame
-            // and the substep count, which is there to steady a solve,
-            // becomes its speed. An Add lands `dt` of its amount; a
-            // Multiply the `dt`-th power of its factor, which is what
-            // compounds back to the factor over a frame (a factor that is
-            // not positive has no such power, and lands `dt` of its amount
-            // instead). A Set does not accumulate — setting twice is
-            // setting once — and is left alone. Outside a simnet there is
-            // no `dt` and the step is the whole of it.
-            //
-            // `Per Frame` is the switch, on in the template. A node that
-            // does not carry the row reads OFF: that is every node built
-            // before it, and the chains that Add one to a counter to count
-            // the runs of the chain, which a rate would make a count of
-            // frames.
-            let per_frame = node_param_bool(target, "per_frame", false);
-            let dt = if per_frame { geom.detail().value("dt", 0).map_or(1.0, |v| v.as_f32()) } else { 1.0 };
-            let dt = if dt.is_finite() && dt > 0.0 { dt } else { 1.0 };
-            let (adds, multiplies) = (combine_mode == "add", combine_mode == "multiply");
-            let blend = |old: &[f32], new: &mut [f32], k: f32| {
-                if multiplies && dt != 1.0 {
-                    for (n, o) in new.iter_mut().zip(old) {
-                        // The factor this point takes at amount k, over a
-                        // whole frame: 1 at none of it, Value at all of it.
-                        let factor = if o.abs() > 1e-12 { 1.0 + (*n / o - 1.0) * k } else { 1.0 };
-                        *n = if factor > 0.0 { o * factor.powf(dt) } else { o + (o * factor - o) * dt };
-                    }
-                    return;
-                }
-                let k = if adds { k * dt } else { k };
-                if k != 1.0 {
-                    for (n, o) in new.iter_mut().zip(old) {
-                        *n = o + (*n - o) * k;
-                    }
-                }
-            };
-            if !fail.is_empty() {
-                // Scale By names nothing: the message is set, nothing moves.
-            } else if !value_ok {
-                fail = format!("Value '{}' does not parse as numbers", value_str);
-            } else if builtin {
-                match fit(3).or_else(|| src_rows.as_ref().map(|_| Vec::new())) {
-                    Some(_) => {
-                        for (i, &p) in affected.iter().enumerate() {
-                            let Some(src) = src_for(i, 3) else { continue };
-                            let old = if is_col { geom.color(p) } else { geom.pos(p).to_array() };
-                            let mut v = old;
-                            combine(&mut v, &src);
-                            blend(&old, &mut v, amount(i));
-                            if is_col {
-                                geom.set_color(p, v);
-                            } else {
-                                geom.set_pos(p, Vec3::from(v));
-                            }
-                        }
-                    }
-                    None => fail = format!("Value '{}' does not fit Float3 '{}'", value_str, name),
-                }
-            } else {
-                match geom.points().get(&name).map(|a| a.ty()) {
-                    None => {}
-                    Some(ty) => match fit(ty.components()).or_else(|| src_rows.as_ref().map(|_| Vec::new())) {
-                        None => fail = format!("Value '{}' does not fit '{}'", value_str, name),
-                        Some(_) => {
-                            for (i, &p) in affected.iter().enumerate() {
-                                let Some(src) = src_for(i, ty.components()) else { continue };
-                                let Some(cur) = geom.points().value(&name, p) else { continue };
-                                let old = attrib_components(cur);
-                                let mut buf = old.clone();
-                                combine(&mut buf, &src);
-                                blend(&old, &mut buf, amount(i));
-                                let _ = geom.points_mut().set_value(&name, p, components_attrib(ty, &buf));
-                            }
-                        }
-                    },
-                }
             }
         }
         // Fit a range onto another range, optionally through a clamp. The
@@ -5484,42 +5394,56 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
         // Source C and D — into Result, or back into Name when Result is
         // empty. Every operand is read before anything is written, since
         // Result may be one of them.
+        // Name combined with any number of OPERANDS (`operand_1`, …), each
+        // an attribute or a constant, left to right — `((Name op 1) op 2) …`
+        // — and written to Result, or back into Name when Result is empty.
+        // It absorbed Modify on 2026-10-13: Set, Add and Multiply with one
+        // operand are what Modify did, Strength, Scale By and Per Frame came
+        // with it, and Name and Result may be Pos or Col. A node saved as
+        // Modify, or with the Source B/C/D rows, is read through
+        // `composite_from_legacy`, which format 9 also writes on load.
         "composite" => {
             let op = node_param_str(target, "combine_op", "Add").to_lowercase();
             let reduces = matches!(op.as_str(), "dot" | "distance" | "length");
-            let folds = !reduces && op != "difference";
-            // Length is Name's own length and reads no source.
-            let mut sources = Vec::new();
-            if op != "length" {
-                sources.push(("Source B", node_param_str(target, "source_b", "").trim().to_string()));
-            }
-            if folds {
-                for (label, row) in [("Source C", "source_c"), ("Source D", "source_d")] {
-                    let n = node_param_str(target, row, "").trim().to_string();
-                    if !n.is_empty() {
-                        sources.push((label, n));
-                    }
-                }
-            }
+            let pairs = matches!(op.as_str(), "dot" | "distance" | "difference");
+            let operands = composite_operands(target);
+            let a_width = point_width(geom, &name);
             let result = node_param_str(target, "result", "").trim().to_string();
             let result = if result.is_empty() { name.clone() } else { result };
-            let a_ty = geom.points().get(&name).map(|a| a.ty());
-            if let Some((label, n)) = sources.iter().find(|(_, n)| !geom.points().has(n)) {
+            if a_width.is_none() {
+                fail = format!("'{}' is not a point attribute", name);
+            } else if let Some((label, n)) = operands.iter().find_map(|(label, o)| match o {
+                Operand::Attribute(n) if point_width(geom, n).is_none() => Some((label, n)),
+                _ => None,
+            }) {
                 fail = format!("{label} '{n}' is not a point attribute");
-            } else if a_ty.is_some() && ["Pos", "Col", "P", "Cd"].iter().any(|b| b.eq_ignore_ascii_case(&result)) {
-                fail = format!("Result '{}' is built-in; Modify writes the position and the colour", result);
-            } else if let Some(a_ty) = a_ty {
+            } else if let Some((label, v)) = operands.iter().find_map(|(label, o)| match o {
+                Operand::Constant(v) if v.len() != 1 && Some(v.len()) != a_width => Some((label, v)),
+                _ => None,
+            }) {
+                let shown: Vec<String> = v.iter().map(|c| c.to_string()).collect();
+                fail = format!("{label} '{}' does not fit '{}'", shown.join(":"), name);
+            } else if pairs && operands.len() != 1 {
+                fail = format!("{} takes one operand, not {}", title_case(&op), operands.len());
+            } else if let Some(a_width) = a_width {
+                let operands: Vec<&Operand> = if op == "length" { Vec::new() } else { operands.iter().map(|(_, o)| o).collect() };
                 // A Result that does not exist yet is as wide as the widest
                 // operand — Name's own type when that is it, so an Int stays
                 // an Int — or one number when the operation reduces to one.
-                let widest = sources
+                let widest = operands
                     .iter()
-                    .filter_map(|(_, n)| geom.points().get(n).map(|a| a.ty().components()))
-                    .fold(a_ty.components(), usize::max);
-                let ty = match geom.points().get(&result).map(|a| a.ty()) {
+                    .filter_map(|o| match o {
+                        Operand::Attribute(n) => point_width(geom, n),
+                        Operand::Constant(_) => None,
+                    })
+                    .fold(a_width, usize::max);
+                let builtin_result = is_builtin_point_attr(&result);
+                let a_ty = geom.points().get(&name).map(|a| a.ty()).unwrap_or(crate::detail::AttribType::Float3);
+                let existing = if builtin_result { Some(crate::detail::AttribType::Float3) } else { geom.points().get(&result).map(|a| a.ty()) };
+                let ty = match existing {
                     Some(ty) => ty,
                     None if reduces => crate::detail::AttribType::Float,
-                    None if widest == a_ty.components() => a_ty,
+                    None if widest == a_width => a_ty,
                     None => match widest {
                         2 => crate::detail::AttribType::Float2,
                         3 => crate::detail::AttribType::Float3,
@@ -5527,25 +5451,99 @@ pub(crate) fn apply_attribute(geom: &mut Detail, target: &FsNode, ocl_error: &mu
                     },
                 };
                 let k = ty.components();
-                let read = |p: usize, n: &str| geom.points().value(n, p).map(attrib_components).unwrap_or_default();
-                let outs: Vec<Vec<f32>> = affected
-                    .iter()
-                    .map(|&p| {
-                        let a = read(p, &name);
-                        let rest: Vec<Vec<f32>> = sources.iter().map(|(_, n)| read(p, n)).collect();
-                        composite_point(&op, &a, &rest, k)
-                    })
-                    .collect();
-                if !geom.points().has(&result) {
-                    // Points outside Group get the type's zero, as Create
-                    // leaves them: a column covers its whole class.
-                    geom.points_mut().create(&result, components_attrib(ty, &[]));
+
+                // How much of the change lands, per point: Strength, times
+                // the point's value of Scale By when one is named. They scale
+                // the EFFECT — the difference the node makes to what it
+                // writes — so they mean the same under every operation: an
+                // Add moves by that much of its operands, a Set goes that far
+                // toward them, a Multiply that far toward the product. At
+                // exactly one the combined value is written as it is, bit
+                // for bit.
+                let strength = node_param_f32(target, "strength", 1.0);
+                let scale_by = node_param_str(target, "scale_by", "");
+                let scale_by = scale_by.trim().to_string();
+                let weights: Option<Vec<f32>> = if scale_by.is_empty() {
+                    None
+                } else if !geom.points().has(&scale_by) {
+                    fail = format!("Scale By '{}' is not a point attribute", scale_by);
+                    None
+                } else {
+                    Some(affected.iter().map(|&p| geom.points().value(&scale_by, p).map_or(0.0, |v| v.as_f32())).collect())
+                };
+                // The step's size. Inside a simnet the chain runs once per
+                // SUBSTEP and the solver leaves `dt` on the state — a frame
+                // over the substep count — so a change that ACCUMULATES has
+                // to be a rate, or four substeps pull four times as far a
+                // frame and the substep count, which is there to steady a
+                // solve, becomes its speed. An Add or a Subtract lands `dt`
+                // of its amount; a Multiply or a Divide the `dt`-th power of
+                // its factor, which is what compounds back to the factor over
+                // a frame (a factor that is not positive has no such power,
+                // and lands `dt` of its amount instead). The rest do not
+                // accumulate — setting twice is setting once — and are left
+                // alone. Outside a simnet there is no `dt`.
+                //
+                // `Per Frame` is the switch, on in the template. A node that
+                // does not carry the row reads OFF: that is every node built
+                // before it, and the chains that Add one to a counter to
+                // count the runs of the chain, which a rate would make a
+                // count of frames.
+                let per_frame = node_param_bool(target, "per_frame", false);
+                let dt = if per_frame { geom.detail().value("dt", 0).map_or(1.0, |v| v.as_f32()) } else { 1.0 };
+                let dt = if dt.is_finite() && dt > 0.0 { dt } else { 1.0 };
+                let adds = matches!(op.as_str(), "add" | "subtract");
+                let multiplies = matches!(op.as_str(), "multiply" | "divide");
+                let blend = |old: &[f32], new: &mut [f32], k: f32| {
+                    if multiplies && dt != 1.0 {
+                        for (n, o) in new.iter_mut().zip(old) {
+                            // The factor this point takes at amount k, over a
+                            // whole frame: 1 at none of it, the operands' at
+                            // all of it.
+                            let factor = if o.abs() > 1e-12 { 1.0 + (*n / o - 1.0) * k } else { 1.0 };
+                            *n = if factor > 0.0 { o * factor.powf(dt) } else { o + (o * factor - o) * dt };
+                        }
+                        return;
+                    }
+                    let k = if adds { k * dt } else { k };
+                    if k != 1.0 {
+                        for (n, o) in new.iter_mut().zip(old) {
+                            *n = o + (*n - o) * k;
+                        }
+                    }
+                };
+                if fail.is_empty() {
+                    let amount = |i: usize| strength * weights.as_ref().map_or(1.0, |w| w[i]);
+                    // Every operand is read before Result is written, since
+                    // Result may be one of them.
+                    let outs: Vec<Vec<f32>> = affected
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &p)| {
+                            let a = read_point(geom, &name, p);
+                            let rest: Vec<Vec<f32>> = operands
+                                .iter()
+                                .map(|o| match o {
+                                    Operand::Attribute(n) => read_point(geom, n, p),
+                                    Operand::Constant(v) => v.clone(),
+                                })
+                                .collect();
+                            let mut out = composite_point(&op, &a, &rest, k);
+                            let old = if existing.is_some() { read_point(geom, &result, p) } else { vec![0.0; k] };
+                            let old: Vec<f32> = (0..k).map(|c| old.get(c).copied().unwrap_or(0.0)).collect();
+                            blend(&old, &mut out, amount(i));
+                            out
+                        })
+                        .collect();
+                    if existing.is_none() {
+                        // Points outside Group get the type's zero, as Create
+                        // leaves them: a column covers its whole class.
+                        geom.points_mut().create(&result, components_attrib(ty, &[]));
+                    }
+                    for (&p, out) in affected.iter().zip(&outs) {
+                        write_point(geom, &result, ty, p, out);
+                    }
                 }
-                for (&p, out) in affected.iter().zip(&outs) {
-                    let _ = geom.points_mut().set_value(&result, p, components_attrib(ty, out));
-                }
-            } else {
-                fail = format!("'{}' is missing", name);
             }
         }
         // Move an attribute between classes. Point to Detail is the reduction
@@ -5664,6 +5662,188 @@ pub fn remap_input_range(input: &Detail, target: &FsNode) -> Result<[f32; 2], St
     component_range(input, &name, &affected).ok_or_else(|| format!("'{}' has no values to measure", name))
 }
 
+/// One of a Composite's operands: a point attribute, read per point, or a
+/// constant — one number, spread over every component, or as many as Name
+/// has.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Operand {
+    Attribute(String),
+    Constant(Vec<f32>),
+}
+
+impl Operand {
+    /// What an operand row's text means: numbers are a constant, anything
+    /// else names an attribute, and an empty row is no operand. An
+    /// attribute name cannot be a number, so the two never meet.
+    pub(crate) fn parse(text: &str) -> Option<Operand> {
+        let t = text.trim();
+        if t.is_empty() {
+            return None;
+        }
+        let parts: Vec<&str> = t.split([':', ',', ' ']).filter(|s| !s.is_empty()).collect();
+        let nums: Vec<f32> = parts.iter().filter_map(|p| p.parse::<f32>().ok()).filter(|v| v.is_finite()).collect();
+        Some(if nums.len() == parts.len() { Operand::Constant(nums) } else { Operand::Attribute(t.to_string()) })
+    }
+}
+
+/// The family a Composite's operand rows belong to (`operand_1`, …).
+pub const OPERAND_FAMILY: &str = "operand";
+
+/// A Composite's operands, in order, each with the label a message names
+/// it by (`Operand 2`) — by NAME, `operand_k`, so a node built by hand
+/// without the template's family metadata reads the same. Empty rows are
+/// left out.
+pub(crate) fn composite_operands(node: &FsNode) -> Vec<(String, Operand)> {
+    let mut rows: Vec<(usize, &ParamDef)> = node
+        .params
+        .iter()
+        .filter_map(|p| crate::param::family_index_of(&p.name, OPERAND_FAMILY).map(|k| (k, p)))
+        .collect();
+    rows.sort_by_key(|(k, _)| *k);
+    rows.into_iter()
+        .filter_map(|(k, p)| Operand::parse(p.text()).map(|o| (format!("Operand {k}"), o)))
+        .collect()
+}
+
+/// Whether `name` is the position or the colour, which the Attribute node
+/// reads and writes by these names though they are not ordinary columns:
+/// the position is not an attribute at all, and the colour has a default
+/// where there is no `Cd`.
+pub(crate) fn is_builtin_point_attr(name: &str) -> bool {
+    name.eq_ignore_ascii_case("Pos") || name == "P" || name.eq_ignore_ascii_case("Col") || name == crate::detail::CD
+}
+
+fn is_col_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("Col") || name == crate::detail::CD
+}
+
+/// How many components point attribute `name` has, the position and the
+/// colour included; `None` when there is no such attribute.
+fn point_width(geom: &Detail, name: &str) -> Option<usize> {
+    if is_builtin_point_attr(name) {
+        Some(3)
+    } else {
+        geom.points().get(name).map(|a| a.ty().components())
+    }
+}
+
+/// Point `p`'s value of `name` as loose components, the position and the
+/// colour included; empty when there is none.
+fn read_point(geom: &Detail, name: &str, p: usize) -> Vec<f32> {
+    if is_col_name(name) {
+        geom.color(p).to_vec()
+    } else if is_builtin_point_attr(name) {
+        geom.pos(p).to_array().to_vec()
+    } else {
+        geom.points().value(name, p).map(attrib_components).unwrap_or_default()
+    }
+}
+
+/// Write point `p`'s value of `name`, an attribute of type `ty`, the
+/// position and the colour included.
+fn write_point(geom: &mut Detail, name: &str, ty: crate::detail::AttribType, p: usize, v: &[f32]) {
+    let at = |i: usize| v.get(i).copied().unwrap_or(0.0);
+    if is_col_name(name) {
+        geom.set_color(p, [at(0), at(1), at(2)]);
+    } else if is_builtin_point_attr(name) {
+        geom.set_pos(p, Vec3::new(at(0), at(1), at(2)));
+    } else {
+        let _ = geom.points_mut().set_value(name, p, components_attrib(ty, v));
+    }
+}
+
+fn title_case(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+}
+
+/// An Attribute node in a shape from before Composite took Modify in
+/// (2026-10-13, format 9), as the Composite it is now — `None` for a node
+/// already in that shape, or of another type. The one rule the evaluator
+/// reads a hand-built node by and `Project::migrate_format` writes a save
+/// by:
+///
+/// - **Modify** is Composite with its Combine (Set, Add, Multiply) as the
+///   operation and ONE operand: its Value, or with Value From set to
+///   Attribute, its From Attribute — text and expression flag both.
+///   Strength, Scale By and Per Frame are Composite's now and stay.
+/// - **Composite with Source B, C and D** takes them as its operands, in
+///   order, the empty ones left out, as they were.
+///
+/// Either way Combine and the Source rows go: no operation reads them.
+pub fn composite_from_legacy(node: &FsNode) -> Option<FsNode> {
+    if !node.node_type.eq_ignore_ascii_case("attribute") {
+        return None;
+    }
+    let op = node_param_str(node, "operation", "Create").trim().to_lowercase();
+    let legacy_rows = |n: &FsNode| n.params.iter().any(|p| matches!(p.name.as_str(), "combine" | "source_b" | "source_c" | "source_d"));
+    let has_operands = node.params.iter().any(|p| crate::param::family_index_of(&p.name, OPERAND_FAMILY).is_some());
+    if op != "modify" && !(op == "composite" && !has_operands) && !legacy_rows(node) {
+        return None;
+    }
+    let mut n = node.clone();
+    let row = |n: &FsNode, name: &str| n.params.iter().find(|p| p.name == name).cloned();
+    let mut operands: Vec<ParamDef> = Vec::new();
+    if op == "modify" {
+        let by_attr = node_param_str(node, "value_from", "Constant").trim().eq_ignore_ascii_case("attribute");
+        let from = if by_attr { row(node, "from_attribute") } else { row(node, "value") };
+        if let Some(from) = from {
+            operands.push(from);
+        }
+        let combine = node_param_str(node, "combine", "Set").trim().to_lowercase();
+        let combine = match combine.as_str() {
+            "add" => "Add",
+            "multiply" => "Multiply",
+            _ => "Set",
+        };
+        set_row(&mut n, "operation", "choice", "Composite");
+        set_row(&mut n, "combine_op", "choice", combine);
+    } else if op == "composite" && !has_operands {
+        // As they were read: Length read none, Difference, Dot and
+        // Distance Source B alone, the rest all three.
+        let cop = node_param_str(node, "combine_op", "Add").trim().to_lowercase();
+        let sources: &[&str] = match cop.as_str() {
+            "length" => &[],
+            "difference" | "dot" | "distance" => &["source_b"],
+            _ => &["source_b", "source_c", "source_d"],
+        };
+        for s in sources {
+            if let Some(p) = row(node, s).filter(|p| !p.text().trim().is_empty()) {
+                operands.push(p);
+            }
+        }
+    }
+    n.params.retain(|p| !matches!(p.name.as_str(), "combine" | "source_b" | "source_c" | "source_d"));
+    if !operands.is_empty() {
+        let at = n.params.iter().position(|p| p.name == "combine_op").map_or(n.params.len(), |i| i + 1);
+        let rows: Vec<ParamDef> = operands
+            .iter()
+            .enumerate()
+            .map(|(i, from)| {
+                let mut p = ParamDef::new(crate::param::family_member_name(OPERAND_FAMILY, i + 1), "operand", from.text())
+                    .with_label(crate::param::family_member_label("Operand 1", i + 1))
+                    .with_multi(OPERAND_FAMILY);
+                p.set_expr(from.is_expr());
+                p.view = from.view.clone();
+                p
+            })
+            .collect();
+        n.params.splice(at..at, rows);
+    }
+    Some(n)
+}
+
+/// Set row `name` of `node` to `text`, adding it as a `ty` row when absent.
+fn set_row(node: &mut FsNode, name: &str, ty: &str, text: &str) {
+    match node.params.iter_mut().find(|p| p.name == name) {
+        Some(p) => {
+            p.set_text(text.to_string());
+            p.set_expr(false);
+        }
+        None => node.params.push(ParamDef::new(name, ty, text)),
+    }
+}
+
 /// One point of Composite: Name's value `a` combined with the sources' in
 /// order, at width `k`. A single-number operand is every component's — a
 /// Float3 times a Float is the vector scaled. Until 2026-09-29 the
@@ -5673,6 +5853,7 @@ pub fn remap_input_range(input: &Detail, target: &FsNode) -> Result<[f32; 2], St
 /// number has an obvious meaning for all of them. Dot, Distance and Length
 /// reduce to one number, written into every component; Length is Name's
 /// (Source B's until 2026-10-06, which format 7 carries a save across).
+/// Set is the last operand, as Modify's Set was its Value.
 fn composite_point(op: &str, a: &[f32], sources: &[Vec<f32>], k: usize) -> Vec<f32> {
     let at = |v: &[f32], i: usize| if v.len() == 1 { v[0] } else { v.get(i).copied().unwrap_or(0.0) };
     let b: &[f32] = sources.first().map_or(&[], |b| b.as_slice());
@@ -5692,6 +5873,7 @@ fn composite_point(op: &str, a: &[f32], sources: &[Vec<f32>], k: usize) -> Vec<f
                 sources.iter().fold(at(a, i), |x, s| {
                     let y = at(s, i);
                     match op {
+                        "set" => y,
                         "subtract" => x - y,
                         "multiply" => x * y,
                         // Division by zero yields the numerator rather than
@@ -8192,6 +8374,509 @@ mod simnet_tests {
         assert!(err.is_some(), "normalizing nothing must be reported");
     }
 
+    /// Modify and Composite as they were until 2026-10-13, word for word,
+    /// when Composite took Modify in and its Source rows became operands:
+    /// what `a_modify_is_read_as_the_composite_it_became` and
+    /// `a_composite_with_source_rows_reads_as_it_did` hold the new
+    /// Composite to.
+    fn attribute_reference(geom: &mut Detail, target: &FsNode, ocl_error: &mut Option<String>) {
+        let name = node_param_str(target, "attribute_name", "attr1").trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+        let op = node_param_str(target, "operation", "Create").to_lowercase();
+        let combine_mode = node_param_str(target, "combine", "Set").to_lowercase();
+        let is_pos = name.eq_ignore_ascii_case("Pos");
+        let is_col = name.eq_ignore_ascii_case("Col");
+        let builtin = is_pos || is_col;
+
+        let mut fail = String::new();
+        let group = node_param_str(target, "group", "");
+        let group = group.trim().to_string();
+        let affected: Vec<usize> = (0..geom.num_points())
+            .filter(|&p| group.is_empty() || geom.points().in_group(&group, p))
+            .collect();
+
+        // Value, as raw components. Delete never reads it; Create/Modify reject
+        // the edit outright when any component fails to parse.
+        let value_str = node_param_str(target, "value", "");
+        let raw: Vec<&str> = value_str
+            .split([':', ',', ' '])
+            .filter(|p| !p.is_empty())
+            .collect();
+        let comps: Vec<f32> = raw.iter().filter_map(|p| p.parse::<f32>().ok()).collect();
+        let value_ok = !comps.is_empty() && comps.len() == raw.len();
+        // Value resized to an attribute's width: exact match passes through, a
+        // single component broadcasts, anything else is a mismatch.
+        let fit = |n: usize| -> Option<Vec<f32>> {
+            if comps.len() == n {
+                Some(comps.clone())
+            } else if comps.len() == 1 {
+                Some(vec![comps[0]; n])
+            } else {
+                None
+            }
+        };
+        // Value From Attribute: each affected point's own value of From
+        // Attribute, read BEFORE anything is written, since it may be the very
+        // attribute being written. Pos and Col (P and Cd) are the position and
+        // the colour. `None` for a constant Value.
+        let from_attr = matches!(op.as_str(), "create" | "modify")
+            && node_param_str(target, "value_from", "Constant").eq_ignore_ascii_case("attribute");
+        let src_name = node_param_str(target, "from_attribute", "").trim().to_string();
+        let src_rows: Option<Vec<Vec<f32>>> = if !from_attr {
+            None
+        } else if src_name.is_empty() {
+            fail = "From Attribute names no attribute".to_string();
+            None
+        } else if src_name.eq_ignore_ascii_case("Pos") || src_name == "P" {
+            Some(affected.iter().map(|&p| geom.pos(p).to_array().to_vec()).collect())
+        } else if src_name.eq_ignore_ascii_case("Col") || src_name == "Cd" {
+            Some(affected.iter().map(|&p| geom.color(p).to_vec()).collect())
+        } else if geom.points().has(&src_name) {
+            Some(affected.iter().map(|&p| geom.points().value(&src_name, p).map(attrib_components).unwrap_or_default()).collect())
+        } else {
+            fail = format!("From Attribute '{}' is not a point attribute", src_name);
+            None
+        };
+        // What the i-th affected point is given at width `n`: the constant
+        // resized as `fit` does, or its own source value — as it is when as
+        // wide, a single number spread to every component, otherwise as many
+        // components as fit and the rest zero.
+        let src_for = |i: usize, n: usize| -> Option<Vec<f32>> {
+            match &src_rows {
+                None => fit(n),
+                Some(rows) => {
+                    let row = rows.get(i)?;
+                    Some(if row.len() == n {
+                        row.clone()
+                    } else if row.len() == 1 {
+                        vec![row[0]; n]
+                    } else {
+                        (0..n).map(|k| row.get(k).copied().unwrap_or(0.0)).collect()
+                    })
+                }
+            }
+        };
+        // Constant values must parse; a value read from an attribute has.
+        let value_ok = value_ok || src_rows.is_some();
+        let combine = |dst: &mut [f32], src: &[f32]| {
+            for (d, s) in dst.iter_mut().zip(src) {
+                match combine_mode.as_str() {
+                    "add" => *d += s,
+                    "multiply" => *d *= s,
+                    _ => *d = *s,
+                }
+            }
+        };
+
+        match op.as_str() {
+            "modify" => {
+                // How much of the change lands, per point: Strength, times the
+                // point's value of the Scale By attribute when one is named.
+                // They scale the EFFECT — the difference the node makes — so
+                // they mean the same under every Combine: an Add moves by that
+                // much of Value, a Set goes that far toward it, a Multiply that
+                // far toward the product. At exactly one the combined value is
+                // written as it always was, bit for bit.
+                let strength = node_param_f32(target, "strength", 1.0);
+                let scale_by = node_param_str(target, "scale_by", "");
+                let scale_by = scale_by.trim().to_string();
+                let weights: Option<Vec<f32>> = if scale_by.is_empty() {
+                    None
+                } else if !geom.points().has(&scale_by) {
+                    fail = format!("Scale By '{}' is not a point attribute", scale_by);
+                    None
+                } else {
+                    Some(affected.iter().map(|&p| geom.points().value(&scale_by, p).map_or(0.0, |v| v.as_f32())).collect())
+                };
+                let amount = |i: usize| strength * weights.as_ref().map_or(1.0, |w| w[i]);
+                // The step's size. Inside a simnet the chain runs once per
+                // SUBSTEP and the solver leaves `dt` on the state — a frame
+                // over the substep count — so a change that ACCUMULATES has to
+                // be a rate, or four substeps pull four times as far a frame
+                // and the substep count, which is there to steady a solve,
+                // becomes its speed. An Add lands `dt` of its amount; a
+                // Multiply the `dt`-th power of its factor, which is what
+                // compounds back to the factor over a frame (a factor that is
+                // not positive has no such power, and lands `dt` of its amount
+                // instead). A Set does not accumulate — setting twice is
+                // setting once — and is left alone. Outside a simnet there is
+                // no `dt` and the step is the whole of it.
+                //
+                // `Per Frame` is the switch, on in the template. A node that
+                // does not carry the row reads OFF: that is every node built
+                // before it, and the chains that Add one to a counter to count
+                // the runs of the chain, which a rate would make a count of
+                // frames.
+                let per_frame = node_param_bool(target, "per_frame", false);
+                let dt = if per_frame { geom.detail().value("dt", 0).map_or(1.0, |v| v.as_f32()) } else { 1.0 };
+                let dt = if dt.is_finite() && dt > 0.0 { dt } else { 1.0 };
+                let (adds, multiplies) = (combine_mode == "add", combine_mode == "multiply");
+                let blend = |old: &[f32], new: &mut [f32], k: f32| {
+                    if multiplies && dt != 1.0 {
+                        for (n, o) in new.iter_mut().zip(old) {
+                            // The factor this point takes at amount k, over a
+                            // whole frame: 1 at none of it, Value at all of it.
+                            let factor = if o.abs() > 1e-12 { 1.0 + (*n / o - 1.0) * k } else { 1.0 };
+                            *n = if factor > 0.0 { o * factor.powf(dt) } else { o + (o * factor - o) * dt };
+                        }
+                        return;
+                    }
+                    let k = if adds { k * dt } else { k };
+                    if k != 1.0 {
+                        for (n, o) in new.iter_mut().zip(old) {
+                            *n = o + (*n - o) * k;
+                        }
+                    }
+                };
+                if !fail.is_empty() {
+                    // Scale By names nothing: the message is set, nothing moves.
+                } else if !value_ok {
+                    fail = format!("Value '{}' does not parse as numbers", value_str);
+                } else if builtin {
+                    match fit(3).or_else(|| src_rows.as_ref().map(|_| Vec::new())) {
+                        Some(_) => {
+                            for (i, &p) in affected.iter().enumerate() {
+                                let Some(src) = src_for(i, 3) else { continue };
+                                let old = if is_col { geom.color(p) } else { geom.pos(p).to_array() };
+                                let mut v = old;
+                                combine(&mut v, &src);
+                                blend(&old, &mut v, amount(i));
+                                if is_col {
+                                    geom.set_color(p, v);
+                                } else {
+                                    geom.set_pos(p, Vec3::from(v));
+                                }
+                            }
+                        }
+                        None => fail = format!("Value '{}' does not fit Float3 '{}'", value_str, name),
+                    }
+                } else {
+                    match geom.points().get(&name).map(|a| a.ty()) {
+                        None => {}
+                        Some(ty) => match fit(ty.components()).or_else(|| src_rows.as_ref().map(|_| Vec::new())) {
+                            None => fail = format!("Value '{}' does not fit '{}'", value_str, name),
+                            Some(_) => {
+                                for (i, &p) in affected.iter().enumerate() {
+                                    let Some(src) = src_for(i, ty.components()) else { continue };
+                                    let Some(cur) = geom.points().value(&name, p) else { continue };
+                                    let old = attrib_components(cur);
+                                    let mut buf = old.clone();
+                                    combine(&mut buf, &src);
+                                    blend(&old, &mut buf, amount(i));
+                                    let _ = geom.points_mut().set_value(&name, p, components_attrib(ty, &buf));
+                                }
+                            }
+                        },
+                    }
+                }
+            }
+            "composite" => {
+                let op = node_param_str(target, "combine_op", "Add").to_lowercase();
+                let reduces = matches!(op.as_str(), "dot" | "distance" | "length");
+                let folds = !reduces && op != "difference";
+                // Length is Name's own length and reads no source.
+                let mut sources = Vec::new();
+                if op != "length" {
+                    sources.push(("Source B", node_param_str(target, "source_b", "").trim().to_string()));
+                }
+                if folds {
+                    for (label, row) in [("Source C", "source_c"), ("Source D", "source_d")] {
+                        let n = node_param_str(target, row, "").trim().to_string();
+                        if !n.is_empty() {
+                            sources.push((label, n));
+                        }
+                    }
+                }
+                let result = node_param_str(target, "result", "").trim().to_string();
+                let result = if result.is_empty() { name.clone() } else { result };
+                let a_ty = geom.points().get(&name).map(|a| a.ty());
+                if let Some((label, n)) = sources.iter().find(|(_, n)| !geom.points().has(n)) {
+                    fail = format!("{label} '{n}' is not a point attribute");
+                } else if a_ty.is_some() && ["Pos", "Col", "P", "Cd"].iter().any(|b| b.eq_ignore_ascii_case(&result)) {
+                    fail = format!("Result '{}' is built-in; Modify writes the position and the colour", result);
+                } else if let Some(a_ty) = a_ty {
+                    // A Result that does not exist yet is as wide as the widest
+                    // operand — Name's own type when that is it, so an Int stays
+                    // an Int — or one number when the operation reduces to one.
+                    let widest = sources
+                        .iter()
+                        .filter_map(|(_, n)| geom.points().get(n).map(|a| a.ty().components()))
+                        .fold(a_ty.components(), usize::max);
+                    let ty = match geom.points().get(&result).map(|a| a.ty()) {
+                        Some(ty) => ty,
+                        None if reduces => crate::detail::AttribType::Float,
+                        None if widest == a_ty.components() => a_ty,
+                        None => match widest {
+                            2 => crate::detail::AttribType::Float2,
+                            3 => crate::detail::AttribType::Float3,
+                            _ => crate::detail::AttribType::Float4,
+                        },
+                    };
+                    let k = ty.components();
+                    let read = |p: usize, n: &str| geom.points().value(n, p).map(attrib_components).unwrap_or_default();
+                    let outs: Vec<Vec<f32>> = affected
+                        .iter()
+                        .map(|&p| {
+                            let a = read(p, &name);
+                            let rest: Vec<Vec<f32>> = sources.iter().map(|(_, n)| read(p, n)).collect();
+                            composite_point_reference(&op, &a, &rest, k)
+                        })
+                        .collect();
+                    if !geom.points().has(&result) {
+                        // Points outside Group get the type's zero, as Create
+                        // leaves them: a column covers its whole class.
+                        geom.points_mut().create(&result, components_attrib(ty, &[]));
+                    }
+                    for (&p, out) in affected.iter().zip(&outs) {
+                        let _ = geom.points_mut().set_value(&result, p, components_attrib(ty, out));
+                    }
+                } else {
+                    fail = format!("'{}' is missing", name);
+                }
+            }
+            _ => {}
+        }
+        if !fail.is_empty() && ocl_error.is_none() {
+            *ocl_error = Some(format!("Attribute '{}': {}", target.name, fail));
+        }
+    }
+
+    fn composite_point_reference(op: &str, a: &[f32], sources: &[Vec<f32>], k: usize) -> Vec<f32> {
+        let at = |v: &[f32], i: usize| if v.len() == 1 { v[0] } else { v.get(i).copied().unwrap_or(0.0) };
+        let b: &[f32] = sources.first().map_or(&[], |b| b.as_slice());
+        // Dot and Distance pair the two off by position over the wider, as a
+        // vector operation does; a spread number is not a vector.
+        let raw = |v: &[f32], i: usize| v.get(i).copied().unwrap_or(0.0);
+        match op {
+            "dot" => vec![(0..a.len().max(b.len())).map(|i| raw(a, i) * raw(b, i)).sum(); k],
+            "distance" => vec![(0..a.len().max(b.len())).map(|i| (raw(a, i) - raw(b, i)).powi(2)).sum::<f32>().sqrt(); k],
+            "length" => vec![a.iter().map(|c| c * c).sum::<f32>().sqrt(); k],
+            "average" => {
+                let n = (1 + sources.len()) as f32;
+                (0..k).map(|i| (at(a, i) + sources.iter().map(|s| at(s, i)).sum::<f32>()) / n).collect()
+            }
+            _ => (0..k)
+                .map(|i| {
+                    sources.iter().fold(at(a, i), |x, s| {
+                        let y = at(s, i);
+                        match op {
+                            "subtract" => x - y,
+                            "multiply" => x * y,
+                            // Division by zero yields the numerator rather than
+                            // an infinity that poisons every later frame of a
+                            // solve.
+                            "divide" => if y.abs() < 1e-9 { x } else { x / y },
+                            "minimum" => x.min(y),
+                            "maximum" => x.max(y),
+                            "difference" => (x - y).abs(),
+                            _ => x + y,
+                        }
+                    })
+                })
+                .collect(),
+        }
+    }
+
+    /// A Modify — saved, or built by hand as the suite's fixtures are — is
+    /// read as the Composite `composite_from_legacy` makes of it, and that
+    /// Composite makes what Modify made, bit for bit: every Name (Pos, Col,
+    /// a Float, a Float3, an Int, one the input lacks), every Combine, a
+    /// Value of one number, of three and of a width that fits nothing,
+    /// Value From Attribute (the position and the colour included),
+    /// Strength, Scale By, Per Frame inside a step, and a Group.
+    #[test]
+    fn a_modify_is_read_as_the_composite_it_became() {
+        let mut before = ramped_mass();
+        before.points_mut().create("b", AttribValue::Float(0.0));
+        before.points_mut().create("v", AttribValue::Float3([0.0; 3]));
+        before.points_mut().create("count", AttribValue::Int(0));
+        for p in 0..before.num_points() {
+            let f = p as f32;
+            before.points_mut().set_value("b", p, AttribValue::Float(0.5 + f * 0.1)).unwrap();
+            before.points_mut().set_value("v", p, AttribValue::Float3([f * 0.3, -f, 1.0 + f * 0.01])).unwrap();
+            before.points_mut().set_value("count", p, AttribValue::Int(p as i32 * 3)).unwrap();
+            before.set_color(p, [0.2 + f * 0.01, 0.4, 0.9 - f * 0.02]);
+            if p % 3 == 0 {
+                before.points_mut().set_in_group("g", p, true);
+            }
+        }
+        let mut stepped = before.clone();
+        stepped.detail_mut().create("dt", AttribValue::Float(0.25));
+        let mut cases = 0;
+        for name in ["Pos", "Col", "mass", "v", "count", "nothing"] {
+            for combine in ["Set", "Add", "Multiply"] {
+                for (from, value) in [
+                    ("Constant", "2.5"),
+                    ("Constant", "0.1:-0.2:0.3"),
+                    ("Constant", "1:2"),
+                    ("Attribute", "b"),
+                    ("Attribute", "v"),
+                    ("Attribute", "Pos"),
+                    ("Attribute", "Col"),
+                    ("Attribute", ""),
+                    ("Attribute", "nope"),
+                ] {
+                    for (strength, scale_by, per_frame, group) in
+                        [("1.00", "", "false", ""), ("0.5", "b", "true", ""), ("1.00", "", "true", "g"), ("1.7", "b", "false", "g")]
+                    {
+                        for geom in [&before, &stepped] {
+                            let mut params = vec![param("input", "In"), param("attribute_name", name)];
+                            for (k, v) in [
+                                ("operation", "Modify"),
+                                ("combine", combine),
+                                ("value_from", from),
+                                (if from == "Constant" { "value" } else { "from_attribute" }, value),
+                                ("strength", strength),
+                                ("scale_by", scale_by),
+                                ("per_frame", per_frame),
+                                ("group", group),
+                            ] {
+                                params.push(param(k, v));
+                            }
+                            let n = node("id-a", "A", "attribute", params, vec![]);
+                            let (mut old, mut new) = (geom.clone(), geom.clone());
+                            let (mut old_err, mut new_err) = (None, None);
+                            attribute_reference(&mut old, &n, &mut old_err);
+                            apply_attribute(&mut new, &n, &mut new_err);
+                            let case = format!("{name} {combine} {from} {value:?} x{strength} by {scale_by:?} per frame {per_frame} in {group:?}");
+                            assert!(old == new, "{case}: {old_err:?} / {new_err:?}");
+                            // The same failures, but for a Name the input
+                            // lacks, which Modify passed over in silence, and
+                            // an empty From Attribute, which it called an
+                            // error where an empty operand is left out.
+                            if name != "nothing" && !(from == "Attribute" && value.is_empty()) {
+                                assert_eq!(old_err.is_some(), new_err.is_some(), "{case}: {old_err:?} / {new_err:?}");
+                            }
+                            cases += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(cases, 6 * 3 * 9 * 4 * 2);
+    }
+
+    /// A Composite saved with Source B, C and D is read as the operands
+    /// they became and computes what it did, bit for bit, for every
+    /// operation, the Source rows full and empty, an Int, a Float and a
+    /// Float3 as Name, a missing source, and Result empty, new, existing
+    /// and Name itself. Two things changed, and the test leaves them out: a
+    /// built-in Result, which it refused and now writes (not among the
+    /// cases), and an empty Source B ahead of a full C, which failed the
+    /// node and is now left out like any empty operand.
+    #[test]
+    fn a_composite_with_source_rows_reads_as_it_did() {
+        let mut before = ramped_mass();
+        before.points_mut().create("b", AttribValue::Float(0.0));
+        before.points_mut().create("v", AttribValue::Float3([0.0; 3]));
+        before.points_mut().create("count", AttribValue::Int(0));
+        before.points_mut().create("old", AttribValue::Float2([0.0; 2]));
+        for p in 0..before.num_points() {
+            let f = p as f32;
+            before.points_mut().set_value("b", p, AttribValue::Float(0.5 - f * 0.1)).unwrap();
+            before.points_mut().set_value("v", p, AttribValue::Float3([f * 0.3, -f, 1.0 + f * 0.01])).unwrap();
+            before.points_mut().set_value("count", p, AttribValue::Int(p as i32 * 3 - 7)).unwrap();
+            if p % 2 == 0 {
+                before.points_mut().set_in_group("g", p, true);
+            }
+        }
+        let ops = ["Add", "Subtract", "Multiply", "Divide", "Minimum", "Maximum", "Average", "Difference", "Dot", "Distance", "Length"];
+        let mut cases = 0;
+        for op in ops {
+            for name in ["mass", "v", "count"] {
+                for (b, c, d) in [("b", "", ""), ("v", "b", ""), ("b", "", "v"), ("count", "v", "b"), ("", "b", ""), ("b", "nope", "")] {
+                    for result in ["", "r", "old", "mass"] {
+                        for group in ["", "g"] {
+                            let n = node(
+                                "id-a",
+                                "A",
+                                "attribute",
+                                vec![
+                                    param("input", "In"),
+                                    param("attribute_name", name),
+                                    param("operation", "Composite"),
+                                    param("combine_op", op),
+                                    param("source_b", b),
+                                    param("source_c", c),
+                                    param("source_d", d),
+                                    param("result", result),
+                                    param("group", group),
+                                ],
+                                vec![],
+                            );
+                            let (mut old, mut new) = (before.clone(), before.clone());
+                            let (mut old_err, mut new_err) = (None, None);
+                            attribute_reference(&mut old, &n, &mut old_err);
+                            apply_attribute(&mut new, &n, &mut new_err);
+                            let case = format!("{name} {op} [{b}, {c}, {d}] into {result:?} in {group:?}");
+                            // An empty Source B failed the node whatever
+                            // came after it; an empty operand is left out.
+                            if b.is_empty() && op != "Length" && !c.is_empty() && !matches!(op, "Difference" | "Dot" | "Distance") {
+                                assert!(old_err.is_some());
+                                continue;
+                            }
+                            assert!(old == new, "{case}: {old_err:?} / {new_err:?}");
+                            assert_eq!(old_err.is_some(), new_err.is_some(), "{case}: {old_err:?} / {new_err:?}");
+                            cases += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(cases > 1000, "{cases}");
+    }
+
+    /// A Composite takes any number of operands, each an attribute or a
+    /// constant, folded left to right into Name or Result; Set is the last
+    /// operand; Strength scales what lands; Pos can be both the main value
+    /// and the result; and what does not fit is an error on the node.
+    #[test]
+    fn a_composite_takes_any_number_of_operands() {
+        let mut before = ramped_mass();
+        before.points_mut().create("b", AttribValue::Float(2.0));
+        before.points_mut().create("v", AttribValue::Float3([1.0, 2.0, 3.0]));
+        let get = |d: &Detail, n: &str, p: usize| attrib_components(d.points().value(n, p).unwrap());
+        let run = |ps: &[(&str, &str)]| run_attr(&before, &[&[("operation", "Composite")], ps].concat());
+
+        // ((3 + b) + 10) + b, an attribute and a constant and the first again.
+        let (g, err) = run(&[("combine_op", "Add"), ("operand_1", "b"), ("operand_2", "10"), ("operand_3", "b"), ("result", "r")]);
+        assert!(err.is_none(), "{err:?}");
+        assert_eq!(get(&g, "r", 3), vec![17.0]);
+        // Out of order on the node, in order by number; an empty one is left out.
+        let (g, _) = run(&[("combine_op", "Subtract"), ("operand_3", "1"), ("operand_1", "b"), ("operand_2", ""), ("result", "r")]);
+        assert_eq!(get(&g, "r", 3), vec![0.0]);
+        // Set is the last operand.
+        let (g, _) = run(&[("combine_op", "Set"), ("operand_1", "b"), ("operand_2", "7")]);
+        assert_eq!(get(&g, "mass", 3), vec![7.0]);
+        // Strength: half of the change lands.
+        let (g, _) = run(&[("combine_op", "Set"), ("operand_1", "7"), ("strength", "0.5")]);
+        assert_eq!(get(&g, "mass", 3), vec![5.0]);
+        // A vector constant on a Float3, and Pos as main value and result.
+        let (g, err) = run(&[("attribute_name", "Pos"), ("combine_op", "Add"), ("operand_1", "0:1:0"), ("operand_2", "v")]);
+        assert!(err.is_none(), "{err:?}");
+        for p in 0..g.num_points() {
+            let (a, b) = (before.pos(p), g.pos(p));
+            assert_eq!(b, a + Vec3::new(1.0, 3.0, 3.0));
+        }
+        // Mass into the position's y? No: one number spreads, so mass + 1
+        // lands in every component of a new Float3 Result.
+        let (g, _) = run(&[("combine_op", "Add"), ("operand_1", "v"), ("result", "w")]);
+        assert_eq!(get(&g, "w", 3), vec![4.0, 5.0, 6.0]);
+
+        // What does not fit.
+        let (_, err) = run(&[("combine_op", "Add"), ("operand_1", "1:2")]);
+        assert!(err.as_ref().is_some_and(|e| e.contains("Operand 1 '1:2' does not fit 'mass'")), "{err:?}");
+        let (_, err) = run(&[("combine_op", "Dot"), ("operand_1", "v"), ("operand_2", "v")]);
+        assert!(err.as_ref().is_some_and(|e| e.contains("Dot takes one operand, not 2")), "{err:?}");
+        let (_, err) = run(&[("attribute_name", "nothing"), ("combine_op", "Add"), ("operand_1", "1")]);
+        assert!(err.as_ref().is_some_and(|e| e.contains("'nothing' is not a point attribute")), "{err:?}");
+        let (_, err) = run(&[("combine_op", "Add"), ("operand_1", "nope")]);
+        assert!(err.as_ref().is_some_and(|e| e.contains("Operand 1 'nope' is not a point attribute")), "{err:?}");
+    }
+
+
     /// Composite writes into Result when it names one, created as wide as
     /// the widest operand (one number for Dot, Distance and Length), Name
     /// and the sources left as they were; Source C and D fold in after B,
@@ -8250,11 +8935,14 @@ mod simnet_tests {
         let (g, _) = run_attr(&grouped, &[("operation", "Composite"), ("source_b", "b"), ("result", "r"), ("group", "g")]);
         assert_eq!((get(&g, "r", 3), get(&g, "r", 4)), (vec![5.0], vec![0.0]));
 
-        // A missing source names its row; a built-in Result is refused.
+        // A missing source names its operand. A built-in Result is
+        // written, since Composite took Modify in (2026-10-13): the
+        // position is the result.
         let (_, err) = run_attr(&before, &[("operation", "Composite"), ("source_b", "b"), ("source_c", "nope")]);
-        assert!(err.is_some_and(|e| e.contains("Source C 'nope'")));
-        let (_, err) = run_attr(&before, &[("operation", "Composite"), ("source_b", "b"), ("result", "P")]);
-        assert!(err.is_some_and(|e| e.contains("built-in")));
+        assert!(err.as_ref().is_some_and(|e| e.contains("Operand 2 'nope'")), "{err:?}");
+        let (g, err) = run_attr(&before, &[("operation", "Composite"), ("source_b", "b"), ("result", "P")]);
+        assert!(err.is_none(), "{err:?}");
+        assert_ne!(g.positions(), before.positions(), "the position is written");
     }
 
     #[test]

@@ -14,16 +14,16 @@
     {
       "name": "operation",
       "label": "Operation",
-      "type": "choice:Create,Modify,Delete,Remap,Clip,Normalize,Composite,Promote",
+      "type": "choice:Create,Delete,Remap,Clip,Normalize,Composite,Promote",
       "default": "Create",
-      "description": "What is done to the named point attribute: create it, modify it by Value, delete it, remap or clip its range, normalize it, combine it with Source B, or promote it between point and detail."
+      "description": "What is done to the named point attribute: create it, delete it, remap or clip its range, normalize it, combine it with any number of operands (set it, add to it, scale it, …), or promote it between point and detail."
     },
     {
       "name": "attribute_name",
       "label": "Name",
       "type": "attribute",
       "default": "attr1",
-      "description": "The point attribute to work on. Pos and Col are the built-in position and colour; they can be modified but not created or deleted."
+      "description": "The point attribute to work on. Pos and Col are the built-in position and colour; they can be combined but not created or deleted."
     },
     {
       "name": "type",
@@ -38,7 +38,7 @@
       "label": "Value From",
       "type": "choice:Constant,Attribute",
       "default": "Constant",
-      "show_when": "operation == Create|Modify",
+      "show_when": "operation == Create",
       "description": "Where the value comes from: Constant uses the Value row for every point; Attribute reads each point's own value of From Attribute.",
       "group": "value"
     },
@@ -47,7 +47,7 @@
       "label": "From Attribute",
       "type": "attribute",
       "default": "",
-      "show_when": "operation == Create|Modify && value_from == Attribute",
+      "show_when": "operation == Create && value_from == Attribute",
       "description": "The point attribute each point's value is read from when Value From is Attribute: copied as it is when it is as wide as the result, a single number spread to every component, otherwise as many components as fit, the rest zero. Pos and Col name the position and the colour.",
       "group": "value"
     },
@@ -56,18 +56,47 @@
       "label": "Value",
       "type": "text",
       "default": "1.00",
-      "show_when": "operation == Create|Modify && value_from == Constant",
+      "show_when": "operation == Create && value_from == Constant",
       "description": "The number or numbers written, separated by spaces, commas or colons. One number fills every component; otherwise the count must match the attribute's width.",
       "group": "value"
     },
     {
-      "name": "combine",
+      "name": "combine_op",
       "label": "Combine",
-      "type": "choice:Set,Add,Multiply",
-      "default": "Set",
-      "show_when": "operation == Modify",
-      "description": "How Value meets the current value: Set replaces it, Add adds to it, Multiply multiplies it, componentwise.",
-      "group": "amount"
+      "type": "choice:Set,Add,Subtract,Multiply,Divide,Minimum,Maximum,Average,Difference,Dot,Distance,Length",
+      "default": "Add",
+      "show_when": "operation == Composite",
+      "description": "How the operands meet Name, componentwise and left to right: ((Name op 1) op 2) and on. Set replaces Name with the last operand; Average is the mean of Name and every operand. Difference, Dot and Distance take one operand; Length is the length of Name and takes none. Dot, Distance and Length produce one number, written into every component.",
+      "group": "composite"
+    },
+    {
+      "name": "operand_1",
+      "label": "Operand 1",
+      "type": "operand",
+      "default": "",
+      "multi": "operand",
+      "show_when": "operation == Composite && combine_op != Length",
+      "group": "composite",
+      "description": "What Name is combined with: a point attribute's name, read point by point, or a constant, one number for every component or as many as Name has. Pos and Col name the position and the colour. Empty leaves it out."
+    },
+    {
+      "name": "add_operand",
+      "label": "Add Operand",
+      "type": "button",
+      "default": "",
+      "multi": "operand",
+      "show_when": "operation == Composite && combine_op == Set|Add|Subtract|Multiply|Divide|Minimum|Maximum|Average",
+      "group": "composite",
+      "description": "Adds an operand row under the last, folded in after it. A row is taken away from its right-click menu."
+    },
+    {
+      "name": "result",
+      "label": "Result",
+      "type": "attribute",
+      "default": "",
+      "show_when": "operation == Composite",
+      "description": "The point attribute the result is written to, created when it does not exist: as wide as the widest operand, or one number for Dot, Distance and Length; points outside Group get zero. An existing attribute keeps its type; Pos and Col are the position and the colour. Empty writes the result back into Name.",
+      "group": "result"
     },
     {
       "name": "strength",
@@ -77,8 +106,8 @@
       "min": 0.0,
       "max": 2.0,
       "step": 0.05,
-      "show_when": "operation == Modify",
-      "description": "How much of the change lands: 1 is the full change, 0 none, 2 twice as much. Scales the difference the node makes under every Combine.",
+      "show_when": "operation == Composite",
+      "description": "How much of the change lands: 1 is the full change, 0 none, 2 twice as much. Scales the difference the node makes to what it writes, under every operation.",
       "group": "amount"
     },
     {
@@ -86,7 +115,7 @@
       "label": "Scale By",
       "type": "attribute",
       "default": "",
-      "show_when": "operation == Modify",
+      "show_when": "operation == Composite",
       "description": "A point attribute whose value weights the change per point, multiplied with Strength. Empty weights every point equally; a name that is not an attribute is an error.",
       "group": "amount"
     },
@@ -95,8 +124,8 @@
       "label": "Per Frame",
       "type": "toggle",
       "default": "true",
-      "show_when": "operation == Modify && combine != Set",
-      "description": "Inside a simulation, makes Add and Multiply a rate per frame, so the substep count does not change how far a frame moves. Off lands the full amount every substep.",
+      "show_when": "operation == Composite && combine_op == Add|Subtract|Multiply|Divide",
+      "description": "Inside a simulation, makes Add and Subtract a rate per frame and Multiply and Divide a factor per frame, so the substep count does not change how far a frame moves. Off lands the full amount every substep.",
       "group": "amount"
     },
     {
@@ -104,7 +133,7 @@
       "label": "Group",
       "type": "group",
       "default": "",
-      "show_when": "operation == Create|Modify|Remap|Clip|Normalize|Composite",
+      "show_when": "operation == Create|Remap|Clip|Normalize|Composite",
       "description": "A point group limiting which points are changed or measured. Empty means every point.",
       "group": "where"
     },
@@ -152,51 +181,6 @@
       "show_when": "operation == Normalize",
       "description": "The value the chosen measure (sum, maximum or range) is scaled to hit.",
       "group": "range"
-    },
-    {
-      "name": "source_b",
-      "label": "Source B",
-      "type": "attribute",
-      "default": "",
-      "show_when": "operation == Composite && combine_op != Length",
-      "description": "The second point attribute combined with Name, point by point. A single-number source applies to every component.",
-      "group": "composite"
-    },
-    {
-      "name": "source_c",
-      "label": "Source C",
-      "type": "attribute",
-      "default": "",
-      "show_when": "operation == Composite && combine_op == Add|Subtract|Multiply|Divide|Minimum|Maximum|Average",
-      "description": "A third point attribute, folded in after Source B: (Name op B) op C. Empty leaves it out. Average takes the mean of every operand given.",
-      "group": "composite"
-    },
-    {
-      "name": "source_d",
-      "label": "Source D",
-      "type": "attribute",
-      "default": "",
-      "show_when": "operation == Composite && combine_op == Add|Subtract|Multiply|Divide|Minimum|Maximum|Average",
-      "description": "A fourth point attribute, folded in after Source C. Empty leaves it out.",
-      "group": "composite"
-    },
-    {
-      "name": "combine_op",
-      "label": "Combine Op",
-      "type": "choice:Add,Subtract,Multiply,Divide,Minimum,Maximum,Average,Difference,Dot,Distance,Length",
-      "default": "Add",
-      "show_when": "operation == Composite",
-      "description": "How the sources are combined with Name, componentwise and left to right. Difference, Dot and Distance take Name and Source B alone; Length is the length of Name and reads no source. Dot, Distance and Length produce one number, written into every component.",
-      "group": "composite"
-    },
-    {
-      "name": "result",
-      "label": "Result",
-      "type": "attribute",
-      "default": "",
-      "show_when": "operation == Composite",
-      "description": "The point attribute the result is written to, created when it does not exist: as wide as the widest operand, or one number for Dot, Distance and Length; points outside Group get zero. An existing attribute keeps its type. Empty writes the result back into Name.",
-      "group": "result"
     },
     {
       "name": "to_class",

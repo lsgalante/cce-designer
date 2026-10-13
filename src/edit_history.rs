@@ -101,13 +101,18 @@ pub struct StructureStep {
 #[derive(Clone)]
 pub enum Step {
     Params(ParamSnapshot),
+    /// A node's WHOLE list of parameters as it stood, for an edit that
+    /// adds or takes away a row (a family's member — "A run of rows can
+    /// grow" in CLAUDE.md), which a step by name cannot put back: undone,
+    /// the list is put back whole.
+    Rows(ParamSnapshot),
     Structure(StructureStep),
 }
 
 impl Step {
     pub fn what(&self) -> &str {
         match self {
-            Step::Params(p) => &p.what,
+            Step::Params(p) | Step::Rows(p) => &p.what,
             Step::Structure(s) => &s.what,
         }
     }
@@ -461,6 +466,20 @@ impl State {
         }
     }
 
+    /// Record a node's whole list of parameters as it was, before a row was
+    /// added or taken away. Never grouped: a row is one step.
+    pub fn record_rows(&mut self, before: ParamSnapshot) {
+        let now = crate::viewer_state::find_node_by_id(&self.doc.fs_root, &before.node_id).map(|n| n.params.clone());
+        if let (Some(now), Some(node)) = (
+            now,
+            self.doc.structure_base.as_mut().and_then(|base| crate::viewer_state::find_node_by_id_mut(base, &before.node_id)),
+        ) {
+            node.params = now;
+        }
+        self.note_structure_changes();
+        self.doc.edit_history.record(Step::Rows(before));
+    }
+
     /// Record that `pname` of a node was `before` until just now, if it is
     /// not still. For the writers that change one parameter in one go: the
     /// row menu and `set_param`.
@@ -504,6 +523,22 @@ impl State {
                     Step::Params(ParamSnapshot { node_id: step.node_id, params: replaced, what: step.what }),
                 );
                 self.sync_grid_settings();
+                self.sync_nodes();
+                self.rebuild_scene_geometry();
+                self.sync_parameters_pane();
+                self.update_status_text(&format!("{verb} {what}: {name}"));
+            }
+            Step::Rows(step) => {
+                let Some(node) = crate::viewer_state::find_node_by_id_mut(&mut self.doc.fs_root, &step.node_id) else {
+                    self.update_status_text(&format!("{verb} {what}: the node is gone"));
+                    return false;
+                };
+                let replaced = std::mem::replace(&mut node.params, step.params);
+                let name = node.name.clone();
+                self.doc.edit_history.file(
+                    undo,
+                    Step::Rows(ParamSnapshot { node_id: step.node_id, params: replaced, what: step.what }),
+                );
                 self.sync_nodes();
                 self.rebuild_scene_geometry();
                 self.sync_parameters_pane();

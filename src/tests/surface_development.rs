@@ -1660,7 +1660,7 @@ fn bypass_is_one_flag_however_it_is_asked_for() {
     state.apply_action(McpAction::AddNode { template_name: "Attribute".into(), name: Some("pull1".into()), x: 3.0, y: 4.0 }, &mut redraw).unwrap();
     let slot = |state: &State, name: &str| state.current_dir().children.iter().position(|c| c.name == name).unwrap();
     let (ball, pull) = (slot(&state, "ball"), slot(&state, "pull1"));
-    for (name, value) in [("input", "ball"), ("operation", "Modify"), ("attribute_name", "Pos"), ("value", "1.00:0.00:0.00"), ("combine", "Add")] {
+    for (name, value) in [("input", "ball"), ("operation", "Composite"), ("attribute_name", "Pos"), ("operand_1", "1.00:0.00:0.00"), ("combine_op", "Add")] {
         state.apply_action(McpAction::SetParam { slot: pull, name: name.into(), value: value.into() }, &mut redraw).unwrap();
     }
     state.apply_action(McpAction::ToggleGeometry { slot: pull }, &mut redraw).unwrap();

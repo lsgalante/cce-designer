@@ -330,6 +330,19 @@ impl State {
                 }
             }
             McpAction::SetParam { slot, name, value } => {
+                // A family's member past the last is added, with any between:
+                // `operand_3` on a node with one operand makes three.
+                if let Some(child) = state.current_dir().children.get(slot) {
+                    let node_id = child.id.clone();
+                    let wanted = crate::app::missing_family_member(child, &state.doc.node_templates, &name);
+                    if let Some((family, k)) = wanted {
+                        while crate::app::family_size(state.current_dir().children.get(slot).expect("checked above"), &family) < k {
+                            if state.add_family_member(&node_id, &family).is_none() {
+                                break;
+                            }
+                        }
+                    }
+                }
                 let dir = state.current_dir_mut();
                 if let Some(child) = dir.children.get_mut(slot) {
                     let node_id = child.id.clone();
@@ -554,17 +567,34 @@ impl State {
             McpAction::DeleteParam { slot, name } => {
                 let len = state.current_dir().children.len();
                 if slot < len {
-                    let params = &mut state.current_dir_mut().children[slot].params;
-                    let found = crate::app::param_by_name_or_label(params, &name).map(|p| p.name.clone());
-                    if let Some(pos) = found.and_then(|n| params.iter().position(|p| p.name == n)) {
-                        params.remove(pos);
-                        state.sync_nodes();
-                        state.rebuild_scene_geometry();
-                        state.sync_parameters_pane();
+                    // A family's member goes the way the row menu takes it,
+                    // the members after it moving up a number.
+                    let child = &state.current_dir().children[slot];
+                    let member = child
+                        .params
+                        .iter()
+                        .find(|p| p.name == name && p.family_index().is_some())
+                        .map(|p| (child.id.clone(), p.name.clone()));
+                    if let Some((id, pname)) = member {
                         needs_redraw = true;
-                        Ok("Parameter deleted".to_string())
+                        if state.remove_family_member(&id, &pname) {
+                            Ok("Parameter deleted".to_string())
+                        } else {
+                            Err(format!("'{pname}' is the last of its rows and is not taken away"))
+                        }
                     } else {
-                        Err(format!("Parameter '{}' not found", name))
+                        let params = &mut state.current_dir_mut().children[slot].params;
+                        let found = crate::app::param_by_name_or_label(params, &name).map(|p| p.name.clone());
+                        if let Some(pos) = found.and_then(|n| params.iter().position(|p| p.name == n)) {
+                            params.remove(pos);
+                            state.sync_nodes();
+                            state.rebuild_scene_geometry();
+                            state.sync_parameters_pane();
+                            needs_redraw = true;
+                            Ok("Parameter deleted".to_string())
+                        } else {
+                            Err(format!("Parameter '{}' not found", name))
+                        }
                     }
                 } else {
                     Err("Slot out of bounds".to_string())

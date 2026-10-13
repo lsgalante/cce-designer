@@ -60,7 +60,7 @@ pub(crate) fn mcp_tools() -> Vec<McpTool> {
         ),
         tool(
             "set_param",
-            "Set a parameter on the node at the given slot. All values are strings (e.g. \"1.5\", \"0.2,0.4,1\"). A value that reads as an expression — ch(\"../sphere1/radius\") * 2, $F / 24 — becomes one (Houdini paths: relative to the node, .. its parent, / the root, a bare name its own parameter).",
+            "Set a parameter on the node at the given slot. All values are strings (e.g. \"1.5\", \"0.2,0.4,1\"). A value that reads as an expression — ch(\"../sphere1/radius\") * 2, $F / 24 — becomes one (Houdini paths: relative to the node, .. its parent, / the root, a bare name its own parameter). A row of a family that the node does not have yet — operand_3 on an Attribute node with one operand — is added, with any between.",
             json!({
                 "type": "object",
                 "properties": {
@@ -173,7 +173,7 @@ pub(crate) fn mcp_tools() -> Vec<McpTool> {
         ),
         tool(
             "delete_param",
-            "Delete a parameter from the node at the given slot.",
+            "Delete a parameter from the node at the given slot. A member of a family of rows (operand_2) is taken away as its row menu takes it: the members after it move up a number, and the last is kept.",
             json!({
                 "type": "object",
                 "properties": {

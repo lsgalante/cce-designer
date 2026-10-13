@@ -1019,30 +1019,33 @@ old text Center a float3 from the load on. Tests build parameters with
   same day; it was a fixed ±1000, which a drag crossed in hundreds): ± the
   smallest power of ten, at least one, whose middle half holds every
   component — 1.00 drags over ±10, 9.6 over ±100. The span in use
-  (`State::params.value_row_span`, by node) is KEPT while the value stays between
+  (`State::params.value_row_span`, by node and parameter) is KEPT while the value stays between
   a twentieth and nineteen twentieths of it, and is never re-chosen during
   a drag in the pane (`drag_widget == PARAM_IDX`): a new span is a new
   row type, which rebuilds the pane and would drop the slider being held.
   So a drag to the end re-scales on the release. The rows are cce-ui
   SOFT ranges (`:soft`): a value typed past an end widens the range
   rather than clamping, and the next span holds it. The target
-  is Create's Type, or Modify's Pos, Col or input attribute. The text must
+  is Create's Type; a Composite operand holding a constant (below, and
+  "Composite took Modify in" under "Pull arrows") is presented the same
+  way, as wide as Name — Pos, Col or an input attribute. The text must
   hold one number or as many as the target: ONE is shown spread over every
   component, as the node spreads it (`fit` in `apply_attribute`), and the
   pane's write-back reading that spread back unchanged is not an edit
   (`same_value_row_text`), or every sync would rewrite `1.00` as
   `1.00:1.00:1.00` and file an undo step. An expression and a text that
-  fits no width keep the text box. A Modify of an attribute the input
+  fits no width keep the text box. An operand whose Name the input
   lacks has no width to read, and is presented as wide as its text
   (since 2026-10-13; it was a text box, so a Modify aimed at an attribute
   nothing upstream made yet read as a string). The
   parameter, the file and MCP see text throughout. **Value From** (Constant
-  / Attribute, since the same day, Create and Modify) replaces the Value
+  / Attribute, since the same day, Create; Modify's went into its operand
+  on 2026-10-13) replaces the Value
   row with **From Attribute**, an `attribute` row: each point's own value
   of it is used in place of the constant — copied when as wide, a single
   number spread, otherwise as many components as fit and the rest zero;
   Pos and Col name the position and the colour; read before anything is
-  written, so a Modify can read the attribute it writes. A save from
+  written. A save from
   before has Constant. `test_attribute_takes_its_value_from_another_attribute`
   and `an_attribute_value_row_is_a_control_as_wide_as_its_target` are the
   tests — Transfer's
@@ -1054,12 +1057,22 @@ old text Center a float3 from the load on. Tests build parameters with
   since 2026-10-06, below).
   `template_params_carry_the_kind_they_hold` pins all of it, including the
   rows that stay text.
+- **`operand` is an attribute's name or a constant** (since 2026-10-13):
+  the Attribute node's Composite operands. The text says which — numbers
+  (`2.5`, `0:1:0`) are a constant, anything else names a point attribute,
+  empty is no operand (`geometry::Operand::parse`); an attribute name is
+  never a number. The pane shows a constant as the Value row's control,
+  as wide as Name, and a name, or nothing, as a `textpick` of the input's
+  attributes; the row menu's **Read an Attribute** / **Use a Constant**
+  writes a text of the other sort (an empty one, or 0 — 1 under Multiply
+  and Divide). Its menu Type reads `attribute` for the text box.
 - **A float3 row can carry a trackball** (since 2026-09-28): cce-ui's
   ball beside the three sliders, which turns the vector's DIRECTION and
   keeps its length, where the sliders set a component at a time. The
   display type is `float3:lo:hi:trackball` (`float3_row`). It is on by
   default where the three numbers are a vector — the Attribute node's
-  Value aimed at Pos or a Float3 attribute, the pull node's — and off for
+  constant operand meeting Pos or a Float3 attribute, the pull node's,
+  and Create's Value of a Float3 — and off for
   Col (a colour points nowhere) and for every `float3` parameter (a
   Center, a Size); the row menu's **Show Trackball** / **Hide Trackball**
   chooses either way. The choice is `ParamDef::view` (`trackball`,
@@ -1190,6 +1203,45 @@ hidden parameter is simply not reported and comes back as it was.
 `merge_template_defs` carries `show_when` from the template like the rest of
 the UI metadata — the template owns when a control applies, the instance owns
 its value.
+
+### A run of rows can grow (since 2026-10-13)
+
+Houdini's multiparm: a FAMILY of rows a node can have any number of —
+the first, the Attribute node's Composite operands (`operand_1`,
+`operand_2`, …). `ParamDef::multi` names the family; it is TEMPLATE
+metadata like the group (read, never written), and the template lists
+the first member (`operand_1`, labelled `Operand 1`) and a `button` of
+the family (`add_operand`, **Add Operand**) after it.
+
+- **Members are named `<family>_<k>`, from one, without gaps**
+  (`param::family_index_of`, `family_member_name`), labelled after the
+  template's first with its number replaced (`family_member_label`). A
+  reader finds them BY NAME, so a node built by hand without the metadata
+  reads the same (`geometry::composite_operands`).
+- **The button adds one** (`State::run_param_button` → `add_family_member`):
+  the template's first member under the next name, holding the template's
+  default, after the last. **The row menu's Remove takes one away**
+  (`ParamMenuAction::RemoveMember`, `remove_family_member`), offered while
+  it is not the last — the template lists one, and the merge would put it
+  back — and the members after it move up a number, values and all: so a
+  `ch()` path naming `operand_3` names the row that was `operand_4` after
+  `operand_2` goes.
+- **Each is one undo step that puts the WHOLE list back**
+  (`Step::Rows`, `State::record_rows`), since a step by name cannot say a
+  row was not there.
+- **The template merge** hands every member the first's UI metadata under
+  its own label, and puts the family back together, in order, ahead of its
+  button (`merge_families` in `merge_template_defs`) — the walk that
+  inserts a missing parameter after the last one an instance has would
+  otherwise put a new button between two members.
+- **MCP**: `set_param` on a member the node does not have yet adds it and
+  any between (`missing_family_member`, at most sixteen past the last), and
+  `delete_param` on one takes it away as the menu does.
+- **The rows show by the first's condition**: every member has the
+  template's `show_when`, so `Operand 3` hides with `Operand 1`. The button
+  has its own (Add Operand only for the operations that fold).
+
+`a_run_of_rows_can_grow` is the test.
 
 ### Mesh export
 
@@ -1412,7 +1464,10 @@ is the surface's point normals, as a wrangle's `@N` reads it, so `N` is
 on the node. Checked on the user's project: the old build and the new
 export the same mesh at frames 1 and 30, and the develop node alone.
 `develop_moves_along_the_attribute_its_direction_names` and
-`an_older_develop_direction_becomes_an_attribute_name` are the tests.
+`an_older_develop_direction_becomes_an_attribute_name` are the tests. **Format 9**
+(2026-10-13): the Attribute node's Modify is a Composite and Composite's
+Source rows are operands — see "Composite took Modify in" under "Pull
+arrows".
 Templates go through
 `infer_template_exprs` instead: a default that READS as a reference is one
 (`embryo.json` says `chf("../radius")` now). The same inference applies to a
@@ -4230,8 +4285,9 @@ is the test, on a box, whose faces meet at 90 degrees.
 
 ### Pull arrows
 
-While the params pane shows an Attribute node that writes `Pos`
-(`geometry::moves_points` — the simnet's `pull1` is one), the viewport draws
+While the params pane shows an Attribute node that writes `Pos` — a
+Composite whose Result, or Name with no Result, is Pos
+(`geometry::moves_points`; the simnet's `pull1` is one) — the viewport draws
 amber arrows from where points were to where the node puts them. They are
 MEASURED, output `P` minus input `P` (`point_displacements`), not read off
 Value, so Set, Multiply and an expression all show what actually happened,
@@ -4244,7 +4300,8 @@ unscaled on `pull_arrow_pairs`, and `rebuild_pull_arrow_verts` stretches
 each arrow from its fixed base, so a slider drag re-evaluates nothing.
 
 **Strength and Scale By scale the pull** (the Attribute node's Modify,
-since 2026-09-29). `Strength` is a `slider` over 0..2 with one in the
+since 2026-09-29; Composite's since it took Modify in, 2026-10-13, where
+"old" is what Result held, or zero for a Result it creates). `Strength` is a `slider` over 0..2 with one in the
 middle (a `float` box for its first day), `Scale By` an `attribute`
 naming a point attribute whose value weighs each point; the amount that
 lands at a point is their product. They scale the EFFECT — the change the
@@ -4280,7 +4337,8 @@ every save from before has. Name is then the FIRST OPERAND, not the target.
 op C) op D`), for Add, Subtract, Multiply, Divide, Minimum, Maximum and
 Average, and are hidden and not read for the rest; an empty one is left
 out. Average is the mean of every operand given, not a pairwise fold. A
-Result of Pos / Col / P / Cd is refused: Modify writes those. Every operand
+Result of Pos / Col / P / Cd was refused until Composite took Modify in;
+it is the position or the colour now. Every operand
 is read before Result is written, since it may be one of them.
 `composite_point` is the per-point arithmetic, broadcasting a one-number
 operand (Name included) as above. **Length is the length of Name** (the
@@ -4292,15 +4350,51 @@ type — the same numbers. A Length with no Source B failed before and is left
 alone. `composite_writes_a_result_and_folds_up_to_four_operands` and
 `a_saved_composite_length_keeps_its_result` are the tests.
 
+**Composite took Modify in, and its operands are a family** (since
+2026-10-13). Modify was a Composite of one operand under another name —
+Name combined with one value by Set, Add or Multiply — and Composite was
+Modify without the position, the colour, Strength or Per Frame, and with
+at most three sources. Now there is one: **Combine** is Set (the last
+operand), Add, Subtract, Multiply, Divide, Minimum, Maximum, Average,
+Difference, Dot, Distance or Length, and Name meets any number of
+**operands** — a family of rows (see "A run of rows can grow"), each an
+attribute or a constant (an `operand` row, "Parameter kinds") — folded left
+to right into Result, or Name. Name and Result may be Pos or Col
+(`geometry::read_point` / `write_point`); Strength, Scale By and Per Frame
+came across from Modify. What fails is an error on the node: a Name, an
+operand attribute or a Scale By the input lacks, a constant that is
+neither one number nor as wide as Name, and Difference, Dot or Distance
+with other than one operand. Two things Modify did differently: a Name
+the input lacked was passed over in silence, and an empty From Attribute
+was an error, where an empty operand is left out.
+
+**A node in the old shape is read as the Composite it became**
+(`geometry::composite_from_legacy`, at the top of `apply_attribute`, so a
+hand-built fixture means what a load means), and **format 9**
+(`Project::migrate_modify_into_composite`) writes it on load: Modify's
+Combine is the operation and its Value — or its From Attribute, read by
+attribute — the one operand; Composite's Source B, C and D the operands,
+as they were read (B alone for Difference, Dot and Distance, none for
+Length), the empty ones left out; Combine and the Source rows go. A
+channel path that read a moved row is resolved from its holder and
+pointed at the operand (`../pull1/value.y` → `../pull1/operand_1.y`). The
+old two arms are kept under `cfg(test)` (`attribute_reference`), and
+`a_modify_is_read_as_the_composite_it_became` (1296 cases) and
+`a_composite_with_source_rows_reads_as_it_did` hold the new one to them
+bit for bit, but for the two differences above and an empty Source B
+ahead of a full C, which failed the node and now folds C.
+`a_composite_takes_any_number_of_operands` and
+`a_saved_modify_is_a_composite` are the other tests.
+
 **Per Frame makes the amount a rate.** Inside a simnet the chain runs once
 per SUBSTEP, so a pull that lands whole each run pulls four times as far
 a frame at four substeps — the substep count, which is there to steady a
 solve, becomes its speed. With `Per Frame` on (the template's default)
 the node reads the solver's `dt` off the state and scales what
-ACCUMULATES: an Add lands `dt` of its amount, a Multiply the `dt`-th
-power of its factor, which is what compounds back to the factor over a
-frame. A Set does not accumulate and is left alone, and the row is shown
-only for the other two. Outside a simnet there is no `dt`. It is a
+ACCUMULATES: an Add or a Subtract lands `dt` of its amount, a Multiply
+or a Divide the `dt`-th power of its factor, which is what compounds back
+to the factor over a frame. The rest do not accumulate and are left
+alone, and the row is shown only for those four. Outside a simnet there is no `dt`. It is a
 switch rather than the rule because the other use of an Add is real: a
 chain that adds one to a counter to COUNT its runs
 (`test_substeps_run_the_chain_more_than_once_per_frame`) wants the step,

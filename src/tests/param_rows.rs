@@ -122,7 +122,7 @@ fn the_attribute_nodes_group_row_is_shown_where_it_is_read() {
     let template = root.children.iter().find(|t| t.node_type == "attribute").expect("attribute template");
     let group = template.params.iter().find(|p| p.name == "group").expect("attribute has a group row");
     for (op, shown) in [
-        ("Create", true), ("Modify", true), ("Remap", true), ("Clip", true),
+        ("Create", true), ("Remap", true), ("Clip", true),
         ("Normalize", true), ("Composite", true), ("Delete", false), ("Promote", false),
     ] {
         let mut params = template.params.clone();
@@ -148,4 +148,109 @@ fn test_hiding_a_row_does_not_lose_its_value() {
     assert_eq!(params[1].text(), "7.5", "but the value is untouched");
     params[0].set_text("Remap");
     assert_eq!(param_display(&params)[1].1, "7.5", "and comes back as it was");
+}
+
+/// A run of rows can grow: a family's button adds a member under the
+/// last (here through the pane, as a press writes it), numbered and
+/// labelled after the template's first; a member is taken away from its
+/// row menu while it is not the last, the ones after it moving up a
+/// number with their values; each is one undo step that puts the whole
+/// list back; MCP's `set_param` grows a family to the member it names and
+/// `delete_param` takes one away as the menu does; and a saved node's
+/// members are put back together, in order and ahead of the button, by
+/// the template merge.
+#[test]
+fn a_run_of_rows_can_grow() {
+    use crate::app::{McpAction, ParamKind, ParamMenuAction as A};
+    let mut state = State::new(false);
+    state.resize(1600.0, 900.0, 1.0);
+    state.rebuild_positions();
+    state.apply_layout();
+    state.focused_pane = LEFT_MENUBAR_IDX;
+    let mut redraw = false;
+    state.apply_action(McpAction::AddNode { template_name: "Attribute".into(), name: Some("sum1".into()), x: 5.0, y: 8.0 }, &mut redraw).unwrap();
+    let slot = state.current_dir().children.iter().position(|c| c.name == "sum1").unwrap();
+    for (name, value) in [("input", "sphere1"), ("operation", "Composite"), ("combine_op", "Add"), ("attribute_name", "Pos"), ("operand_1", "0:1:0")] {
+        state.apply_action(McpAction::SetParam { slot, name: name.into(), value: value.into() }, &mut redraw).unwrap();
+    }
+    state.apply_action(McpAction::Select { slot }, &mut redraw).unwrap();
+    let id = state.current_dir().children[slot].id.clone();
+    let names = |state: &State| -> Vec<String> {
+        state.current_dir().children[slot].params.iter().filter(|p| p.multi == "operand").map(|p| p.name.clone()).collect()
+    };
+    let keys = |state: &mut State| -> Vec<String> {
+        state.sync_parameters_pane();
+        state.param_mut().node_params().iter().map(|r| r.0.clone()).filter(|k| k.contains("Operand")).collect()
+    };
+    assert_eq!(names(&state), ["operand_1", "add_operand"]);
+    assert_eq!(keys(&mut state), ["Operand 1", "Add Operand"]);
+
+    // Pressed in the pane: the button's row written `clicked`.
+    let mut rows = state.param_mut().node_params();
+    rows.iter_mut().find(|r| r.0 == "Add Operand").unwrap().1 = "clicked".into();
+    state.param_mut().set_display_params(&rows);
+    state.sync_parameters_to_project();
+    assert_eq!(names(&state), ["operand_1", "operand_2", "add_operand"]);
+    assert_eq!(keys(&mut state), ["Operand 1", "Operand 2", "Add Operand"]);
+    let second = state.current_dir().children[slot].params.iter().find(|p| p.name == "operand_2").unwrap();
+    assert_eq!((second.kind(), second.text(), second.show_when.as_str()), (ParamKind::Operand, "", "operation == Composite && combine_op != Length"));
+    assert!(state.current_dir().children[slot].params.iter().all(|p| p.text() != "clicked"));
+
+    // One undo step, which puts the whole list back, and a redo.
+    assert!(state.history_step(true));
+    assert_eq!(names(&state), ["operand_1", "add_operand"]);
+    assert!(state.history_step(false));
+    assert_eq!(names(&state), ["operand_1", "operand_2", "add_operand"]);
+
+    // MCP grows the family to the member it names.
+    state.apply_action(McpAction::SetParam { slot, name: "operand_4".into(), value: "4".into() }, &mut redraw).unwrap();
+    assert_eq!(names(&state), ["operand_1", "operand_2", "operand_3", "operand_4", "add_operand"]);
+    let menu = state.param_menu_rows(slot, "operand_4").0;
+    assert!(menu.contains(&"Default: ".to_string()), "a later member's default is the first's: {menu:?}");
+    state.apply_action(McpAction::SetParam { slot, name: "operand_3".into(), value: "3".into() }, &mut redraw).unwrap();
+    assert!(state.apply_action(McpAction::SetParam { slot, name: "operand_99".into(), value: "1".into() }, &mut redraw).is_err(), "not a hundred rows for a typo");
+
+    // The row menu takes one away; the rest move up a number, values and all.
+    assert!(state.param_menu_rows(slot, "operand_2").1.contains(&A::RemoveMember));
+    state.run_param_action(&id, "operand_2", A::RemoveMember);
+    assert_eq!(names(&state), ["operand_1", "operand_2", "operand_3", "add_operand"]);
+    let text = |state: &State, n: &str| state.current_dir().children[slot].params.iter().find(|p| p.name == n).unwrap().text().to_string();
+    assert_eq!((text(&state, "operand_2"), text(&state, "operand_3")), ("3".into(), "4".into()));
+    assert_eq!(keys(&mut state), ["Operand 1", "Operand 2", "Operand 3", "Add Operand"]);
+    state.history_step(true);
+    assert_eq!(text(&state, "operand_2"), "", "undone, the list is as it stood");
+    state.history_step(false);
+    // MCP's delete_param the same way, down to one, which stays.
+    state.apply_action(McpAction::DeleteParam { slot, name: "operand_1".into() }, &mut redraw).unwrap();
+    assert_eq!(text(&state, "operand_1"), "3");
+    state.apply_action(McpAction::DeleteParam { slot, name: "operand_2".into() }, &mut redraw).unwrap();
+    assert!(state.apply_action(McpAction::DeleteParam { slot, name: "operand_1".into() }, &mut redraw).is_err());
+    assert!(!state.param_menu_rows(slot, "operand_1").1.contains(&A::RemoveMember), "the last is not offered");
+    assert_eq!(names(&state), ["operand_1", "add_operand"]);
+
+    // An operand switches between a constant and an attribute.
+    assert!(state.param_menu_rows(slot, "operand_1").1.contains(&A::OperandAttribute));
+    state.run_param_action(&id, "operand_1", A::OperandAttribute);
+    assert_eq!(text(&state, "operand_1"), "");
+    assert!(state.param_menu_rows(slot, "operand_1").1.contains(&A::OperandConstant));
+    state.run_param_action(&id, "operand_1", A::OperandConstant);
+    assert_eq!(text(&state, "operand_1"), "0");
+
+    // A save's members, out of order and without the button or their UI,
+    // are put back together by the merge.
+    let mut saved = state.current_dir().children[slot].clone();
+    saved.params.retain(|p| p.multi != "operand");
+    saved.params.push(crate::app::ParamDef::new("operand_2", "text", "b"));
+    saved.params.insert(2, crate::app::ParamDef::new("operand_1", "text", "a"));
+    let mut root = crate::app::FsNode { children: vec![saved], ..state.doc.fs_root.clone() };
+    crate::app::merge_template_defs(&mut root, &state.doc.node_templates);
+    let merged: Vec<(String, String, String)> = root.children[0]
+        .params
+        .iter()
+        .filter(|p| p.multi == "operand")
+        .map(|p| (p.name.clone(), p.label.clone(), p.text().to_string()))
+        .collect();
+    let row = |n: &str, l: &str, t: &str| (n.to_string(), l.to_string(), t.to_string());
+    assert_eq!(merged, [row("operand_1", "Operand 1", "a"), row("operand_2", "Operand 2", "b"), row("add_operand", "Add Operand", "")]);
+    assert!(root.children[0].params.iter().filter(|p| p.multi == "operand").take(2).all(|p| p.kind() == ParamKind::Operand));
 }
