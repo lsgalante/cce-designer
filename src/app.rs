@@ -148,7 +148,7 @@ mod document;
 pub use document::Document;
 // `State::net`: the network editor's cursor, lattice, pan and look.
 mod network;
-pub use network::NetworkView;
+pub use network::{DropGlow, NetworkView, NodeDragGroup, OverlayWheel, OVERLAY_WHEEL_GAP};
 
 /// Which node the params pane is showing: the editor's level, the slot
 /// there, and the node's id. All three, because no one of them is an
@@ -315,44 +315,6 @@ pub enum NetworkMenuAction {
     Separator,
 }
 
-/// The target a scroll gesture over the plateless network was given at its
-/// first event (`State::overlay_wheel_to_graph`).
-#[derive(Debug, Clone, Copy)]
-pub struct OverlayWheel {
-    /// The graph pans; otherwise the scene's camera orbits.
-    pub graph: bool,
-    pub at: (f32, f32),
-    pub last: Instant,
-}
-
-/// How long a pause ends a scroll gesture for `OverlayWheel`: longer than
-/// the gap between a trackpad's events, shorter than a deliberate second
-/// swipe.
-pub const OVERLAY_WHEEL_GAP: std::time::Duration = std::time::Duration::from_millis(250);
-
-/// A mouse drag that moves the whole selection, not just the node under the
-/// pointer.
-///
-/// The widget drags ONE node — it has one `dragging_idx` — so the companions
-/// are moved here, rigidly, by the offset the dragged node has travelled.
-/// Their ORIGINAL cells are kept rather than stepped each frame: a drag is a
-/// continuous gesture reported in whole cells, so accumulating the steps would
-/// drift the group apart the first time two motion events resolved to the same
-/// cell.
-#[derive(Debug, Clone)]
-pub struct NodeDragGroup {
-    /// The slot the pointer grabbed — the widget's own dragged node.
-    pub dragged: usize,
-    /// The cell it started on; every offset is measured from here.
-    pub from: (i32, i32),
-    /// The rest of the selection, with the cells they started on.
-    pub others: Vec<(usize, (f32, f32))>,
-}
-
-/// The command ids the network context menu offers, in order; `None` is a
-/// separator. Add Node leads because right-clicking empty space USED to open
-/// the add-node palette outright, and that is still the common reason to come
-/// here.
 /// How far under its last row a plateless params pane still claims the
 /// pointer: a press just below a row is the row's, not the scene's.
 pub const PARAMS_CLAIM_PAD: f32 = 8.0;
@@ -364,6 +326,10 @@ pub const PARAMS_HUD_MIN_W: f32 = 150.0;
 /// right corner, while there are no rows to show.
 pub const PARAMS_DOT_D: f32 = 36.0;
 
+/// The command ids the network context menu offers, in order; `None` is a
+/// separator. Add Node leads because right-clicking empty space USED to open
+/// the add-node palette outright, and that is still the common reason to come
+/// here.
 pub const NETWORK_MENU_COMMANDS: &[Option<&'static str>] = &[
     Some("add_node"),
     None,
@@ -863,17 +829,6 @@ pub struct PendingWindowDrag {
     pub start_x: f32,
     pub start_y: f32,
     pub action: cce_ui::engine::WindowAction,
-}
-
-/// Animated drop-target glow (see [`NetworkView::drop_glow`]).
-#[derive(Debug, Clone, Copy)]
-pub struct DropGlow {
-    pub x: f32,
-    pub y: f32,
-    pub w: f32,
-    pub h: f32,
-    /// 0..1 — scales the whole feather's alpha profile.
-    pub alpha: f32,
 }
 
 pub struct State {

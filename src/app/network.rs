@@ -128,6 +128,51 @@ pub struct NetworkView {
     pub drop_glow: Option<DropGlow>,
 }
 
+/// The target a scroll gesture over the plateless network was given at its
+/// first event (`State::overlay_wheel_to_graph`).
+#[derive(Debug, Clone, Copy)]
+pub struct OverlayWheel {
+    /// The graph pans; otherwise the scene's camera orbits.
+    pub graph: bool,
+    pub at: (f32, f32),
+    pub last: Instant,
+}
+
+/// How long a pause ends a scroll gesture for `OverlayWheel`: longer than
+/// the gap between a trackpad's events, shorter than a deliberate second
+/// swipe.
+pub const OVERLAY_WHEEL_GAP: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// A mouse drag that moves the whole selection, not just the node under the
+/// pointer.
+///
+/// The widget drags ONE node — it has one `dragging_idx` — so the companions
+/// are moved here, rigidly, by the offset the dragged node has travelled.
+/// Their ORIGINAL cells are kept rather than stepped each frame: a drag is a
+/// continuous gesture reported in whole cells, so accumulating the steps would
+/// drift the group apart the first time two motion events resolved to the same
+/// cell.
+#[derive(Debug, Clone)]
+pub struct NodeDragGroup {
+    /// The slot the pointer grabbed — the widget's own dragged node.
+    pub dragged: usize,
+    /// The cell it started on; every offset is measured from here.
+    pub from: (i32, i32),
+    /// The rest of the selection, with the cells they started on.
+    pub others: Vec<(usize, (f32, f32))>,
+}
+
+/// Animated drop-target glow (see [`NetworkView::drop_glow`]).
+#[derive(Debug, Clone, Copy)]
+pub struct DropGlow {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    /// 0..1 — scales the whole feather's alpha profile.
+    pub alpha: f32,
+}
+
 // The lattice and the cursor region, as arithmetic on the view alone. A
 // window-space answer takes the pane's ORIGIN — the content slot's top-left,
 // which is the roster's — and `State` keeps forwarders that pass it.
