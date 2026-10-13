@@ -334,9 +334,17 @@ impl Application for State {
     }
 
     /// The toolkit's undo/redo routing lands here once no focused text box
-    /// wanted the chord: a code row, a viewer state, then the parameter
-    /// history, the first with something to take back.
+    /// wanted the chord: the dialog's query line while the dialog is up,
+    /// else a code row, a viewer state, then the parameter history, the
+    /// first with something to take back.
     fn undo(&mut self, needs_rebuild: &mut bool) -> bool {
+        // The dialog has the keyboard while it is up, so the chord is its
+        // query line's typing — taken even with nothing to undo, never
+        // passed on to the scene behind it.
+        if self.dialog_visible() {
+            *needs_rebuild |= self.dialog_query_history(true);
+            return true;
+        }
         // A code row being edited owns the chord: its typing is the thing to
         // undo, ahead of a viewer tool that may also be active.
         let taken = self.code_editor_action(cce_ui::widget::ContextAction::Undo)
@@ -349,6 +357,10 @@ impl Application for State {
     }
 
     fn redo(&mut self, needs_rebuild: &mut bool) -> bool {
+        if self.dialog_visible() {
+            *needs_rebuild |= self.dialog_query_history(false);
+            return true;
+        }
         let taken = self.code_editor_action(cce_ui::widget::ContextAction::Redo)
             || self.viewer_tool_redo()
             || self.history_step(false);

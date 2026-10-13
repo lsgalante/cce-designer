@@ -164,6 +164,9 @@ impl State {
         // What is drawn over the scene is placed by the camera as it is
         // NOW, not as the stage pass last saw it.
         self.refresh_scene_view();
+        // The palette's query line shows an input method's composition as
+        // it now stands.
+        self.sync_dialog_query_ime();
         // Refresh popover registration: the engine's text-occlusion clamp
         // reads `ui_context.active_popovers` to keep underlying text from
         // bleeding through an open popup's plate. The legacy render_widget

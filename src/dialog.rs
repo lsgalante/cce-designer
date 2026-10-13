@@ -261,6 +261,13 @@ fn query_rect(rect: Rect) -> Rect {
     Rect { x: rect.x + PAD, y: rect.y + PAD, width: (rect.width - 2.0 * PAD).max(0.0), height: query_h() }
 }
 
+/// Where the query line's text goes: the line less its 8 px inset each
+/// side, which clips it.
+pub(crate) fn query_text_area(rect: Rect) -> Rect {
+    let q = query_rect(rect);
+    Rect { x: q.x + 8.0, y: q.y, width: (q.width - 16.0).max(0.0), height: q.height }
+}
+
 /// The list's viewport.
 fn list_rect(rect: Rect) -> Rect {
     let q = query_rect(rect);
@@ -293,8 +300,16 @@ pub struct Dialog {
     /// Where the plate's top-left corner goes, when it opened in place of
     /// something else (see [`layout_at`]); `None` centres it.
     pub anchor: Option<(f32, f32)>,
-    /// What has been typed into the filter.
-    pub query: String,
+    /// The query line: what has been typed into the filter, with its caret
+    /// and selection — the toolkit's `LineEdit`, so the line edits as every
+    /// one-line field in the DE does (see [`State::dialog_key_input`] for
+    /// which keys are its). Read it with [`Dialog::query_text`], set it
+    /// with [`Dialog::set_query`].
+    pub query: LineEdit,
+    /// How far the query line's text is scrolled left to keep the caret in
+    /// view (`LineMarks::keep_caret`), from one paint to the next; 0 while
+    /// the text fits.
+    query_shift: std::cell::Cell<f32>,
     /// The filtered, ranked rows — rebuilt by the app whenever `query`
     /// changes, never here: ranking needs the registry AND the focused pane,
     /// and this widget knows neither.
@@ -411,7 +426,8 @@ impl Dialog {
             mode: Mode::Commands,
             turning: None,
             anchor: None,
-            query: String::new(),
+            query: LineEdit::default(),
+            query_shift: std::cell::Cell::new(0.0),
             rows: Vec::new(),
             selected: 0,
             scroll_px: 0.0,
@@ -462,6 +478,46 @@ impl Dialog {
     /// How many rows fit — what PageUp/PageDown step by.
     pub fn page_len(&self) -> usize {
         self.page.max(1)
+    }
+
+    /// What has been typed into the filter.
+    pub fn query_text(&self) -> &str {
+        &self.query.text
+    }
+
+    /// Put `text` in the query line, the caret after it and nothing to
+    /// undo — the line as an opening finds it. A composition the old line
+    /// was showing is cancelled with it.
+    pub fn set_query(&mut self, text: &str) {
+        self.query.drop_composition();
+        self.query = LineEdit::with_text(text);
+        // Seen as of now: an opening takes up no composition already in
+        // progress elsewhere.
+        self.query.drop_composition();
+        self.query_shift.set(0.0);
+    }
+
+    /// Whether a press in the query line is being dragged into a selection
+    /// — the app arms its widget drag on this, as on a slider's.
+    pub fn query_dragging(&self) -> bool {
+        self.query.dragging()
+    }
+
+    /// The query line as drawn: measured on the frame's own font system,
+    /// the run the renderer shapes (`LineMarks`), never by the inked
+    /// `measure_text_width`, which put the caret off the glyphs a little
+    /// more with every character.
+    fn query_marks(&self, family: &str, size: f32) -> LineMarks {
+        let mut fs = cce_ui::geometry_font_system().lock().unwrap_or_else(|e| e.into_inner());
+        LineMarks::of(&mut fs, &self.query, size, Some(family))
+    }
+
+    /// The boundary of the query's text nearest window x `x`, for a press
+    /// or a drag in the query line of a dialog laid out at `rect`.
+    fn query_index_at(&self, rect: Rect, x: f32) -> usize {
+        let (family, size) = cce_ui::layout::control_label_font_parsed();
+        let origin = query_text_area(rect).x - self.query_shift.get();
+        self.query_marks(&family, size).index_at(&self.query, x - origin)
     }
 
     /// Claim, or stop claiming, the dialog's rect as an occluder.
@@ -931,6 +987,29 @@ pub(crate) fn shaped_width(text: &str, family: &str, font_size: f32) -> f32 {
         .unwrap_or_else(|| display::measure_text_width(text, family, font_size))
 }
 
+/// The span of `marks.shown` whose characters stand wholly inside a text
+/// area `avail` wide with the text scrolled `shift` along it: the whole of
+/// it while it fits. What the query line draws, since its text cannot be
+/// clipped (see `Dialog::paint_query`).
+fn visible_span(marks: &LineMarks, shift: f32, avail: f32) -> (usize, usize) {
+    let len = marks.shown.len();
+    if shift <= 0.0 && marks.width() <= avail + 0.5 {
+        return (0, len);
+    }
+    let (mut first, mut last) = (None, 0);
+    for i in marks.shown.char_indices().map(|(i, _)| i).chain(std::iter::once(len)) {
+        let x = marks.x_of(i);
+        if first.is_none() && x >= shift - 0.5 {
+            first = Some(i);
+        }
+        if x <= shift + avail + 0.5 {
+            last = i;
+        }
+    }
+    let first = first.unwrap_or(len);
+    (first, last.max(first))
+}
+
 /// Paint `w` into `r` with its text re-emitted under the dialog's own bounds
 /// `own`. Painted twice, on purpose: a hosted widget's text has to carry the
 /// DIALOG's bounds or the occluder the dialog registers clamps it away, and a
@@ -1019,6 +1098,51 @@ impl Paint for Dialog {
 }
 
 impl Dialog {
+    /// The query line's text, selection, composition and caret in `area`
+    /// (the well less its inset): measured as drawn ([`Dialog::query_marks`]),
+    /// scrolled to keep the caret in view (`LineMarks::keep_caret`), and
+    /// drawn by the toolkit's `paint_line` in the dialog's colours, `hint`
+    /// standing in for an empty query. Returns the caret's rect.
+    ///
+    /// `paint_line` clips its text to `area`, and a clipped label in here is
+    /// one the dialog's own occluder clamps away: the clamp knows a
+    /// popover's text by bounds that ARE its rect (see `paint_retagged`).
+    /// So it paints into a scratch list whose geometry — the selection, the
+    /// composition's underline, the caret — goes in as it is, clip and all,
+    /// and whose text is re-emitted under the dialog's bounds `own`, cut to
+    /// the characters wholly inside `area` rather than clipped, as the rows
+    /// truncate theirs.
+    #[allow(clippy::too_many_arguments)]
+    fn paint_query(&self, area: Rect, family: &str, size: f32, accent: [f32; 4], hint: &str, own: Option<[f32; 4]>, ctx: &mut PaintCtx) -> Rect {
+        let marks = self.query_marks(family, size);
+        let shift = marks.keep_caret(self.query_shift.get(), area.width);
+        self.query_shift.set(shift);
+        let origin = area.x - shift;
+        let look = LineLook {
+            text: [0xe6, 0xe6, 0xee],
+            placeholder: [0x70, 0x70, 0x7c],
+            caret: [accent[0], accent[1], accent[2], 0.9],
+            ..LineLook::new(size, Some(family.to_string()))
+        };
+        let mut scratch = PaintCtx::new();
+        let caret = line_edit::paint_line(&mut scratch, area, origin, &marks, &look, hint, true);
+        let mut list = scratch.finish();
+        let (texts, geometry): (Vec<_>, Vec<_>) = list.items.drain(..).partition(|i| matches!(i.prim, Prim::Text { .. }));
+        list.items = geometry;
+        ctx.append_translated(&list, 0.0, 0.0);
+        for item in texts {
+            let Prim::Text { text, y, font_size, color, font, .. } = item.prim else { continue };
+            let (text, x) = if marks.shown.is_empty() {
+                (text, origin)
+            } else {
+                let (a, b) = visible_span(&marks, shift, area.width);
+                (marks.shown[a..b].to_string(), origin + marks.x_of(a))
+            };
+            ctx.text_with(text, x, y, font_size, color, font, own);
+        }
+        caret
+    }
+
     /// The dialog's paint, with the live dropdown when it can be reached.
     fn paint_with(&self, dropdown: Option<&Adapted<Dropdown>>, rect: Rect, ctx: &mut PaintCtx) {
         if rect.width <= 0.0 || rect.height <= 0.0 {
@@ -1054,45 +1178,29 @@ impl Dialog {
             display::truncate_head(text, cols_for(width))
         };
 
-        // --- The query line: a well, like the text rows in the params pane.
-        // The caret is a plain rule and does not blink: the dialog owns the
-        // keyboard outright while it is open, so there is no focus to signal.
-        // In AddNode the hint says what this opening of the plate is for;
+        // --- The query line: a well, like the text rows in the params pane,
+        // and in it the toolkit's one-line field (`paint_query`). The caret
+        // is a plain rule and does not blink: the dialog owns the keyboard
+        // outright while it is open, so there is no focus to signal. In
+        // AddNode the hint says what this opening of the plate is for;
         // there is no title band, so the two openings are the same height.
         let q = query_rect(rect);
         ctx.rounded_rect(q, ctrl_r, (true, true, true, true), [0.0, 0.0, 0.0, 0.22]);
-        let qty = cce_ui::layout::align_text_y(q.y, q.height, font_size, 0.0);
-        let qtx = q.x + 8.0;
-        let q_w = q.width - 16.0;
-        if self.query.is_empty() {
-            let hint = fit(
-                match self.mode {
-                    Mode::Commands => "Type to filter commands and settings",
-                    Mode::AddNode => "Add Node: type to filter nodes",
-                    Mode::Rename => "Rename: type the node's name",
-                    Mode::Groups => "Group Markers: type to filter groups",
-                },
-                q_w,
-            );
-            ctx.text_with(hint, qtx, qty, font_size, [0x70, 0x70, 0x7c], Some(family.clone()), own);
-        } else {
-            // Head-truncated: what matters while typing is the end of the
-            // query, which is where the caret is.
-            let shown = display::truncate_head(&self.query, (q_w / display::measure_text_width("M", &family, font_size).max(1.0)).floor() as usize);
-            ctx.text_with(shown, qtx, qty, font_size, [0xe6, 0xe6, 0xee], Some(family.clone()), own);
-        }
-        let caret_x = qtx + display::measure_text_width(&self.query, &family, font_size) + 1.0;
-        // The query owns the keyboard while the palette is up: say so, so a
-        // touch raises the on-screen keyboard. The field stands in for the
-        // caret (and is off by the slide while the palette turns — brief, and
-        // the board does not care where).
-        cce_ui::text_input::claim(q.x, q.y, q.width, q.height);
-        if caret_x < q.x + q.width - 4.0 {
-            ctx.quad(
-                Rect { x: caret_x, y: q.y + 6.0, width: 1.0, height: q.height - 12.0 },
-                [accent[0], accent[1], accent[2], 0.9],
-            );
-        }
+        let hint = fit(
+            match self.mode {
+                Mode::Commands => "Type to filter commands and settings",
+                Mode::AddNode => "Add Node: type to filter nodes",
+                Mode::Rename => "Rename: type the node's name",
+                Mode::Groups => "Group Markers: type to filter groups",
+            },
+            q.width - 16.0,
+        );
+        let caret = self.paint_query(query_text_area(rect), &family, font_size, accent, &hint, own, ctx);
+        // The query owns the keyboard while the palette is up: say so, at
+        // the caret, so a touch raises the on-screen keyboard and an input
+        // method puts its candidates there (off by the slide while the
+        // palette turns — brief, and neither cares).
+        cce_ui::text_input::claim(caret.x, caret.y, caret.width, caret.height);
 
         // --- The rows. The chord column is right-aligned against the list's
         // right edge rather than padded out to a fixed width: the label is
@@ -1377,6 +1485,16 @@ impl Input for Dialog {
                 if self.sb_press(rect, *x, *y) {
                     return true;
                 }
+                // On the query line: the caret goes where it was pressed (a
+                // second press selects the word, a third the line), and a
+                // drag from here selects — through the app's widget drag,
+                // as a slider's does.
+                let q = query_rect(rect);
+                if *x >= q.x && *x < q.x + q.width && *y >= q.y && *y < q.y + q.height {
+                    let at = self.query_index_at(rect, *x);
+                    self.query.press(at, false);
+                    return true;
+                }
                 if let Some(i) = self.row_at(rect, *x, *y) {
                     self.selected = i;
                     let r = self.row_rect(rect, i);
@@ -1416,6 +1534,10 @@ impl Input for Dialog {
             }
             Event::MouseButton { button: MouseButton::Left, state: ElementState::Released, .. } => {
                 if self.slider_drag.take().is_some() {
+                    return true;
+                }
+                if self.query.dragging() {
+                    self.query.release();
                     return true;
                 }
                 if std::mem::take(&mut self.sb_dragging) {
@@ -1496,21 +1618,32 @@ impl Input for Dialog {
     // A slider drag rides the app's widget-drag protocol (armed by
     // `State::dialog_mouse_input` once a press has taken a band), so the
     // pointer keeps moving the value after it leaves the plate, as a params
-    // pane slider's does.
+    // pane slider's does. So does a selection dragged out of the query line,
+    // which follows the pointer past either end of the line.
     fn draggable(&self, _rect: Rect) -> bool {
-        self.slider_drag.is_some()
+        self.slider_drag.is_some() || self.query.dragging()
     }
     fn is_dragging(&self) -> bool {
-        self.slider_drag.is_some()
+        self.slider_drag.is_some() || self.query.dragging()
     }
     fn drag_begin(&mut self, px: f32, _py: f32, _rect: Rect) {
-        self.slide_to(px);
+        if self.slider_drag.is_some() {
+            self.slide_to(px);
+        }
     }
-    fn drag_update(&mut self, px: f32, _py: f32, _rect: Rect) -> bool {
-        self.slide_to(px)
+    fn drag_update(&mut self, px: f32, _py: f32, rect: Rect) -> bool {
+        if self.slider_drag.is_some() {
+            return self.slide_to(px);
+        }
+        if self.query.dragging() {
+            let at = self.query_index_at(rect, px);
+            return self.query.drag_to(at);
+        }
+        false
     }
     fn drag_end(&mut self) {
         self.slider_drag = None;
+        self.query.release();
     }
 }
 
@@ -1807,7 +1940,7 @@ impl State {
             Some((origin, at)) => self.open_dialog_from(Mode::Rename, origin, at),
             None => self.open_dialog_in(Mode::Rename),
         }
-        self.ui_context[self.slots.dialog].query = name;
+        self.ui_context[self.slots.dialog].set_query(&name);
         self.refresh_dialog_rows();
     }
 
@@ -1864,7 +1997,7 @@ impl State {
         // search has to be cleared before it can be used, which is a step
         // every single time to save one occasionally.
         self.ui_context[self.slots.dialog].mode = mode;
-        self.ui_context[self.slots.dialog].query.clear();
+        self.ui_context[self.slots.dialog].set_query("");
         self.ui_context[self.slots.dialog].set_visible(true);
         self.refresh_dialog_rows();
         self.rebuild_positions();
@@ -1891,6 +2024,9 @@ impl State {
         self.ui_context[dd].set_visible(false);
         self.ui_context[self.slots.dialog].dropdown_row = None;
         self.ui_context[self.slots.dialog].dropdown_armed = false;
+        // The line loses the keys: a composition it was showing is
+        // cancelled, not left for the next opening.
+        self.ui_context[self.slots.dialog].query.drop_composition();
         self.ui_context[self.slots.dialog].set_visible(false);
         self.menus.dialog_from = None;
         self.menus.dialog_trail.clear();
@@ -1914,7 +2050,7 @@ impl State {
     /// thing in every list; they carry no chord, so the column is simply
     /// empty for them.
     pub fn refresh_dialog_rows(&mut self) {
-        let query = self.ui_context[self.slots.dialog].query.clone();
+        let query = self.ui_context[self.slots.dialog].query_text().to_string();
         let rows: Vec<Row> = match self.ui_context[self.slots.dialog].mode {
             // One row, which is what Enter will do: the name as it will be
             // written, or why it will not be.
@@ -2580,6 +2716,14 @@ impl State {
             _ => {}
         }
 
+        // Which keys are the LIST's and which the query line's. Up, Down
+        // and the pages walk the list, Enter picks; Ctrl+Home and Ctrl+End
+        // are its ends, plain Home and End the line's. Left and Right work
+        // the selected row's control in place when it has one that steps —
+        // a slider by its step, a choice to its neighbouring option — and
+        // move the caret on every other row; with Ctrl they are always the
+        // caret's, by word. Everything else is the line's (`dialog_query_key`).
+        let ctrl = event.ctrl || self.modifiers.control_key();
         match &event.logical_key {
             Key::Named(NamedKey::ArrowDown) => self.ui_context[self.slots.dialog].move_selection(1),
             Key::Named(NamedKey::ArrowUp) => self.ui_context[self.slots.dialog].move_selection(-1),
@@ -2591,11 +2735,11 @@ impl State {
                 let page = self.ui_context[self.slots.dialog].page_len() as i32;
                 self.ui_context[self.slots.dialog].move_selection(-page);
             }
-            Key::Named(NamedKey::Home) => {
+            Key::Named(NamedKey::Home) if ctrl => {
                 self.ui_context[self.slots.dialog].selected = 0;
                 self.ui_context[self.slots.dialog].scroll_to_selected();
             }
-            Key::Named(NamedKey::End) => {
+            Key::Named(NamedKey::End) if ctrl => {
                 let last = self.ui_context[self.slots.dialog].rows.len().saturating_sub(1);
                 self.ui_context[self.slots.dialog].selected = last;
                 self.ui_context[self.slots.dialog].scroll_to_selected();
@@ -2605,37 +2749,67 @@ impl State {
                     self.take_dialog_pick(id);
                 }
             }
-            // The arrows work the selected row's control in place: a
-            // slider by its step, a choice to the next or previous option,
-            // a float2's first end — its second with shift. On any other
-            // row they mean nothing here.
-            Key::Named(NamedKey::ArrowLeft) | Key::Named(NamedKey::ArrowRight) => {
+            Key::Named(NamedKey::ArrowLeft) | Key::Named(NamedKey::ArrowRight)
+                if !ctrl
+                    && matches!(
+                        self.ui_context[self.slots.dialog].selected_control(),
+                        Some(Control::Slider { .. } | Control::Choice { .. })
+                    ) =>
+            {
                 let dir: i32 = if matches!(event.logical_key, Key::Named(NamedKey::ArrowRight)) { 1 } else { -1 };
                 self.nudge_dialog_selection(dir);
             }
-            Key::Named(NamedKey::Backspace) => {
-                if self.ui_context[self.slots.dialog].query.pop().is_some() {
-                    self.refresh_dialog_rows();
-                }
-            }
-            Key::Named(NamedKey::Space) => {
-                self.ui_context[self.slots.dialog].query.push(' ');
-                self.refresh_dialog_rows();
-            }
-            Key::Character(c) => {
-                // Bare typing only: a modified key is a chord, and the ones
-                // this dialog answers to are handled above.
-                if !self.modifiers.control_key()
-                    && !self.modifiers.alt_key()
-                    && !self.modifiers.super_key()
-                {
-                    self.ui_context[self.slots.dialog].query.push_str(c);
-                    self.refresh_dialog_rows();
-                }
-            }
-            _ => {}
+            _ => self.dialog_query_key(event),
         }
         true
+    }
+
+    /// A key for the query line: the toolkit's `LineEdit` keymap — the
+    /// caret and a selection (Shift), word moves and deletes (Ctrl),
+    /// Home and End, Ctrl+A / U / V / C / X, Ctrl+Y — and the rows ranked
+    /// again when the text changed. The modifiers are the window's as well
+    /// as the event's. A Super chord is the compositor's and types nothing
+    /// (the keymap leaves Ctrl and Alt chords it does not own alone itself).
+    fn dialog_query_key(&mut self, event: &KeyEvent) {
+        if self.modifiers.super_key() {
+            return;
+        }
+        let ev = KeyEvent {
+            ctrl: event.ctrl || self.modifiers.control_key(),
+            shift: event.shift || self.modifiers.shift_key(),
+            alt: event.alt || self.modifiers.alt_key(),
+            ..event.clone()
+        };
+        let query = &mut self.ui_context[self.slots.dialog].query;
+        let was = query.text.clone();
+        query.handle_key(&ev);
+        if query.text != was {
+            self.refresh_dialog_rows();
+        }
+    }
+
+    /// Undo or redo the query line's typing — the DE's undo chords while
+    /// the dialog is up (`Application::undo` / `redo`), which are the
+    /// line's then and never the scene's: until 2026-10-13 they stepped the
+    /// node tree's history behind the open palette. True when the line
+    /// changed; the rows are ranked again then.
+    pub(crate) fn dialog_query_history(&mut self, undo: bool) -> bool {
+        let query = &mut self.ui_context[self.slots.dialog].query;
+        let changed = if undo { query.undo() } else { query.redo() };
+        if changed {
+            self.refresh_dialog_rows();
+        }
+        changed
+    }
+
+    /// Take the input method's composition up into the query line, before
+    /// a frame draws it — while the dialog is up and the line has the keys
+    /// (not while a colour well's hex is being typed, nor with a choice's
+    /// dropdown open, which have them then).
+    pub(crate) fn sync_dialog_query_ime(&mut self) {
+        if self.dialog_visible() && !self.dialog_dropdown_open() && self.ui_context[self.slots.dialog].editing_color().is_none() {
+            self.ui_context[self.slots.dialog].query.sync_ime();
+        }
     }
 
     /// Step the selected row's control by `dir` (-1 or 1) and land the
@@ -2967,7 +3141,7 @@ impl State {
             // relays the panes.
             Mode::Rename => {
                 let Some(target) = self.menus.rename_target.take() else { return };
-                let typed = self.ui_context[self.slots.dialog].query.clone();
+                let typed = self.ui_context[self.slots.dialog].query_text().to_string();
                 match self.rename_node(&target, &typed) {
                     Ok(said) | Err(said) => self.update_status_text(&said),
                 }
@@ -3056,6 +3230,7 @@ impl State {
         // below, or dragging a value past the dialog's edge and letting go
         // would close the dialog instead of committing.
         if state == ElementState::Released && self.drag_widget == Some(DIALOG_IDX) {
+            let slid = self.ui_context[self.slots.dialog].slider_dragging();
             self.ui_context.lend_h(self.slots.dialog, |d, ui| {
                 d.handle_event(&cce_ui::widget::Event::DragEnd, ui);
                 d.handle_event(&cce_ui::widget::Event::MouseButton { button, state, x, y, local_x: x, local_y: y }, ui);
@@ -3063,8 +3238,10 @@ impl State {
             self.drag_widget = None;
             self.drag_press_cursor = None;
             self.drain_dialog_clicks();
-            // The drag's motions landed without saving; the release does.
-            self.save_settings();
+            // A slider's motions landed without saving; the release does.
+            if slid {
+                self.save_settings();
+            }
             return Some(true);
         }
 
@@ -3081,8 +3258,11 @@ impl State {
         self.dispatch_uncovered(DIALOG_IDX, &ev);
         // A press that took a slider's band arms the same widget drag the
         // params pane's sliders arm, so the value follows the pointer
-        // wherever it goes until the release.
-        if state == ElementState::Pressed && self.ui_context[self.slots.dialog].slider_dragging() {
+        // wherever it goes until the release; so does one in the query
+        // line, whose drag selects.
+        if state == ElementState::Pressed
+            && (self.ui_context[self.slots.dialog].slider_dragging() || self.ui_context[self.slots.dialog].query_dragging())
+        {
             let ev = cce_ui::widget::Event::DragStart { start_x: x, start_y: y };
             self.ui_context.lend_h(self.slots.dialog, |d, ui| d.handle_event(&ev, ui));
             self.drag_widget = Some(DIALOG_IDX);

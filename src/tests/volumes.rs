@@ -725,7 +725,7 @@ fn the_cameras_and_the_parameter_reset_are_commands() {
 
     // A camera node is a row of the palette, found by its name.
     state.open_dialog();
-    state.ui_context[state.slots.dialog].query = "camera1".to_string();
+    state.ui_context[state.slots.dialog].set_query("camera1");
     state.refresh_dialog_rows();
     let id = format!("{CAMERA_ROW_PREFIX}camera1");
     let row = state.ui_context[state.slots.dialog].rows.iter().position(|r| r.id == id).expect("no row for camera1");
@@ -1426,7 +1426,7 @@ fn a_node_is_renamed_from_its_menu() {
     let other = state.current_dir().children[sibling].name.clone();
     let row = |state: &State| state.ui_context[state.slots.dialog].rows.iter().map(|r| r.label.clone()).collect::<Vec<_>>();
     let retype = |state: &mut State, name: &str| {
-        while !state.ui_context[state.slots.dialog].query.is_empty() {
+        while !state.ui_context[state.slots.dialog].query_text().is_empty() {
             state.dialog_key_input(&key_press(Key::Named(NamedKey::Backspace)));
         }
         for c in name.chars() {
@@ -1441,7 +1441,7 @@ fn a_node_is_renamed_from_its_menu() {
     state.run_node_menu_action(sphere, crate::app::NodeMenuAction::Rename);
     assert!(state.dialog_visible());
     assert_eq!(state.ui_context[state.slots.dialog].mode, Mode::Rename);
-    assert_eq!(state.ui_context[state.slots.dialog].query, old, "the dialog opens holding the name");
+    assert_eq!(state.ui_context[state.slots.dialog].query_text(), old, "the dialog opens holding the name");
     assert_eq!(state.ui_context[state.slots.dialog].rows[0].id, RENAME_ROW_ID);
 
     // Its own name, a sibling's, and none: each is said, and Enter on
@@ -1469,7 +1469,7 @@ fn a_node_is_renamed_from_its_menu() {
     state.graph_mut().set_selected_node(Some(sphere));
     assert!(state.run_command("rename_node"));
     assert_eq!(state.ui_context[state.slots.dialog].mode, Mode::Rename);
-    assert_eq!(state.ui_context[state.slots.dialog].query, old);
+    assert_eq!(state.ui_context[state.slots.dialog].query_text(), old);
     state.dialog_key_input(&key_press(Key::Named(NamedKey::Escape)));
     assert_eq!(state.current_dir().children[sphere].name, old, "Escape renames nothing");
 

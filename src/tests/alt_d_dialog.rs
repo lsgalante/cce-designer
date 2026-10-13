@@ -123,7 +123,7 @@ fn dialog_filters_as_you_type_and_enter_runs_the_selection() {
     for c in ["d", "e", "s", "e", "l"] {
         state.dialog_key_input(&typed(c));
     }
-    assert_eq!(state.ui_context[state.slots.dialog].query, "desel");
+    assert_eq!(state.ui_context[state.slots.dialog].query_text(), "desel");
     assert_eq!(
         state.ui_context[state.slots.dialog].selected_id(),
         Some("deselect"),
@@ -135,6 +135,208 @@ fn dialog_filters_as_you_type_and_enter_runs_the_selection() {
 
     state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
     assert!(!state.dialog_visible(), "a plain command closes the dialog behind it");
+}
+
+/// The query line is the toolkit's one-line field: the caret moves with
+/// Left, Right, Home and End and typing goes in where it stands; Ctrl+A
+/// selects the line and typing replaces it. The list keeps Up, Down and
+/// the pages, and its ends are Ctrl+Home and Ctrl+End. Left and Right are
+/// a row's control's only when it has one that steps — a slider, a choice
+/// — and never with Ctrl, which moves the caret by word.
+#[test]
+fn the_query_line_has_a_caret_and_the_list_keeps_its_keys() {
+    use crate::dialog::setting_row_id;
+    let mut state = State::new(false);
+    state.run_command("toggle_dialog");
+    let q = |state: &State| {
+        let d = &state.ui_context[state.slots.dialog];
+        (d.query_text().to_string(), d.query.cursor)
+    };
+    let ctrl = |key: Key| cce_ui::widget::KeyEvent { ctrl: true, ..key_press(key) };
+    for c in ["d", "e", "s", "l"] {
+        state.dialog_key_input(&typed(c));
+    }
+    assert!(state.ui_context[state.slots.dialog].selected_control().is_none(), "a row with nothing to step");
+    state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowLeft)));
+    assert_eq!(q(&state), ("desl".to_string(), 3), "Left moved the caret");
+    state.dialog_key_input(&typed("e"));
+    assert_eq!(q(&state), ("desel".to_string(), 4), "and typing went in at it");
+    assert_eq!(state.ui_context[state.slots.dialog].selected_id(), Some("deselect"), "the rows follow the query");
+
+    // Home and End are the caret's; the list's selection stays.
+    let selected = state.ui_context[state.slots.dialog].selected;
+    state.dialog_key_input(&key_press(Key::Named(NamedKey::Home)));
+    assert_eq!(q(&state), ("desel".to_string(), 0));
+    assert_eq!(state.ui_context[state.slots.dialog].selected, selected);
+    state.dialog_key_input(&key_press(Key::Named(NamedKey::End)));
+    assert_eq!(q(&state).1, 5);
+    // Ctrl+End and Ctrl+Home are the list's ends; the caret stays.
+    state.dialog_key_input(&ctrl(Key::Named(NamedKey::End)));
+    assert_eq!(state.ui_context[state.slots.dialog].selected, state.ui_context[state.slots.dialog].rows.len() - 1);
+    state.dialog_key_input(&ctrl(Key::Named(NamedKey::Home)));
+    assert_eq!(state.ui_context[state.slots.dialog].selected, 0);
+    assert_eq!(q(&state).1, 5);
+
+    // Ctrl+A selects the line, and typing replaces it.
+    state.dialog_key_input(&ctrl(Key::Character("a".into())));
+    for c in ["s", "q", "u", "a"] {
+        state.dialog_key_input(&typed(c));
+    }
+    assert_eq!(q(&state), ("squa".to_string(), 4));
+    assert_eq!(state.ui_context[state.slots.dialog].selected_id(), Some("toggle_square_viewport"));
+    // A switch does not step: Left is the caret's on its row too.
+    let square = state.view.square_viewport;
+    state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowLeft)));
+    assert_eq!(q(&state), ("squa".to_string(), 3));
+    assert_eq!(state.view.square_viewport, square);
+
+    // On a choice row the arrows step it; with Ctrl they move the caret.
+    state.dialog_key_input(&ctrl(Key::Character("u".into())));
+    for c in ["w", "o", "r", "l", "d"] {
+        state.dialog_key_input(&typed(c));
+    }
+    let unit_row = state.ui_context[state.slots.dialog].rows.iter().position(|r| r.id == setting_row_id("World Unit")).expect("the World Unit row");
+    state.ui_context[state.slots.dialog].selected = unit_row;
+    let unit = state.doc.world_unit;
+    state.dialog_key_input(&ctrl(Key::Named(NamedKey::ArrowLeft)));
+    assert_eq!(q(&state), ("world".to_string(), 0), "Ctrl+Left: a word back");
+    assert_eq!(state.doc.world_unit, unit, "and the unit did not step");
+    state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowRight)));
+    assert_ne!(state.doc.world_unit, unit, "Right steps the choice");
+    assert_eq!(q(&state).1, 0, "and leaves the caret");
+}
+
+/// The DE's undo chords reach the app (`Application::undo` / `redo`), and
+/// while the dialog is up they are its query line's: its typing is undone
+/// and redone and the scene's history is left alone — they stepped the
+/// node tree behind the open palette until 2026-10-13. With nothing to
+/// undo the chord is still the dialog's; closed, it is the scene's again.
+#[test]
+fn undo_with_the_dialog_up_is_the_query_lines() {
+    use crate::app::McpAction;
+    use cce_ui::engine::Application;
+    let mut state = State::new(false);
+    let mut redraw = false;
+    let sphere = state.current_dir().children.iter().position(|c| c.node_type == "sphere").expect("a sphere");
+    state
+        .apply_action(McpAction::SetParam { slot: sphere, name: "radius".into(), value: "0.8".into() }, &mut redraw)
+        .expect("set a sphere param");
+    let steps = state.doc.edit_history.undo_len();
+    assert!(steps > 0, "the edit is on the scene's history");
+
+    state.run_command("toggle_dialog");
+    for c in ["s", "q"] {
+        state.dialog_key_input(&typed(c));
+    }
+    let mut rebuild = false;
+    assert!(Application::undo(&mut state, &mut rebuild), "the dialog takes the chord");
+    assert!(rebuild);
+    assert_eq!(state.ui_context[state.slots.dialog].query_text(), "", "a typed run is one step");
+    assert_eq!(state.doc.edit_history.undo_len(), steps, "the scene's history is untouched");
+    assert!(Application::redo(&mut state, &mut rebuild));
+    assert_eq!(state.ui_context[state.slots.dialog].query_text(), "sq");
+    assert!(Application::undo(&mut state, &mut rebuild));
+    assert!(Application::undo(&mut state, &mut rebuild), "nothing left to undo: still the dialog's");
+    assert_eq!(state.doc.edit_history.undo_len(), steps);
+
+    state.close_dialog();
+    assert!(Application::undo(&mut state, &mut rebuild));
+    assert_eq!(state.doc.edit_history.undo_len(), steps - 1, "closed, the chord undoes the scene");
+}
+
+/// The query line is drawn by the toolkit's `paint_line` from marks
+/// measured as the renderer shapes the text: the caret stands at the
+/// shaped x of its place, the text carries the dialog's own bounds (or the
+/// dialog's occluder would clamp it away), a query wider than the line
+/// scrolls to keep the caret in view and draws only what is inside the
+/// line, and a press on the line puts the caret at the nearest boundary,
+/// a drag from it selecting.
+#[test]
+fn the_query_lines_caret_stands_on_its_glyphs() {
+    use crate::dialog::query_text_area;
+    use crate::slots::DIALOG_IDX;
+    use crate::window::{LocalPosition, WindowEvent};
+    use cce_ui::scene::layout::Rect;
+    use cce_ui::scene::paint::Prim;
+    use cce_ui::widget::{line_edit::CARET_W, ElementState, LineMarks, MouseButton};
+    let mut state = State::new(false);
+    state.resize(1600.0, 900.0, 1.0);
+    state.rebuild_positions();
+    state.apply_layout();
+    state.run_command("command_palette");
+    for c in ["d", "e", "s", "e", "l"] {
+        state.dialog_key_input(&typed(c));
+    }
+    state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowLeft)));
+    state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowLeft)));
+    let (dx, dy, dw, dh) = state.positions[DIALOG_IDX];
+    let own = [dx, dy, dx + dw, dy + dh];
+    let area = query_text_area(Rect { x: dx, y: dy, width: dw, height: dh });
+    let marks = |state: &State| {
+        let (family, size) = cce_ui::layout::control_label_font_parsed();
+        let mut fs = cce_ui::geometry_font_system().lock().unwrap();
+        LineMarks::of(&mut fs, &state.ui_context[state.slots.dialog].query, size, Some(&family))
+    };
+    let m = marks(&state);
+    assert_eq!(m.caret, m.x_of(3));
+    let list = state.collect_display_list();
+    let text = list.items.iter().find_map(|i| match &i.prim {
+        Prim::Text { text, x, bounds, .. } if text == "desel" => Some((*x, *bounds, i.clip)),
+        _ => None,
+    });
+    assert_eq!(text, Some((area.x, Some(own), None)), "the query, at the line's left, under the dialog's bounds and no clip");
+    let caret = list.items.iter().find_map(|i| match i.prim {
+        Prim::Quad { rect, .. } if rect.width == CARET_W && rect.y > area.y && rect.y < area.y + area.height => Some(rect.x),
+        _ => None,
+    });
+    assert_eq!(caret, Some(area.x + m.x_of(3)), "the caret at the shaped x of its boundary");
+
+    // A press near a boundary puts the caret there; a drag from another
+    // selects between them.
+    let mid_y = (area.y + area.height * 0.5) as f64;
+    let press = |state: &mut State, x: f32| {
+        state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: mid_y } });
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
+    };
+    let release = |state: &mut State| {
+        state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
+    };
+    press(&mut state, area.x + m.x_of(1) + 0.4);
+    release(&mut state);
+    assert!(state.dialog_visible());
+    assert_eq!(state.ui_context[state.slots.dialog].query.cursor, 1);
+    press(&mut state, area.x + m.x_of(4) - 0.4);
+    state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: (area.x + m.x_of(2)) as f64, y: mid_y } });
+    release(&mut state);
+    let d = &state.ui_context[state.slots.dialog];
+    assert_eq!((d.query.cursor, d.query.selection), (2, Some((2, 4))), "dragged from 4 back to 2");
+    assert_eq!(d.query_text(), "desel", "and nothing typed");
+
+    // Too long for the line: scrolled to the caret, and only what is
+    // inside the line drawn.
+    state.dialog_key_input(&key_press(Key::Named(NamedKey::End)));
+    for _ in 0..80 {
+        state.dialog_key_input(&typed("w"));
+    }
+    let m = marks(&state);
+    assert!(m.width() > area.width, "the query overflows the line");
+    let list = state.collect_display_list();
+    let (x, shown) = list.items.iter().find_map(|i| match &i.prim {
+        Prim::Text { text, x, bounds: Some(b), .. } if text.ends_with("www") && *b == own => Some((*x, text.clone())),
+        _ => None,
+    }).expect("the query's visible part");
+    let shift = area.x - x + m.x_of(m.shown.len() - shown.len());
+    assert!(shift > 0.0, "scrolled");
+    assert!(x >= area.x - 0.5, "nothing drawn left of the line");
+    assert!(shown.len() < m.shown.len(), "the part off the line's left is not drawn");
+    let caret = list.items.iter().find_map(|i| match i.prim {
+        Prim::Quad { rect, .. } if rect.width == CARET_W && rect.y > area.y && rect.y < area.y + area.height => Some(rect.x),
+        _ => None,
+    }).expect("the caret");
+    assert!(caret <= area.x + area.width && caret >= area.x + area.width - 2.0, "the caret at the line's right end: {caret}");
+    state.dialog_key_input(&key_press(Key::Named(NamedKey::Home)));
+    let list = state.collect_display_list();
+    assert!(list.items.iter().any(|i| matches!(&i.prim, Prim::Text { text, x, .. } if text.starts_with("desel") && *x == area.x)), "Home scrolls back");
 }
 
 /// A toggle row is a switch: Enter flips it, the switch on the row moves,
@@ -157,7 +359,7 @@ fn dialog_enter_on_a_toggle_row_flips_it_and_keeps_the_dialog_open() {
     state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
     assert_eq!(state.view.square_viewport, !before, "Enter ran the command");
     assert!(state.dialog_visible(), "and the dialog stayed up");
-    assert_eq!(state.ui_context[state.slots.dialog].query, "squa", "with its query intact");
+    assert_eq!(state.ui_context[state.slots.dialog].query_text(), "squa", "with its query intact");
     assert_eq!(state.ui_context[state.slots.dialog].selected_id(), Some("toggle_square_viewport"), "and its selection");
     let row = &state.ui_context[state.slots.dialog].rows[state.ui_context[state.slots.dialog].selected];
     assert_eq!(row.toggle(), Some(!before), "the switch moved with the value");
@@ -448,7 +650,7 @@ fn a_dialog_slider_drag_lands_without_re_evaluating_the_graph() {
     assert!((saved(&path) - 1.0).abs() < 1e-3);
 
     state.open_dialog();
-    state.ui_context[state.slots.dialog].query = "geometry opacity".into();
+    state.ui_context[state.slots.dialog].set_query("geometry opacity");
     state.refresh_dialog_rows();
     let row = setting_row_id("Geometry Opacity");
     assert_eq!(state.ui_context[state.slots.dialog].rows.first().map(|r| r.id.as_str()), Some(row.as_str()), "the setting row ranks first");
@@ -571,7 +773,7 @@ fn dialog_backspace_widens_the_filter() {
     for _ in 0..3 {
         state.dialog_key_input(&key_press(Key::Named(NamedKey::Backspace)));
     }
-    assert_eq!(state.ui_context[state.slots.dialog].query, "");
+    assert_eq!(state.ui_context[state.slots.dialog].query_text(), "");
     assert_eq!(
         state.ui_context[state.slots.dialog].rows.iter().filter(|r| !r.id.starts_with(crate::dialog::SETTING_ROW_PREFIX) && r.id != crate::dialog::ZOOM_ROW_ID && !r.id.starts_with(crate::dialog::CAMERA_ROW_PREFIX)).count(),
         crate::command::COMMANDS.len()
@@ -595,7 +797,7 @@ fn dialog_keys_never_reach_the_pane_underneath() {
     // "l" is Cursor Right in the network pane and a plain letter here.
     state.handle_event(&WindowEvent::KeyboardInput { event: typed("l") });
     assert_eq!(state.net.grid_cursor_col, col, "the grid cursor must not move");
-    assert_eq!(state.ui_context[state.slots.dialog].query, "l");
+    assert_eq!(state.ui_context[state.slots.dialog].query_text(), "l");
 }
 
 /// The settings are rows of the one list, each carrying its control —
@@ -781,7 +983,7 @@ fn a_palette_control_lifts_under_the_pointer() {
     assert_eq!(at(&mut state, dx - 50.0, y), None);
 
     // A slider row: its whole control, readout lane included.
-    while !state.ui_context[state.slots.dialog].query.is_empty() {
+    while !state.ui_context[state.slots.dialog].query_text().is_empty() {
         state.dialog_key_input(&key_press(Key::Named(NamedKey::Backspace)));
     }
     for c in ["g", "e", "o", "m", "e", "t", "r", "y"] {
@@ -949,7 +1151,7 @@ fn the_palette_offers_the_recent_projects() {
     assert_eq!(row.chord, "cce-recent-alpha");
     assert!(row.truncate_head);
     // And it ranks against the path text like any other row.
-    state.ui_context[state.slots.dialog].query = "beta".to_string();
+    state.ui_context[state.slots.dialog].set_query("beta");
     state.refresh_dialog_rows();
     let rows: Vec<String> = state.ui_context[state.slots.dialog].rows.iter().map(|r| r.id.clone()).collect();
     assert!(rows.contains(&id_b) && !rows.contains(&id_a), "{rows:?}");
@@ -1026,7 +1228,7 @@ fn dialog_reopens_without_the_last_search() {
     assert!(!state.dialog_visible());
 
     state.run_command("toggle_dialog");
-    assert_eq!(state.ui_context[state.slots.dialog].query, "");
+    assert_eq!(state.ui_context[state.slots.dialog].query_text(), "");
 }
 
 /// A ctrl+left press on empty grid puts the cursor on the pressed cell — on
@@ -2143,7 +2345,7 @@ fn command_palette_opens_the_dialog_on_commands() {
     state.run_command("command_palette");
     assert!(state.dialog_visible(), "it lands, it does not toggle");
     assert_eq!(state.ui_context[state.slots.dialog].mode, Mode::Commands);
-    assert_eq!(state.ui_context[state.slots.dialog].query, "", "landing starts a fresh query");
+    assert_eq!(state.ui_context[state.slots.dialog].query_text(), "", "landing starts a fresh query");
 
     state.run_command("toggle_dialog");
     assert!(!state.dialog_visible(), "Alt+D toggles");

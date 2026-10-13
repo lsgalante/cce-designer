@@ -181,7 +181,10 @@ The rules:
 - **Undo and Redo consult it LAST** — a code row, then a viewer state,
   then this (`Application::undo` for the chord, `Action::Undo` for the
   palette) — so the order ACROSS the three is by owner and not by time. A
-  focused text box is ahead of all of them, in the toolkit's runner.
+  focused text box is ahead of all of them, in the toolkit's runner, and
+  while the dialog is up the chord is its query line's and none of the
+  three is asked (since 2026-10-13: it stepped this history behind the
+  open palette — see "The dialog").
 - **A rename is put back by renaming.** A structure step holds the
   nodes renamed as (id, the name it was), and `restore` runs
   `rename_node_in_tree` on each, so the wires and the expression paths
@@ -4432,6 +4435,45 @@ rather than two:
 Both modes share the plate, the keys and `fuzzy_rank`, which is the whole
 point — the app used to put two filterable lists in front of the user that
 looked and behaved nothing alike.
+
+**The query line is the toolkit's `LineEdit`** (`Dialog::query`, since
+2026-10-13; it was a `String` that only grew or lost its last character,
+under a 1 px rule always at its END placed by `measure_text_width` — the
+inked measure the caret-shaping rule forbids). So it edits as every
+one-line field in the DE does: the caret, Shift selections, Ctrl word
+moves and deletes, Ctrl+A / U / V / C / X, Ctrl+Y, a press to place the
+caret (a second selects the word, a third the line), a drag to select
+(through the app's widget drag, as a slider's), and an input method's
+composition shown at the caret (`sync_dialog_query_ime`, from
+`collect_display_list`; dropped by `close_dialog`). `dialog_key_input`
+splits the keys between it and the list:
+
+- Up, Down and the pages walk the list, Enter picks; **Home and End are
+  the line's, Ctrl+Home and Ctrl+End the list's ends.**
+- **Left and Right step the selected row's control when it has one that
+  steps** — a `Slider` or a `Choice` — and move the caret on every other
+  row; with Ctrl they are always the caret's, by word.
+- The rest go to `LineEdit::handle_key` (`dialog_query_key`) with the
+  window's modifiers folded into the event's; a Super chord types
+  nothing, and a change of text ranks the rows again.
+- **The DE's undo chords are the line's while the dialog is up**
+  (`Application::undo` / `redo` → `dialog_query_history`), taken even with
+  nothing to undo: until then they stepped the node tree's history behind
+  the open palette.
+
+It is measured as drawn (`LineMarks`, on `geometry_font_system`), scrolled
+to keep the caret in view (`keep_caret`, `Dialog::query_shift`) and painted
+by cce-ui's `paint_line` — into a scratch list (`Dialog::paint_query`),
+because `paint_line` clips its text to the line and a clipped label here is
+one the dialog's own occluder clamps away (the clamp knows a popover's text
+by bounds that ARE its rect; see below). The text is re-emitted under the
+dialog's bounds, cut to the characters wholly inside the line
+(`visible_span`), and the selection and caret go in as drawn; the caret's
+rect is what the dialog claims (`text_input::claim`). A Rename still opens
+with the caret after the name. `set_query` / `query_text` are the line's
+setter and reader. `the_query_line_has_a_caret_and_the_list_keeps_its_keys`,
+`undo_with_the_dialog_up_is_the_query_lines` and
+`the_query_lines_caret_stands_on_its_glyphs` are the tests.
 
 **A row's control is `Row::control`, an `Option<Control>`**, and a row that
 has one is worked IN PLACE — the dialog stays up, the control re-reads, the
