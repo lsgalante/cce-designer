@@ -469,7 +469,7 @@ fn view_one_to_one_reaches_true_scale() {
     // The default camera's eye ray is fixed, so 1:1 is a zoom — the one
     // number the readout's cached state can follow here without a
     // render pass (a camera node's Position rewrite is cached by one).
-    state.active_camera = "Default Camera".to_string();
+    state.camera.active_camera = "Default Camera".to_string();
     state.scale = 1.0;
     state.last_viewport.width = 1200;
     state.last_viewport.height = 800;
@@ -742,7 +742,7 @@ fn the_network_is_in_no_dock() {
     state.focused_pane = crate::slots::RIGHT_MENUBAR_IDX;
     at(&mut state, x, y);
     press(&mut state, ElementState::Pressed);
-    assert!(state.orbit_drag.is_some(), "the press orbits");
+    assert!(state.camera.orbit_drag.is_some(), "the press orbits");
     press(&mut state, ElementState::Released);
     assert_ne!(state.focused_pane, LEFT_MENUBAR_IDX);
 }
@@ -1210,10 +1210,10 @@ fn a_point_number_under_a_plate_is_not_drawn() {
     state.rebuild_scene_geometry();
     let view = Mat4::look_at_rh(Vec3::new(0.0, 0.0, 6.0), Vec3::ZERO, Vec3::Y);
     let proj = Mat4::perspective_rh(0.9, 1600.0 / 900.0, 0.1, 100.0);
-    state.last_scene_mvp = Some(proj * view);
-    state.last_scene_eye = Vec3::new(0.0, 0.0, 6.0);
-    state.last_scene_view_rect = (0.0, 0.0, 1600.0, 900.0);
-    state.sync_point_number_alpha(proj * view, state.last_scene_eye);
+    state.camera.last_scene_mvp = Some(proj * view);
+    state.camera.last_scene_eye = Vec3::new(0.0, 0.0, 6.0);
+    state.camera.last_scene_view_rect = (0.0, 0.0, 1600.0, 900.0);
+    state.sync_point_number_alpha(proj * view, state.camera.last_scene_eye);
 
     let (px, py, pw, ph) = state.positions[crate::slots::PARAM_IDX];
     assert!(pw > 0.0 && ph > 0.0, "the params plate is laid out");
@@ -1474,9 +1474,9 @@ fn a_scene_rebuild_keeps_the_point_numbers_dimmed() {
     // The view the stage pass last staged: from +z, looking at the origin.
     let view = Mat4::look_at_rh(Vec3::new(0.0, 0.0, 6.0), Vec3::ZERO, Vec3::Y);
     let proj = Mat4::perspective_rh(0.9, 1.5, 0.1, 100.0);
-    state.last_scene_mvp = Some(proj * view);
-    state.last_scene_eye = Vec3::new(0.0, 0.0, 6.0);
-    state.sync_point_number_alpha(proj * view, state.last_scene_eye);
+    state.camera.last_scene_mvp = Some(proj * view);
+    state.camera.last_scene_eye = Vec3::new(0.0, 0.0, 6.0);
+    state.sync_point_number_alpha(proj * view, state.camera.last_scene_eye);
     let staged = state.overlay_number_alpha.clone();
     assert!(staged.iter().any(|a| *a < 0.02), "the far side's numbers are hidden: {staged:?}");
     assert!(staged.iter().any(|a| *a > 0.98), "the near side's are shown");
@@ -1534,8 +1534,8 @@ fn a_point_number_is_dimmed_by_the_fill_in_front_of_it() {
             .count()
     };
     state.show_viewport = true;
-    state.last_scene_mvp = Some(Mat4::IDENTITY);
-    state.last_scene_view_rect = (0.0, 0.0, 800.0, 600.0);
+    state.camera.last_scene_mvp = Some(Mat4::IDENTITY);
+    state.camera.last_scene_view_rect = (0.0, 0.0, 800.0, 600.0);
     let whole = labels(&mut state);
     state.overlay_number_alpha = vec![0.0; state.overlay_number_labels.len()];
     assert!(labels(&mut state) < whole, "hidden labels are not drawn");
@@ -2679,7 +2679,7 @@ fn the_dialog_plate_is_the_menu_plate() {
     let r = cce_ui::layout::menu_corner_radius();
     let rect = cce_ui::scene::layout::Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 };
     assert_eq!(dialog.corner_style(rect).map(|(r, _)| r), (r > 0.0).then_some(r));
-    for file in ["src/dialog.rs", "src/render.rs", "src/app.rs", "src/app/input.rs", "src/app/document.rs", "src/app/network.rs"] {
+    for file in ["src/dialog.rs", "src/render.rs", "src/app.rs", "src/app/input.rs", "src/app/document.rs", "src/app/network.rs", "src/app/camera.rs"] {
         let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(file)).unwrap();
         assert!(!src.contains("dialog/compression") && !src.contains("DIALOG_COMPRESSION"), "{file} overrides the menu material");
     }
@@ -2926,8 +2926,8 @@ fn a_wheel_orbits_the_camera_that_is_active_after_a_change() {
     state.resize(1600.0, 900.0, 1.0);
     state.rebuild_positions();
     state.apply_layout();
-    assert_eq!(state.active_camera, "camera1", "the bundled project starts on its camera node");
-    assert_eq!(state.viewport().active_camera, state.active_camera);
+    assert_eq!(state.camera.active_camera, "camera1", "the bundled project starts on its camera node");
+    assert_eq!(state.viewport().active_camera, state.camera.active_camera);
 
     // A project saved with the Default Camera active, opened over it.
     state.set_active_camera("Default Camera");
@@ -2937,7 +2937,7 @@ fn a_wheel_orbits_the_camera_that_is_active_after_a_change() {
     state.rebuild_positions();
     state.apply_layout();
     state.load_from_file(&dir).expect("load");
-    assert_eq!(state.active_camera, "Default Camera");
+    assert_eq!(state.camera.active_camera, "Default Camera");
     assert_eq!(state.viewport().active_camera, "Default Camera", "the widget's copy follows a load");
 
     let (vx, vy, vw, vh) = state.positions[VIEWPORT_IDX];
@@ -3000,13 +3000,13 @@ fn the_point_numbers_are_placed_by_the_camera_as_it_is() {
     // And they stand where the scene will be drawn: by the view the
     // stage pass is about to stage.
     let (_, proj, view) = state.scene_view().expect("a scene");
-    assert_eq!(state.last_scene_mvp, Some(proj * view));
+    assert_eq!(state.camera.last_scene_mvp, Some(proj * view));
     let alphas = state.overlay_number_alpha.clone();
     assert_eq!(alphas.len(), state.overlay_number_labels.len(), "and are dimmed for that view");
     // Asked again for the same view, the dimming is not worked out again.
-    let key = state.number_alpha_key;
-    state.sync_point_number_alpha(proj * view, state.last_scene_eye);
-    assert_eq!((state.number_alpha_key, &state.overlay_number_alpha), (key, &alphas));
+    let key = state.camera.number_alpha_key;
+    state.sync_point_number_alpha(proj * view, state.camera.last_scene_eye);
+    assert_eq!((state.camera.number_alpha_key, &state.overlay_number_alpha), (key, &alphas));
 }
 
 /// A pan slides the camera across its own view: what is at the pivot
@@ -3024,7 +3024,7 @@ fn the_camera_pans_with_the_pointer() {
     state.rebuild_positions();
     state.apply_layout();
     let rect = (0.0f32, 0.0f32, 1600.0f32, 900.0f32);
-    state.last_scene_view_rect = rect;
+    state.camera.last_scene_view_rect = rect;
     // Where a world point is on screen, in logical px.
     let on_screen = |state: &State, at: Vec3| {
         let (pos, rot, pivot) = state.active_camera_pose();
@@ -3087,7 +3087,7 @@ fn the_camera_pans_with_the_pointer() {
     let (pivot, turned) = (state.viewport().pivot, orbit(&state));
     let graph = (state.net.pan_x, state.net.pan_y);
     press(&mut state, MouseButton::Middle, ElementState::Pressed);
-    assert!(state.pan_drag.is_none(), "over the network the middle button is the graph's");
+    assert!(state.camera.pan_drag.is_none(), "over the network the middle button is the graph's");
     at(&mut state, cx + 40.0, cy + 10.0);
     press(&mut state, MouseButton::Middle, ElementState::Released);
     assert_ne!((state.net.pan_x, state.net.pan_y), graph, "the graph panned");
@@ -3098,10 +3098,10 @@ fn the_camera_pans_with_the_pointer() {
     assert!(!state.show_network);
     at(&mut state, cx, cy);
     press(&mut state, MouseButton::Middle, ElementState::Pressed);
-    assert!(state.pan_drag.is_some() && state.pointer_captured(), "a middle press arms the pan");
+    assert!(state.camera.pan_drag.is_some() && state.pointer_captured(), "a middle press arms the pan");
     at(&mut state, cx + 40.0, cy + 10.0);
     press(&mut state, MouseButton::Middle, ElementState::Released);
-    assert!(state.pan_drag.is_none());
+    assert!(state.camera.pan_drag.is_none());
     assert_ne!(state.viewport().pivot, pivot, "the middle drag panned");
     assert_eq!(orbit(&state), turned, "and did not turn the camera");
     state.execute_menu_action("Show Network Pane");
@@ -3111,7 +3111,7 @@ fn the_camera_pans_with_the_pointer() {
     let pivot = state.viewport().pivot;
     state.modifiers.shift = true;
     press(&mut state, MouseButton::Left, ElementState::Pressed);
-    assert!(state.pan_drag.is_some() && state.orbit_drag.is_none(), "shift and the left button pan");
+    assert!(state.camera.pan_drag.is_some() && state.camera.orbit_drag.is_none(), "shift and the left button pan");
     at(&mut state, cx - 25.0, cy + 5.0);
     press(&mut state, MouseButton::Left, ElementState::Released);
     assert_ne!(state.viewport().pivot, pivot);
@@ -3128,7 +3128,7 @@ fn the_camera_pans_with_the_pointer() {
     at(&mut state, cx, cy);
     let pivot = state.viewport().pivot;
     press(&mut state, MouseButton::Left, ElementState::Pressed);
-    assert!(state.orbit_drag.is_some() && state.pan_drag.is_none());
+    assert!(state.camera.orbit_drag.is_some() && state.camera.pan_drag.is_none());
     at(&mut state, cx + 30.0, cy);
     press(&mut state, MouseButton::Left, ElementState::Released);
     state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::PixelDelta(Position { x: 0.0, y: 30.0 }) });
@@ -3664,10 +3664,10 @@ fn test_curve_tool_add_move_delete() {
     );
 
     state.toggle_viewer_state(slot);
-    assert!(state.viewer_tool.is_some());
+    assert!(state.camera.viewer_tool.is_some());
 
-    state.last_scene_mvp = Some(Mat4::IDENTITY);
-    state.last_scene_view_rect = (0.0, 0.0, 100.0, 100.0);
+    state.camera.last_scene_mvp = Some(Mat4::IDENTITY);
+    state.camera.last_scene_view_rect = (0.0, 0.0, 100.0, 100.0);
     let sx = |x: f32| 50.0 + x * 50.0;
     let sy = |y: f32| 50.0 - y * 50.0;
     let points_of = |state: &State, slot: usize| {
@@ -3713,7 +3713,7 @@ fn test_curve_tool_add_move_delete() {
 
     // Toggling on the same node exits the state.
     state.toggle_viewer_state(slot);
-    assert!(state.viewer_tool.is_none());
+    assert!(state.camera.viewer_tool.is_none());
 }
 
 /// Undo/redo in the curve viewer state: one entry per gesture (a drag
@@ -3733,8 +3733,8 @@ fn test_curve_tool_undo_redo() {
         .expect("add curve node");
     let slot = state.current_dir().children.len() - 1;
     state.toggle_viewer_state(slot);
-    state.last_scene_mvp = Some(Mat4::IDENTITY);
-    state.last_scene_view_rect = (0.0, 0.0, 100.0, 100.0);
+    state.camera.last_scene_mvp = Some(Mat4::IDENTITY);
+    state.camera.last_scene_view_rect = (0.0, 0.0, 100.0, 100.0);
     let sx = |x: f32| 50.0 + x * 50.0;
     let sy = |y: f32| 50.0 - y * 50.0;
     let points_of = |state: &State| {
@@ -3745,7 +3745,7 @@ fn test_curve_tool_undo_redo() {
         ))
     };
     let history = |state: &State| {
-        let t = state.viewer_tool.as_ref().expect("tool active");
+        let t = state.camera.viewer_tool.as_ref().expect("tool active");
         (t.history.undo_len(), t.history.redo_len())
     };
 
@@ -3823,14 +3823,14 @@ fn test_curve_tool_undo_redo() {
     state.cursor_x += 5.0;
     assert!(state.viewer_tool_drag_motion());
     assert!(state.viewer_tool_undo());
-    let tool = state.viewer_tool.as_ref().unwrap();
+    let tool = state.camera.viewer_tool.as_ref().unwrap();
     assert!(tool.drag.is_none());
     assert!(tool.selected.map(|i| i < points_of(&state).len()).unwrap_or(true));
     assert!(!state.viewer_tool_drag_motion(), "no drag survives an undo");
 
     // Leaving the state drops its history.
     state.toggle_viewer_state(slot);
-    assert!(state.viewer_tool.is_none());
+    assert!(state.camera.viewer_tool.is_none());
     assert!(!state.viewer_tool_undo());
 }
 

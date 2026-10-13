@@ -641,7 +641,7 @@ fn spreadsheet_header_press_reaches_the_widget_not_the_camera() {
     assert!(!state.cursor_in_viewport(), "a floating pane is not the scene");
 
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
-    assert!(state.orbit_drag.is_none(), "the press must not arm the camera orbit");
+    assert!(state.camera.orbit_drag.is_none(), "the press must not arm the camera orbit");
     assert_eq!(state.focused_widget, Some(SPREADSHEET_IDX), "the press reached the spreadsheet");
     assert_eq!(state.focused_pane, SPREADSHEET_MENUBAR_IDX);
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
@@ -654,7 +654,7 @@ fn spreadsheet_header_press_reaches_the_widget_not_the_camera() {
     state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: cx as f64, y: cy as f64 } });
     assert!(state.cursor_in_viewport());
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
-    assert_eq!(state.orbit_drag, Some((cx, cy)), "a press on the scene still orbits");
+    assert_eq!(state.camera.orbit_drag, Some((cx, cy)), "a press on the scene still orbits");
 }
 
 mod ui;

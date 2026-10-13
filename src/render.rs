@@ -1150,7 +1150,7 @@ impl State {
         if labels.is_empty() {
             return;
         }
-        let (vx, vy, vw, vh) = self.last_scene_view_rect;
+        let (vx, vy, vw, vh) = self.camera.last_scene_view_rect;
         pc.clip(rect(vx, vy, vw, vh), |pc| {
             for (text, x, y, color, alpha) in labels {
                 pc.text_faded(text, x, y, POINT_NUMBER_PX, color, alpha, None, None);
@@ -1183,8 +1183,8 @@ impl State {
         if lists.iter().all(|(labels, ..)| labels.is_empty()) {
             return out;
         }
-        let Some(mvp) = self.last_scene_mvp else { return out };
-        let (vx, vy, vw, vh) = self.last_scene_view_rect;
+        let Some(mvp) = self.camera.last_scene_mvp else { return out };
+        let (vx, vy, vw, vh) = self.camera.last_scene_view_rect;
         if vw <= 0.0 || vh <= 0.0 {
             return out;
         }
@@ -1240,12 +1240,12 @@ impl State {
     }
 
     fn append_viewer_state_overlay(&self, pc: &mut PaintCtx) {
-        let Some(tool) = &self.viewer_tool else { return };
+        let Some(tool) = &self.camera.viewer_tool else { return };
         if !self.show_viewport {
             return;
         }
         let handles = self.viewer_tool_handles();
-        let (vx, vy, vw, vh) = self.last_scene_view_rect;
+        let (vx, vy, vw, vh) = self.camera.last_scene_view_rect;
         if vw <= 0.0 || vh <= 0.0 {
             return;
         }
@@ -1571,8 +1571,8 @@ impl State {
         // rebuild drew each number at full strength, those behind the
         // surface too, and a playing simulation rebuilds every frame — the
         // numbers flickered between shown and dimmed.
-        if let Some(mvp) = self.last_scene_mvp {
-            self.sync_point_number_alpha(mvp, self.last_scene_eye);
+        if let Some(mvp) = self.camera.last_scene_mvp {
+            self.sync_point_number_alpha(mvp, self.camera.last_scene_eye);
         }
     }
 

@@ -127,7 +127,7 @@ impl State {
             None
         };
         ProjectViewState {
-            active_camera: self.active_camera.clone(),
+            active_camera: self.camera.active_camera.clone(),
             pan: (self.net.pan_x, self.net.pan_y),
             current_path: self.doc.current_path.clone(),
             selected_node: self.graph().selected_node(),
@@ -164,7 +164,7 @@ impl State {
     /// restore only for a view with no node.
     fn apply_default_view_from_project(&mut self, view: Option<crate::app::DefaultCameraView>) {
         let Some(v) = view else { return };
-        let active = self.active_camera.clone();
+        let active = self.camera.active_camera.clone();
         let has_node = active != "Default Camera"
             && self.camera_level().children.iter().any(|c| c.node_type == "camera" && c.name == active);
         if !has_node {

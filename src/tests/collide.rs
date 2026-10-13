@@ -977,7 +977,7 @@ fn the_trackball_follows_the_viewport_camera() {
 
     // Orbiting the camera moves the ball's view with it.
     state.orbit_camera_by(120.0, 0.0);
-    let orbited = if state.active_camera == "Default Camera" {
+    let orbited = if state.camera.active_camera == "Default Camera" {
         state.sync_trackball_view(eye, Vec3::ZERO, Vec3::ZERO)
     } else {
         state.set_active_camera("Default Camera");

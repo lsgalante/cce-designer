@@ -444,12 +444,12 @@ impl State {
             .collect();
         let mut items = vec!["Default Camera".to_string()];
         items.extend(camera_nodes);
-        if !items.contains(&self.active_camera) {
+        if !items.contains(&self.camera.active_camera) {
             self.set_active_camera("Default Camera");
         }
         self.menu_mut(RIGHT_MENUBAR_IDX).set_menu_items(0, &items);
         for (i, item) in items.iter().enumerate() {
-            let checked = item == &self.active_camera;
+            let checked = item == &self.camera.active_camera;
             self.menu_mut(RIGHT_MENUBAR_IDX).set_item_checked(0, i, checked);
         }
         let path_strs = self.current_path_names();

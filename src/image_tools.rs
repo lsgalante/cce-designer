@@ -103,7 +103,7 @@ impl State {
     /// applies to every camera. Returns the distance reached, which is short
     /// of the one asked for where the zoom's clamp refuses it.
     fn face_image(&mut self, center: Vec3, dist: f32) -> f32 {
-        let camera_name = self.active_camera.clone();
+        let camera_name = self.camera.active_camera.clone();
         let (orbit_x, orbit_y) = (self.viewport().rotation_x, self.viewport().rotation_y);
         let mut reached = None;
         if camera_name != "Default Camera" {
@@ -328,7 +328,7 @@ impl State {
         // be placed, and its handles are how.
         let node = &self.current_dir().children[slot];
         if let Some(source) = crate::viewer_state::source_for(&node.node_type) {
-            self.viewer_tool = Some(crate::viewer_state::ViewerTool::new(node.id.clone(), source));
+            self.camera.viewer_tool = Some(crate::viewer_state::ViewerTool::new(node.id.clone(), source));
         }
         self.update_status_text(&format!("Added {} to {}.", layer.label().to_lowercase(), new_name));
         Some(slot)

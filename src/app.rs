@@ -149,6 +149,9 @@ pub use document::Document;
 // `State::net`: the network editor's cursor, lattice, pan and look.
 mod network;
 pub use network::{DropGlow, NetworkView, NodeDragGroup, OverlayWheel, OVERLAY_WHEEL_GAP};
+// `State::camera`: the active camera, its drags, the view last staged.
+mod camera;
+pub use camera::CameraView;
 
 /// Which node the params pane is showing: the editor's level, the slot
 /// there, and the node's id. All three, because no one of them is an
@@ -952,18 +955,6 @@ pub struct State {
     /// first call is this process's own and every later one is a REPLACEMENT
     /// after a reconnect. Remembering is the only way to tell them apart.
     pub seen_renderer: bool,
-    /// An in-flight camera orbit drag: the cursor position the last motion was
-    /// measured from. `None` when no orbit drag is running.
-    pub orbit_drag: Option<(f32, f32)>,
-    /// An in-flight camera PAN drag (middle button, or shift and the left):
-    /// the cursor position the last motion was measured from.
-    pub pan_drag: Option<(f32, f32)>,
-    /// The camera node a pan last wrote, with the Pivot and Position it
-    /// wrote IN FULL. The node holds them as text, to four decimals; a pan
-    /// is hundreds of small moves, and each read back from the text would
-    /// lose what the text could not hold. Used while the node still says
-    /// what was written.
-    pub pan_exact: Option<(String, Vec3, Vec3)>,
     /// Set when the page raster must be re-uploaded — after a replacement
     /// renderer drops the old id. Consumed on the next tick rather than acted
     /// on in `renderer_init`, which runs before the frame has settled and
@@ -1007,7 +998,9 @@ pub struct State {
     pub scale: f64,
     pub square_viewport: bool,
 
-    pub active_camera: String,
+    /// The viewport's camera: which one looks, the orbit and pan drags,
+    /// the viewer state, the view last staged (`src/app/camera.rs`).
+    pub camera: CameraView,
     pub show_network: bool,
     /// Whether the params pane draws its PLATE. With it off the rows stand
     /// directly over the scene, and the pane claims only what its rows
@@ -1255,19 +1248,6 @@ pub struct State {
     /// evaluated geometry, feeding the textpick rows on group/attribute
     /// params. One entry: the selected node's input.
     pub pick_cache: Option<((String, u64), PickLists)>,
-    /// The raster scene's model-view-projection and the viewport pane rect in
-    /// LOGICAL px, cached at staging so the 2D pass can project 3D overlays.
-    pub last_scene_mvp: Option<Mat4>,
-    /// What the numbers' dimming was last worked out for: the view, the
-    /// geometry, the opacity, whether the fill is seen through, how many.
-    pub number_alpha_key: Option<([u32; 16], u64, u32, bool, usize)>,
-    /// The eye the scene was last staged for, in mesh space, beside the
-    /// matrix: what a scene rebuild dims the numbers by until the stage
-    /// pass has staged the new geometry.
-    pub last_scene_eye: Vec3,
-    pub last_scene_view_rect: (f32, f32, f32, f32),
-    /// The active curve viewer state (viewport point editing), if any.
-    pub viewer_tool: Option<crate::viewer_state::ViewerTool>,
     /// Sphere-geometry cache for the path tracer (a copy of the last
     /// `rebuild_scene_geometry` output, so entering RT mode never re-runs
     /// the node graph / OpenCL kernels).
@@ -1695,11 +1675,11 @@ impl State {
     pub(crate) fn pointer_captured(&self) -> bool {
         self.drag_widget.is_some()
             || self.app_drag.is_some()
-            || self.orbit_drag.is_some()
-            || self.pan_drag.is_some()
+            || self.camera.orbit_drag.is_some()
+            || self.camera.pan_drag.is_some()
             || self.net.is_panning
             || self.net.grid_cursor_drag.is_some()
-            || self.viewer_tool.as_ref().map_or(false, |t| t.drag.is_some())
+            || self.camera.viewer_tool.as_ref().map_or(false, |t| t.drag.is_some())
             || (self.slider_menu_open() && cce_ui::widget::context_menu::slider_dragging())
             || self.dialog_visible()
     }
@@ -1838,10 +1818,10 @@ impl State {
         let Some(((sx, sy, cw, ch), proj, view)) = self.scene_view() else { return };
         let s = (self.scale as f32).max(0.001);
         let mvp = proj * view;
-        self.last_scene_mvp = Some(mvp);
-        self.last_scene_view_rect = (sx as f32 / s, sy as f32 / s, cw as f32 / s, ch as f32 / s);
-        self.last_scene_eye = view.inverse().transform_point3(Vec3::ZERO);
-        self.sync_point_number_alpha(mvp, self.last_scene_eye);
+        self.camera.last_scene_mvp = Some(mvp);
+        self.camera.last_scene_view_rect = (sx as f32 / s, sy as f32 / s, cw as f32 / s, ch as f32 / s);
+        self.camera.last_scene_eye = view.inverse().transform_point3(Vec3::ZERO);
+        self.sync_point_number_alpha(mvp, self.camera.last_scene_eye);
     }
 
     pub(crate) fn pan_camera_by(&mut self, dx_px: f32, dy_px: f32) {
@@ -1849,7 +1829,7 @@ impl State {
         let (_, view, _) = self.viewport().get_matrices(1.0, Some(pos), Some(rot), Some(pivot));
         let inv = view.inverse();
         let (right, up, eye) = (inv.x_axis.truncate(), inv.y_axis.truncate(), inv.w_axis.truncate());
-        let pane_h = self.last_scene_view_rect.3.max(1.0);
+        let pane_h = self.camera.last_scene_view_rect.3.max(1.0);
         // World units a logical px covers on the pivot's plane: the
         // projection's vertical field of view is 0.9 rad.
         let per_px = 2.0 * (eye - pivot).length() * (0.45f32).tan() / pane_h;
@@ -1857,9 +1837,9 @@ impl State {
         if by.length_squared() == 0.0 || !by.is_finite() {
             return;
         }
-        let active = self.active_camera.clone();
+        let active = self.camera.active_camera.clone();
         let fmt3 = |v: Vec3| format!("{:.4}:{:.4}:{:.4}", v.x, v.y, v.z);
-        let exact = self.pan_exact.take();
+        let exact = self.camera.pan_exact.take();
         let node = (active != "Default Camera")
             .then(|| self.camera_level_mut().children.iter_mut().find(|c| c.node_type == "camera" && c.name == active))
             .flatten();
@@ -1878,7 +1858,7 @@ impl State {
                         p.set_text(fmt3(v));
                     }
                 }
-                self.pan_exact = Some((active, to_pivot, to_pos));
+                self.camera.pan_exact = Some((active, to_pivot, to_pos));
                 self.sync_parameters_pane();
             }
             None => self.viewport_mut().pivot = pivot + by,
@@ -1890,7 +1870,7 @@ impl State {
     pub(crate) fn orbit_camera_by(&mut self, dx_px: f32, dy_px: f32) {
         let dx = dx_px * Self::ORBIT_RADIANS_PER_PX;
         let dy = dy_px * Self::ORBIT_RADIANS_PER_PX;
-        if self.active_camera != "Default Camera" {
+        if self.camera.active_camera != "Default Camera" {
             let vp = self.viewport_mut();
             vp.pending_yaw += dx;
             vp.pending_pitch += -dy;
@@ -2137,7 +2117,7 @@ impl State {
     pub fn set_active_camera(&mut self, name: impl Into<String>) {
         let name = name.into();
         self.viewport_mut().active_camera = name.clone();
-        self.active_camera = name;
+        self.camera.active_camera = name;
     }
 
     /// [`Document::camera_level`]: the level camera nodes stand on, the
@@ -2182,7 +2162,7 @@ impl State {
     /// Step to the next camera (or the previous), wrapping.
     pub fn cycle_camera(&mut self, step: i32) -> bool {
         let names = self.camera_names();
-        let at = names.iter().position(|n| *n == self.active_camera).unwrap_or(0) as i32;
+        let at = names.iter().position(|n| *n == self.camera.active_camera).unwrap_or(0) as i32;
         let next = (at + step).rem_euclid(names.len() as i32) as usize;
         self.choose_camera(&names[next])
     }
@@ -3559,7 +3539,7 @@ impl State {
             // state are whatever `source_for` accepts, so a new HandleSource
             // appears in this menu without touching it.
             let curve_editing = crate::viewer_state::source_for(&node.node_type).map(|_| {
-                self.viewer_tool.as_ref().map(|t| t.node_id == node.id).unwrap_or(false)
+                self.camera.viewer_tool.as_ref().map(|t| t.node_id == node.id).unwrap_or(false)
             });
             (
                 false,
@@ -3698,9 +3678,9 @@ impl State {
         // A camera node stands at the root and applies from every level;
         // a named camera that is not there is the Default Camera view, and
         // is framed as one.
-        let camera_name = self.active_camera.clone();
+        let camera_name = self.camera.active_camera.clone();
         let mut framed_node = false;
-        if self.active_camera != "Default Camera" {
+        if self.camera.active_camera != "Default Camera" {
             let dir = self.camera_level_mut();
             if let Some(node) = dir.children.iter_mut().find(|c| c.node_type == "camera" && c.name == camera_name) {
                 framed_node = true;
@@ -3794,9 +3774,9 @@ impl State {
         let dist = self.one_to_one_distance();
         // As in `frame_all`: a named camera that is not there is the
         // Default Camera view, and is fitted as one.
-        let camera_name = self.active_camera.clone();
+        let camera_name = self.camera.active_camera.clone();
         let mut fitted_node = false;
-        if self.active_camera != "Default Camera" {
+        if self.camera.active_camera != "Default Camera" {
             let dir = self.camera_level_mut();
             if let Some(node) = dir.children.iter_mut().find(|c| c.node_type == "camera" && c.name == camera_name) {
                 fitted_node = true;
@@ -4988,7 +4968,7 @@ impl State {
             .camera_level()
             .children
             .iter()
-            .any(|c| c.id == id && c.node_type == "camera" && c.name == self.active_camera);
+            .any(|c| c.id == id && c.node_type == "camera" && c.name == self.camera.active_camera);
         crate::geometry::rename_node_in_tree(&mut self.doc.fs_root, id, &new);
         if is_camera {
             // Both copies of the name: the viewport routes the wheel by
@@ -5145,10 +5125,10 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
 }
 
     pub fn update_active_camera_rotation(&mut self, d_yaw: f32, d_pitch: f32) -> bool {
-        if self.active_camera == "Default Camera" {
+        if self.camera.active_camera == "Default Camera" {
             return false;
         }
-        let camera_name = self.active_camera.clone();
+        let camera_name = self.camera.active_camera.clone();
         let dir = self.camera_level_mut();
         if let Some(node) = dir.children.iter_mut().find(|c| c.node_type == "camera" && c.name == camera_name) {
             // The camera's base pitch above the horizon (Position vs Pivot): the
@@ -5206,10 +5186,10 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     }
 
     pub fn update_active_camera_rotation_reset(&mut self) -> bool {
-        if self.active_camera == "Default Camera" {
+        if self.camera.active_camera == "Default Camera" {
             return false;
         }
-        let camera_name = self.active_camera.clone();
+        let camera_name = self.camera.active_camera.clone();
         let dir = self.camera_level_mut();
         if let Some(node) = dir.children.iter_mut().find(|c| c.node_type == "camera" && c.name == camera_name) {
             if let Some(p) = node.params.iter_mut().find(|p| p.name == "rotation") {
@@ -5459,10 +5439,10 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         let worked_out = self.overlay_number_alpha.len() == self.overlay_number_labels.len()
             && self.overlay_prim_alpha.len() == self.overlay_prim_labels.len()
             && self.overlay_vertex_alpha.len() == self.overlay_vertex_labels.len();
-        if self.number_alpha_key == Some(key) && worked_out {
+        if self.camera.number_alpha_key == Some(key) && worked_out {
             return;
         }
-        self.number_alpha_key = Some(key);
+        self.camera.number_alpha_key = Some(key);
         // One pass over the three lists, so the mesh is binned once.
         let (points_n, prims_n) = (self.overlay_number_labels.len(), self.overlay_prim_labels.len());
         let at: Vec<[f32; 3]> = self
@@ -5869,9 +5849,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             page_shown: None,
             page_composed: None,
             seen_renderer: false,
-            orbit_drag: None,
-            pan_drag: None,
-            pan_exact: None,
             page_dirty: false,
             title_dirty: false,
             settings_save_pending: false,
@@ -5925,7 +5902,17 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             physical_height: ph,
             scale,
             square_viewport: settings.viewport.square,
-            active_camera,
+            camera: CameraView {
+                active_camera,
+                orbit_drag: None,
+                pan_drag: None,
+                pan_exact: None,
+                viewer_tool: None,
+                last_scene_mvp: None,
+                last_scene_eye: Vec3::ZERO,
+                last_scene_view_rect: (0.0, 0.0, 0.0, 0.0),
+                number_alpha_key: None,
+            },
             show_network: true,
             params_plate: settings.viewport.params_plate,
             show_viewport: true,
@@ -6043,11 +6030,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             point_marker_size: settings.viewport.point_marker_size,
             point_marker_color: settings.viewport.point_marker_color,
             pick_cache: None,
-            last_scene_mvp: None,
-            number_alpha_key: None,
-            last_scene_eye: Vec3::ZERO,
-            last_scene_view_rect: (0.0, 0.0, 0.0, 0.0),
-            viewer_tool: None,
             rt_sphere_verts: Vec::new(),
             rt_geometry_version: 0,
             last_rt_scene_key: None,
@@ -6701,7 +6683,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 match self.graph().selected_node() {
                     Some(slot) => {
                         self.toggle_viewer_state(slot);
-                        if self.viewer_tool.is_none() {
+                        if self.camera.viewer_tool.is_none() {
                             self.update_status_text("Left the viewer state.");
                         }
                     }
@@ -7512,8 +7494,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         let mut rx = 0.0f32;
         let mut ry = 0.0f32;
         let mut rz = 0.0f32;
-        if self.active_camera != "Default Camera" {
-            if let Some(node) = self.camera_level().children.iter().find(|c| c.node_type == "camera" && c.name == self.active_camera) {
+        if self.camera.active_camera != "Default Camera" {
+            if let Some(node) = self.camera_level().children.iter().find(|c| c.node_type == "camera" && c.name == self.camera.active_camera) {
                 let mut cx = 2.5f32;
                 let mut cy = 1.8f32;
                 let mut cz = 2.5f32;
@@ -7679,7 +7661,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                     show_camera_pivot: self.viewport().show_camera_pivot,
                     width: cw,
                     height: ch,
-                    active_camera: self.active_camera.clone(),
+                    active_camera: self.camera.active_camera.clone(),
                     show_viewport: self.show_viewport,
                     wireframe: self.render.wireframe,
                     geo_opacity: self.render.geo_opacity,
@@ -7701,11 +7683,11 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                     // numbers): the matrix, and the pane rect back in logical
                     // px. Refreshed exactly when the camera/pane changes.
                     let s = self.scale as f32;
-                    self.last_scene_mvp = Some(mvp_mat);
-                    self.last_scene_view_rect =
+                    self.camera.last_scene_mvp = Some(mvp_mat);
+                    self.camera.last_scene_view_rect =
                         (sx as f32 / s, sy as f32 / s, cw as f32 / s, ch as f32 / s);
-                    self.last_scene_eye = (view_mat * model).inverse().transform_point3(Vec3::ZERO);
-                    self.sync_point_number_alpha(mvp_mat, self.last_scene_eye);
+                    self.camera.last_scene_eye = (view_mat * model).inverse().transform_point3(Vec3::ZERO);
+                    self.sync_point_number_alpha(mvp_mat, self.camera.last_scene_eye);
 
                     // The camera-pivot marker is WORLD-FIXED at the pivot point, like
                     // the origin gizmo. Its old yaw rotation existed to keep it glued

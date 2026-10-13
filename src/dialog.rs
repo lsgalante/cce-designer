@@ -1959,7 +1959,7 @@ impl State {
                             self.setting_row(&SETTINGS[i - cmds.len()])
                         } else {
                             let at = i - cmds.len() - SETTINGS.len();
-                            let active = cameras[at] == self.active_camera;
+                            let active = cameras[at] == self.camera.active_camera;
                             Row {
                                 id: format!("{CAMERA_ROW_PREFIX}{}", cameras[at]),
                                 label: camera_labels[at].clone(),
@@ -2209,7 +2209,7 @@ impl State {
             "show_playbar_pane" => self.show_playbar,
             "toggle_playbar_repeat" => self.ui_context[self.slots.playbar].inner().repeat,
             "toggle_playbar_step_buttons" => self.ui_context[self.slots.playbar].inner().step_buttons,
-            "toggle_snap" => self.viewer_tool.as_ref()?.snap.is_some(),
+            "toggle_snap" => self.camera.viewer_tool.as_ref()?.snap.is_some(),
             _ => return None,
         })
     }

@@ -388,7 +388,7 @@ impl State {
                 }
             }
             McpAction::ResetCamera => {
-                if state.active_camera != "Default Camera" {
+                if state.camera.active_camera != "Default Camera" {
                     state.update_active_camera_rotation_reset();
                 } else {
                     state.viewport_mut().rotation_y = 0.0;

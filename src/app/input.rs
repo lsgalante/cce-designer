@@ -417,17 +417,17 @@ impl State {
     fn camera_drag_motion(&mut self) -> Option<bool> {
         // An in-flight camera orbit, likewise — it was armed by a press
         // on empty scene, so nothing else is competing for the motion.
-        if let Some((lx, ly)) = self.pan_drag {
+        if let Some((lx, ly)) = self.camera.pan_drag {
             let (dx, dy) = (self.cursor_x - lx, self.cursor_y - ly);
-            self.pan_drag = Some((self.cursor_x, self.cursor_y));
+            self.camera.pan_drag = Some((self.cursor_x, self.cursor_y));
             if dx != 0.0 || dy != 0.0 {
                 self.pan_camera_by(dx, dy);
             }
             return Some(true);
         }
-        if let Some((lx, ly)) = self.orbit_drag {
+        if let Some((lx, ly)) = self.camera.orbit_drag {
             let (dx, dy) = (self.cursor_x - lx, self.cursor_y - ly);
-            self.orbit_drag = Some((self.cursor_x, self.cursor_y));
+            self.camera.orbit_drag = Some((self.cursor_x, self.cursor_y));
             if dx != 0.0 || dy != 0.0 {
                 self.orbit_camera_by(dx, dy);
             }
@@ -652,12 +652,12 @@ impl State {
             && !(self.circular_network_pane && self.circular_network_layout.hit_test_content(self.cursor_x, self.cursor_y, 0.0, breadcrumb_h()))
             && self.app_drag.is_none()
         {
-            self.pan_drag = Some((self.cursor_x, self.cursor_y));
+            self.camera.pan_drag = Some((self.cursor_x, self.cursor_y));
             self.focused_pane = RIGHT_MENUBAR_IDX;
             self.sync_pane_focus();
             return Some(true);
         }
-        if *button == MouseButton::Middle && *btn_state == ElementState::Released && self.pan_drag.take().is_some() {
+        if *button == MouseButton::Middle && *btn_state == ElementState::Released && self.camera.pan_drag.take().is_some() {
             self.broadcast_pointer();
             return Some(true);
         }
@@ -956,7 +956,7 @@ impl State {
         // left grabs or adds a control point, right on a
         // handle deletes it (right elsewhere still opens the
         // viewport menu below).
-        if self.viewer_tool.is_some()
+        if self.camera.viewer_tool.is_some()
             && self.cursor_in_viewport()
             && !in_circle_network_pane
         {
@@ -1020,9 +1020,9 @@ impl State {
             // With shift the drag slides the camera
             // where without it the drag turns it.
             if self.modifiers.shift_key() {
-                self.pan_drag = Some((self.cursor_x, self.cursor_y));
+                self.camera.pan_drag = Some((self.cursor_x, self.cursor_y));
             } else {
-                self.orbit_drag = Some((self.cursor_x, self.cursor_y));
+                self.camera.orbit_drag = Some((self.cursor_x, self.cursor_y));
             }
             self.focused_pane = RIGHT_MENUBAR_IDX;
             if let Some(old) = self.focused_widget {
@@ -1356,7 +1356,7 @@ impl State {
     }
 
     fn release_camera_drag(&mut self) -> Option<bool> {
-        if self.orbit_drag.take().is_some() || self.pan_drag.take().is_some() {
+        if self.camera.orbit_drag.take().is_some() || self.camera.pan_drag.take().is_some() {
             self.broadcast_pointer();
             return Some(true);
         }
@@ -1666,8 +1666,8 @@ impl State {
         // The curve viewer state exits on Escape, ahead of
         // connection-cancel — leaving point-edit mode is the
         // more immediate "get me out" while it is active.
-        if self.viewer_tool.is_some() {
-            self.viewer_tool = None;
+        if self.camera.viewer_tool.is_some() {
+            self.camera.viewer_tool = None;
             return true;
         }
         self.graph_mut().cancel_connecting();
@@ -1781,7 +1781,7 @@ impl State {
                 match s.as_str() {
                     "r" | "R" => {
                         if self.focused_pane == RIGHT_MENUBAR_IDX {
-                            if self.active_camera != "Default Camera" {
+                            if self.camera.active_camera != "Default Camera" {
                                 self.update_active_camera_rotation_reset();
                             } else {
                                 self.viewport_mut().rotation_y = 0.0;

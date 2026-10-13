@@ -397,11 +397,11 @@ fn a_captured_pointer_hovers_no_pane_and_the_release_hands_it_back() {
 
     // An orbit captures the pointer: the next motion clears the plate,
     // and the release hands the pointer back where it stands.
-    state.orbit_drag = Some((cx, cy));
+    state.camera.orbit_drag = Some((cx, cy));
     moved(&mut state, cx + 1.0, cy);
     assert!(!hovered(&state), "a captured pointer hovers no pane");
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
-    assert!(state.orbit_drag.is_none());
+    assert!(state.camera.orbit_drag.is_none());
     assert!(hovered(&state), "the release re-hovers without a motion");
 
     // An app drag (a pane edge) captures it the same way.
@@ -1034,7 +1034,7 @@ fn dragging_the_network_grid_expands_the_cursor() {
     move_to(&mut state, anchor);
     let before = (state.net.grid_cursor_col, state.net.grid_cursor_row);
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
-    assert!(state.orbit_drag.is_some() && state.net.grid_cursor_drag.is_none(), "a plain press orbits");
+    assert!(state.camera.orbit_drag.is_some() && state.net.grid_cursor_drag.is_none(), "a plain press orbits");
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
     assert_eq!((state.net.grid_cursor_col, state.net.grid_cursor_row), before);
     state.modifiers.ctrl = true;
@@ -2124,7 +2124,7 @@ fn command_palette_opens_the_dialog_on_commands() {
 /// start, which is indistinguishable from one that failed to.
 #[test]
 fn nothing_shells_out_to_cce_cloud_any_more() {
-    for name in ["app.rs", "app/input.rs", "app/document.rs", "app/network.rs", "window.rs", "dialog.rs", "render.rs", "api.rs", "slots.rs"] {
+    for name in ["app.rs", "app/input.rs", "app/document.rs", "app/network.rs", "app/camera.rs", "window.rs", "dialog.rs", "render.rs", "api.rs", "slots.rs"] {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(name);
         let src = std::fs::read_to_string(&path).expect("read source");
         for needle in ["CloudPopup", "run_dmenu", "CloudPopupTracker"] {

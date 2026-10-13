@@ -382,7 +382,7 @@ gone from cce-ui with the wgpu path).
   viewport is in, bound to one node, in which the pointer edits that node
   instead of orbiting the camera. The framework owns everything that turned out
   to be the same for any such tool: projection of world positions to handles
-  through `State::last_scene_mvp` + `last_scene_view_rect` (both LOGICAL px,
+  through `State::camera.last_scene_mvp` + `last_scene_view_rect` (both LOGICAL px,
   the rect divided by scale where it is cached — the same path as the
   Point Numbers overlay), hit-testing against `cursor_x/y`, dragging by
   unprojecting the cursor at the grabbed handle's captured NDC depth, snapping,
@@ -4204,7 +4204,7 @@ gestures, `pan_drag` beside `orbit_drag`:
 The Default Camera's eye hangs off its pivot, so `Viewport3D::pivot` is
 all that moves. A camera node has its Pivot and Position rewritten, to
 four decimals; a pan is hundreds of small moves and each read back from
-the text would lose what the text could not hold, so `State::pan_exact`
+the text would lose what the text could not hold, so `State::camera.pan_exact`
 keeps what the last pan wrote in full and is used while the node still
 says it. `the_camera_pans_with_the_pointer` is the test.
 

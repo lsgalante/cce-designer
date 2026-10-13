@@ -265,10 +265,10 @@ impl State {
         let Some(node) = self.current_dir().children.get(slot) else { return };
         let Some(source) = source_for(&node.node_type) else { return };
         let id = node.id.clone();
-        if self.viewer_tool.as_ref().map(|t| t.node_id == id).unwrap_or(false) {
-            self.viewer_tool = None;
+        if self.camera.viewer_tool.as_ref().map(|t| t.node_id == id).unwrap_or(false) {
+            self.camera.viewer_tool = None;
         } else {
-            self.viewer_tool = Some(ViewerTool::new(id, source));
+            self.camera.viewer_tool = Some(ViewerTool::new(id, source));
         }
     }
 
@@ -276,7 +276,7 @@ impl State {
     /// state is active, so the command falls through to mean nothing rather
     /// than reporting success.
     pub(crate) fn toggle_viewer_snap(&mut self) -> bool {
-        let Some(tool) = self.viewer_tool.as_mut() else { return false };
+        let Some(tool) = self.camera.viewer_tool.as_mut() else { return false };
         tool.snap = match tool.snap {
             Some(_) => None,
             None => Some(SNAP_INCREMENT),
@@ -298,7 +298,7 @@ impl State {
     /// The edited node's handles, or None if the node is gone or is no longer
     /// a type this source accepts.
     fn viewer_handles_of(&self, node_id: &str) -> Option<Vec<Vec3>> {
-        let tool = self.viewer_tool.as_ref()?;
+        let tool = self.camera.viewer_tool.as_ref()?;
         let node = find_node_by_id(&self.doc.fs_root, node_id)?;
         if !tool.source.accepts(&node.node_type) {
             return None;
@@ -309,8 +309,8 @@ impl State {
     /// The active tool's outline, projected: screen points of a closed
     /// loop, empty for a source that draws none.
     pub(crate) fn viewer_tool_outline(&self) -> Vec<(f32, f32)> {
-        let Some(tool) = &self.viewer_tool else { return Vec::new() };
-        let Some(mvp) = self.last_scene_mvp else { return Vec::new() };
+        let Some(tool) = &self.camera.viewer_tool else { return Vec::new() };
+        let Some(mvp) = self.camera.last_scene_mvp else { return Vec::new() };
         let Some(node) = find_node_by_id(&self.doc.fs_root, &tool.node_id) else { return Vec::new() };
         if !tool.source.accepts(&node.node_type) {
             return Vec::new();
@@ -318,7 +318,7 @@ impl State {
         let loop_ = tool.source.outline(node, &self.viewer_handle_ctx(node));
         let projected: Vec<(f32, f32)> = loop_
             .iter()
-            .filter_map(|p| project_point(&mvp, self.last_scene_view_rect, *p))
+            .filter_map(|p| project_point(&mvp, self.camera.last_scene_view_rect, *p))
             .map(|(x, y, _)| (x, y))
             .collect();
         // A corner behind the camera has no place on screen, and a loop
@@ -330,10 +330,10 @@ impl State {
     /// the cursor when it has one, else on the camera-facing plane at the
     /// depth the handle was grabbed.
     fn viewer_drag_target(&self, node_id: &str, ndc_z: f32) -> Option<Vec3> {
-        let mvp = self.last_scene_mvp?;
-        let view = self.last_scene_view_rect;
+        let mvp = self.camera.last_scene_mvp?;
+        let view = self.camera.last_scene_view_rect;
         let (cx, cy) = (self.cursor_x, self.cursor_y);
-        let plane = self.viewer_tool.as_ref().and_then(|tool| {
+        let plane = self.camera.viewer_tool.as_ref().and_then(|tool| {
             let node = find_node_by_id(&self.doc.fs_root, node_id)?;
             tool.source.plane(&self.viewer_handle_ctx(node))
         });
@@ -357,11 +357,11 @@ impl State {
             Some(node) => self.viewer_handle_ctx(node),
             None => return,
         };
-        let Some(tool) = self.viewer_tool.take() else { return };
+        let Some(tool) = self.camera.viewer_tool.take() else { return };
         if let Some(node) = find_node_by_id_mut(&mut self.doc.fs_root, node_id) {
             tool.source.write(node, handles, &ctx);
         }
-        self.viewer_tool = Some(tool);
+        self.camera.viewer_tool = Some(tool);
         self.sync_nodes();
         self.rebuild_scene_geometry();
         self.sync_parameters_pane();
@@ -371,13 +371,13 @@ impl State {
     /// Empty when no tool is active, the node is gone, or no scene mvp has
     /// been cached yet (a frame before the first scene staging).
     pub(crate) fn viewer_tool_handles(&self) -> Vec<(usize, f32, f32, f32)> {
-        let Some(tool) = &self.viewer_tool else { return Vec::new() };
-        let Some(mvp) = self.last_scene_mvp else { return Vec::new() };
+        let Some(tool) = &self.camera.viewer_tool else { return Vec::new() };
+        let Some(mvp) = self.camera.last_scene_mvp else { return Vec::new() };
         let Some(pts) = self.viewer_handles_of(&tool.node_id) else { return Vec::new() };
         pts.iter()
             .enumerate()
             .filter_map(|(i, p)| {
-                project_point(&mvp, self.last_scene_view_rect, *p).map(|(sx, sy, z)| (i, sx, sy, z))
+                project_point(&mvp, self.camera.last_scene_view_rect, *p).map(|(sx, sy, z)| (i, sx, sy, z))
             })
             .collect()
     }
@@ -398,20 +398,20 @@ impl State {
     /// there and start dragging it. Returns false, letting the press fall
     /// through, only when the edited node no longer exists.
     pub(crate) fn viewer_tool_press(&mut self) -> bool {
-        let Some(tool) = &self.viewer_tool else { return false };
+        let Some(tool) = &self.camera.viewer_tool else { return false };
         let node_id = tool.node_id.clone();
         let Some(mut pts) = self.viewer_handles_of(&node_id) else {
-            self.viewer_tool = None;
+            self.camera.viewer_tool = None;
             return false;
         };
         if let Some((idx, ndc_z)) = self.viewer_handle_at_cursor() {
-            let tool = self.viewer_tool.as_mut().expect("checked above");
+            let tool = self.camera.viewer_tool.as_mut().expect("checked above");
             tool.selected = Some(idx);
             tool.history.begin_gesture(pts);
             tool.drag = Some(Drag { handle: idx, ndc_z });
             return true;
         }
-        if !self.viewer_tool.as_ref().is_some_and(|t| t.source.extensible()) {
+        if !self.camera.viewer_tool.as_ref().is_some_and(|t| t.source.extensible()) {
             // A fixed source consumes the press anyway: the state owns the
             // viewport while it is active, and falling through would open the
             // context menu on every miss.
@@ -419,8 +419,8 @@ impl State {
         }
         // Empty space: add a handle. Depth comes from the last one (or the
         // world origin) so the new handle lands in the plane already in use.
-        let Some(mvp) = self.last_scene_mvp else { return true };
-        let view = self.last_scene_view_rect;
+        let Some(mvp) = self.camera.last_scene_mvp else { return true };
+        let view = self.camera.last_scene_view_rect;
         let ndc_z = pts
             .last()
             .and_then(|p| project_point(&mvp, view, *p))
@@ -430,12 +430,12 @@ impl State {
         let Some(world) = unproject_point(&mvp, view, self.cursor_x, self.cursor_y, ndc_z) else {
             return true;
         };
-        let snap = self.viewer_tool.as_ref().and_then(|t| t.snap);
+        let snap = self.camera.viewer_tool.as_ref().and_then(|t| t.snap);
         let before = pts.clone();
         pts.push(snapped(world, snap));
         let idx = pts.len() - 1;
         self.set_viewer_handles(&node_id, &pts);
-        if let Some(tool) = self.viewer_tool.as_mut() {
+        if let Some(tool) = self.camera.viewer_tool.as_mut() {
             // The add is the recorded step; the drag that follows is part of
             // the same gesture, so no gesture is opened for it.
             tool.history.record(before);
@@ -448,13 +448,13 @@ impl State {
     /// Pointer motion during a grab: the handle tracks the cursor on the
     /// camera-facing plane at its grab depth.
     pub(crate) fn viewer_tool_drag_motion(&mut self) -> bool {
-        let Some(drag) = self.viewer_tool.as_ref().and_then(|t| t.drag) else { return false };
-        if self.last_scene_mvp.is_none() {
+        let Some(drag) = self.camera.viewer_tool.as_ref().and_then(|t| t.drag) else { return false };
+        if self.camera.last_scene_mvp.is_none() {
             return false;
         }
-        let node_id = self.viewer_tool.as_ref().expect("drag implies tool").node_id.clone();
+        let node_id = self.camera.viewer_tool.as_ref().expect("drag implies tool").node_id.clone();
         let Some(mut pts) = self.viewer_handles_of(&node_id) else {
-            self.viewer_tool = None;
+            self.camera.viewer_tool = None;
             return false;
         };
         if drag.handle >= pts.len() {
@@ -463,15 +463,15 @@ impl State {
         let Some(world) = self.viewer_drag_target(&node_id, drag.ndc_z) else {
             return false;
         };
-        let snap = self.viewer_tool.as_ref().and_then(|t| t.snap);
+        let snap = self.camera.viewer_tool.as_ref().and_then(|t| t.snap);
         let ctx = match find_node_by_id(&self.doc.fs_root, &node_id) {
             Some(node) => self.viewer_handle_ctx(node),
             None => return false,
         };
-        if let Some(tool) = self.viewer_tool.as_ref() {
+        if let Some(tool) = self.camera.viewer_tool.as_ref() {
             tool.source.drag(&mut pts, drag.handle, snapped(world, snap), &ctx);
         }
-        if let Some(tool) = self.viewer_tool.as_mut() {
+        if let Some(tool) = self.camera.viewer_tool.as_mut() {
             tool.history.commit_gesture();
         }
         self.set_viewer_handles(&node_id, &pts);
@@ -480,7 +480,7 @@ impl State {
 
     /// Button release: end any in-flight grab.
     pub(crate) fn viewer_tool_release(&mut self) -> bool {
-        match self.viewer_tool.as_mut() {
+        match self.camera.viewer_tool.as_mut() {
             Some(tool) if tool.drag.is_some() => {
                 tool.drag = None;
                 tool.history.cancel_gesture();
@@ -494,7 +494,7 @@ impl State {
     /// on an extensible source — otherwise the press falls through to the
     /// viewport context menu.
     pub(crate) fn viewer_tool_delete_at_cursor(&mut self) -> bool {
-        if !self.viewer_tool.as_ref().is_some_and(|t| t.source.extensible()) {
+        if !self.camera.viewer_tool.as_ref().is_some_and(|t| t.source.extensible()) {
             return false;
         }
         let Some((idx, _)) = self.viewer_handle_at_cursor() else { return false };
@@ -503,18 +503,18 @@ impl State {
 
     /// Delete/Backspace: remove the selected handle, if any.
     pub(crate) fn viewer_tool_delete_selected(&mut self) -> bool {
-        if !self.viewer_tool.as_ref().is_some_and(|t| t.source.extensible()) {
+        if !self.camera.viewer_tool.as_ref().is_some_and(|t| t.source.extensible()) {
             return false;
         }
-        let Some(idx) = self.viewer_tool.as_ref().and_then(|t| t.selected) else { return false };
+        let Some(idx) = self.camera.viewer_tool.as_ref().and_then(|t| t.selected) else { return false };
         self.viewer_tool_delete_handle(idx)
     }
 
     fn viewer_tool_delete_handle(&mut self, idx: usize) -> bool {
-        let Some(tool) = &self.viewer_tool else { return false };
+        let Some(tool) = &self.camera.viewer_tool else { return false };
         let node_id = tool.node_id.clone();
         let Some(mut pts) = self.viewer_handles_of(&node_id) else {
-            self.viewer_tool = None;
+            self.camera.viewer_tool = None;
             return false;
         };
         if idx >= pts.len() {
@@ -523,7 +523,7 @@ impl State {
         let before = pts.clone();
         pts.remove(idx);
         self.set_viewer_handles(&node_id, &pts);
-        if let Some(tool) = self.viewer_tool.as_mut() {
+        if let Some(tool) = self.camera.viewer_tool.as_mut() {
             tool.history.record(before);
             tool.drag = None;
             // Keep a neighbour selected so repeated Delete walks the handles.
@@ -544,13 +544,13 @@ impl State {
     }
 
     fn viewer_tool_step(&mut self, undo: bool) -> bool {
-        let Some(tool) = &self.viewer_tool else { return false };
+        let Some(tool) = &self.camera.viewer_tool else { return false };
         let node_id = tool.node_id.clone();
         let Some(current) = self.viewer_handles_of(&node_id) else {
-            self.viewer_tool = None;
+            self.camera.viewer_tool = None;
             return false;
         };
-        let tool = self.viewer_tool.as_mut().expect("checked above");
+        let tool = self.camera.viewer_tool.as_mut().expect("checked above");
         let stepped = if undo { tool.history.undo(current) } else { tool.history.redo(current) };
         let Some(target) = stepped else { return false };
         // A step mid-drag abandons the drag: the grabbed index may not exist

@@ -392,8 +392,8 @@ impl State {
             // A camera orbit or a pan is not an edit, but an orbit with a
             // camera node active writes its rotation every motion — and a
             // changed parameter is a full-tree clone here (`rebase_structure`).
-            || self.orbit_drag.is_some()
-            || self.pan_drag.is_some()
+            || self.camera.orbit_drag.is_some()
+            || self.camera.pan_drag.is_some()
             || self.net.is_panning
     }
 
@@ -523,7 +523,7 @@ impl State {
                     .camera_level()
                     .children
                     .iter()
-                    .find(|c| c.node_type == "camera" && c.name == self.active_camera)
+                    .find(|c| c.node_type == "camera" && c.name == self.camera.active_camera)
                     .map(|c| c.id.clone());
                 let inverse = restore(&mut self.doc.fs_root, step);
                 self.doc.edit_history.file(undo, Step::Structure(inverse));

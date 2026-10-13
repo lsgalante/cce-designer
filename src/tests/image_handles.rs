@@ -43,8 +43,8 @@ fn cache_scene_camera(state: &mut State) {
     let (pos, rot, pivot) = state.active_camera_pose();
     let (w, h) = (state.last_viewport.width as f32, state.last_viewport.height as f32);
     let (proj, view, model) = state.viewport().get_matrices(w / h, Some(pos), Some(rot), Some(pivot));
-    state.last_scene_mvp = Some(proj * view * model);
-    state.last_scene_view_rect = (0.0, 0.0, w, h);
+    state.camera.last_scene_mvp = Some(proj * view * model);
+    state.camera.last_scene_view_rect = (0.0, 0.0, w, h);
 }
 
 /// Press on handle `i`, carry it to a screen point, let go.
@@ -54,7 +54,7 @@ fn drag_handle_to(state: &mut State, i: usize, to: (f32, f32)) {
     state.cursor_x = x;
     state.cursor_y = y;
     assert!(state.viewer_tool_press(), "the press on handle {i} grabbed nothing");
-    assert_eq!(state.viewer_tool.as_ref().unwrap().selected, Some(i), "the press took another handle");
+    assert_eq!(state.camera.viewer_tool.as_ref().unwrap().selected, Some(i), "the press took another handle");
     // In two motions, as a pointer arrives.
     state.cursor_x = (x + to.0) * 0.5;
     state.cursor_y = (y + to.1) * 0.5;
@@ -67,7 +67,7 @@ fn drag_handle_to(state: &mut State, i: usize, to: (f32, f32)) {
 
 /// A row of the node the viewer state is editing, as a number.
 fn edited_row(state: &State, row: &str) -> f32 {
-    let id = state.viewer_tool.as_ref().expect("no viewer state").node_id.clone();
+    let id = state.camera.viewer_tool.as_ref().expect("no viewer state").node_id.clone();
     let node = crate::viewer_state::find_node_by_id(&state.doc.fs_root, &id).expect("the edited node is gone");
     crate::geometry::node_param_f32(node, row, f32::NAN)
 }
@@ -80,7 +80,7 @@ fn edited_row(state: &State, row: &str) -> f32 {
 fn an_image_shape_is_moved_sized_and_turned_by_its_handles() {
     let mut state = state_showing_image(400, 200, 100);
     assert!(state.run_command("add_image_rectangle"));
-    assert_eq!(state.viewer_tool.as_ref().map(|t| t.source.name()), Some("Image Shape"), "adding a shape did not enter its viewer state");
+    assert_eq!(state.camera.viewer_tool.as_ref().map(|t| t.source.name()), Some("Image Shape"), "adding a shape did not enter its viewer state");
     state.view_image_pixels();
     cache_scene_camera(&mut state);
     let rows = |s: &State| ["x", "y", "width", "height", "rotation"].map(|r| edited_row(s, r));
@@ -130,12 +130,12 @@ fn an_image_shape_is_moved_sized_and_turned_by_its_handles() {
     state.update_active_camera_rotation(py, pp);
     cache_scene_camera(&mut state);
     let ctx_frame = {
-        let id = state.viewer_tool.as_ref().unwrap().node_id.clone();
+        let id = state.camera.viewer_tool.as_ref().unwrap().node_id.clone();
         let node = crate::viewer_state::find_node_by_id(&state.doc.fs_root, &id).unwrap();
         crate::page::resolve_frame(&state.doc.fs_root, node).unwrap()
     };
     let target = ctx_frame.to_world([120.0, 60.0], state.world_unit_mm());
-    let (sx, sy, _) = crate::viewer_state::project_point(&state.last_scene_mvp.unwrap(), state.last_scene_view_rect, target).expect("the place is behind the camera");
+    let (sx, sy, _) = crate::viewer_state::project_point(&state.camera.last_scene_mvp.unwrap(), state.camera.last_scene_view_rect, target).expect("the place is behind the camera");
     let head_on = state.viewer_tool_handles()[0];
     assert!((head_on.1 - 630.0).abs() > 2.0 || (head_on.2 - 410.0).abs() > 2.0, "the orbit did not move the view");
     drag_handle_to(&mut state, 0, (sx, sy));
@@ -177,7 +177,7 @@ fn image_text_is_moved_and_sized_by_its_handles() {
     }
     state.rebuild_scene_geometry();
     assert!(state.run_command("add_image_text"));
-    assert_eq!(state.viewer_tool.as_ref().map(|t| t.source.name()), Some("Image Text"));
+    assert_eq!(state.camera.viewer_tool.as_ref().map(|t| t.source.name()), Some("Image Text"));
     state.view_image_pixels();
     cache_scene_camera(&mut state);
     assert_eq!((edited_row(&state, "x"), edited_row(&state, "y"), edited_row(&state, "size")), (2.0, 1.0, 0.1));
@@ -193,7 +193,7 @@ fn image_text_is_moved_and_sized_by_its_handles() {
     assert_eq!((edited_row(&state, "x"), edited_row(&state, "y"), edited_row(&state, "size")), (2.5, 0.75, 0.25));
 
     // A node that draws on no image has no handles to grab.
-    let id = state.viewer_tool.as_ref().unwrap().node_id.clone();
+    let id = state.camera.viewer_tool.as_ref().unwrap().node_id.clone();
     crate::viewer_state::find_node_by_id_mut(&mut state.doc.fs_root, &id)
         .unwrap()
         .params

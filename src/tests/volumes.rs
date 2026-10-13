@@ -463,7 +463,7 @@ fn viewport_settings_round_trip_through_the_scene_file() {
     let mut a = State::new(false);
     // The Default Camera is active: a camera NODE's own Pivot would
     // override the saved view's, by design.
-    a.active_camera = "Default Camera".to_string();
+    a.camera.active_camera = "Default Camera".to_string();
     a.square_viewport = true;
     a.viewport_mut().show_camera_pivot = true;
     a.viewport_mut().rotation_y = 0.7;
@@ -692,7 +692,7 @@ fn a_menubar_click_is_dispatched_or_refused() {
     state
         .apply_action(McpAction::MenuClick { widget_idx: RIGHT_MENUBAR_IDX, menu_idx: 0, item_idx: 0 }, &mut redraw)
         .expect("the Camera menu is dispatched");
-    assert_eq!(state.active_camera, "Default Camera");
+    assert_eq!(state.camera.active_camera, "Default Camera");
 
     let nodes = state.doc.fs_root.children.len();
     for (widget_idx, menu_idx) in [(crate::slots::HEADER_IDX, 0), (LEFT_MENUBAR_IDX, 0), (RIGHT_MENUBAR_IDX, 2)] {
@@ -715,13 +715,13 @@ fn the_cameras_and_the_parameter_reset_are_commands() {
     let count = state.camera_names().len();
     for _ in 0..count {
         assert!(state.run_command("next_camera"));
-        assert_eq!(state.viewport().active_camera, state.active_camera);
+        assert_eq!(state.viewport().active_camera, state.camera.active_camera);
     }
-    assert_eq!(state.active_camera, "Default Camera", "a full turn comes back");
+    assert_eq!(state.camera.active_camera, "Default Camera", "a full turn comes back");
     assert!(state.run_command("previous_camera"));
-    assert_eq!(state.active_camera, *state.camera_names().last().unwrap());
+    assert_eq!(state.camera.active_camera, *state.camera_names().last().unwrap());
     assert!(state.run_command("default_camera"));
-    assert_eq!(state.active_camera, "Default Camera");
+    assert_eq!(state.camera.active_camera, "Default Camera");
 
     // A camera node is a row of the palette, found by its name.
     state.open_dialog();
@@ -733,7 +733,7 @@ fn the_cameras_and_the_parameter_reset_are_commands() {
     state.ui_context[state.slots.dialog].selected = row;
     state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
     assert!(!state.dialog_visible());
-    assert_eq!(state.active_camera, "camera1");
+    assert_eq!(state.camera.active_camera, "camera1");
     assert_eq!(state.viewport().active_camera, "camera1");
 
     // Reset puts a changed parameter back.
@@ -1174,7 +1174,7 @@ fn a_rename_is_undone_with_what_names_the_node() {
             dir.children[sphere].name.clone(),
             dir.children[normal].params.iter().find(|p| p.name == "input").unwrap().text().to_string(),
             dir.children[embryo].children[inside].params[0].text().to_string(),
-            state.active_camera.clone(),
+            state.camera.active_camera.clone(),
             state.viewport().active_camera.clone(),
         )
     };
@@ -1615,10 +1615,10 @@ fn test_the_soft_transform_state_drags_a_derived_handle() {
     assert_eq!(state.current_dir().children[slot].node_type, "soft_transform");
 
     state.toggle_viewer_state(slot);
-    assert!(state.viewer_tool.is_some(), "soft_transform must enter a viewer state");
+    assert!(state.camera.viewer_tool.is_some(), "soft_transform must enter a viewer state");
 
-    state.last_scene_mvp = Some(Mat4::IDENTITY);
-    state.last_scene_view_rect = (0.0, 0.0, 100.0, 100.0);
+    state.camera.last_scene_mvp = Some(Mat4::IDENTITY);
+    state.camera.last_scene_view_rect = (0.0, 0.0, 100.0, 100.0);
     let sx = |x: f32| 50.0 + x * 50.0;
     let sy = |y: f32| 50.0 - y * 50.0;
     let param = |state: &State, name: &str| {
@@ -1692,8 +1692,8 @@ fn test_snapping_rounds_a_dragged_handle() {
         .expect("add curve node");
     let slot = state.current_dir().children.len() - 1;
     state.toggle_viewer_state(slot);
-    state.last_scene_mvp = Some(Mat4::IDENTITY);
-    state.last_scene_view_rect = (0.0, 0.0, 100.0, 100.0);
+    state.camera.last_scene_mvp = Some(Mat4::IDENTITY);
+    state.camera.last_scene_view_rect = (0.0, 0.0, 100.0, 100.0);
     let points = |state: &State| {
         crate::geometry::parse_curve_points(&crate::geometry::node_param_str(
             &state.current_dir().children[slot],
@@ -1715,7 +1715,7 @@ fn test_snapping_rounds_a_dragged_handle() {
 
     // On: the same drag rounds to the increment.
     assert!(state.toggle_viewer_snap());
-    assert_eq!(state.viewer_tool.as_ref().unwrap().snap, Some(SNAP_INCREMENT));
+    assert_eq!(state.camera.viewer_tool.as_ref().unwrap().snap, Some(SNAP_INCREMENT));
     let first = points(&state)[0];
     state.cursor_x = 50.0 + first.x * 50.0;
     state.cursor_y = 50.0 - first.y * 50.0;
@@ -1729,11 +1729,11 @@ fn test_snapping_rounds_a_dragged_handle() {
 
     // And off again, from the same command.
     assert!(state.toggle_viewer_snap());
-    assert_eq!(state.viewer_tool.as_ref().unwrap().snap, None);
+    assert_eq!(state.camera.viewer_tool.as_ref().unwrap().snap, None);
 
     // The HUD says which it is, because a mode you cannot see is a mode
     // you forget you are in.
-    let hud = state.viewer_tool.as_ref().unwrap().hud();
+    let hud = state.camera.viewer_tool.as_ref().unwrap().hud();
     assert!(hud.contains("Curve Points") && hud.contains("Snap off"), "{hud}");
 }
 
@@ -2379,7 +2379,7 @@ fn test_dragging_empty_scene_turns_the_camera() {
 
     // The default camera carries its own orbit. X drag yaws, Y drag
     // pitches, and the pitch is inverted so dragging down looks down.
-    state.active_camera = "Default Camera".to_string();
+    state.camera.active_camera = "Default Camera".to_string();
     let (y0, x0) = (state.viewport().rotation_y, state.viewport().rotation_x);
     state.orbit_camera_by(100.0, 40.0);
     assert!(
@@ -2394,7 +2394,7 @@ fn test_dragging_empty_scene_turns_the_camera() {
     // A named camera accumulates instead, for the camera NODE to pick up —
     // the same split the scroll path makes.
     let mut state = State::new(false);
-    state.active_camera = "Camera 1".to_string();
+    state.camera.active_camera = "Camera 1".to_string();
     let before = (state.viewport().rotation_y, state.viewport().rotation_x);
     state.orbit_camera_by(100.0, 40.0);
     assert!(
@@ -2413,7 +2413,7 @@ fn test_dragging_empty_scene_turns_the_camera() {
 
     // Pitch is clamped, so a long downward drag cannot roll the scene over.
     let mut state = State::new(false);
-    state.active_camera = "Default Camera".to_string();
+    state.camera.active_camera = "Default Camera".to_string();
     state.orbit_camera_by(0.0, -100000.0);
     let pitch = state.viewport().rotation_x;
     assert!(pitch.abs() < std::f32::consts::PI, "pitch ran past vertical: {pitch}");
