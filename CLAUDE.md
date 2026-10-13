@@ -224,12 +224,77 @@ engine's shaping/glyph pass (the app has no `FontSystem` or buffer cache of its 
 `cce_ui::cosmic_text`; `glyphon` is not a dependency of this crate at all, having
 gone from cce-ui with the wgpu path).
 
-- `src/app.rs` (~8k lines) — the heart: `State` (the entire app model), `McpAction` /
-  `CustomEvent`, pane layout. `tick_frame` (simulation:
+- `src/app.rs` (~7.2k lines) — the heart: `State` (the whole app model), `McpAction` /
+  `CustomEvent`, pane layout, and most of `State`'s methods. `tick_frame` (simulation:
   config polling, inertia, widget ticks) and `stage_frame` (renderer staging) are the
   two halves of the old render loop. GPU mesh updates are staged CPU-side
-  (`pending_*` fields, `spheres_dirty`) and flushed in `stage_frame` because only
-  the engine hooks see the renderer.
+  (`State::stage`'s `pending_*` and `spheres_dirty`, the markers' `StagedMesh`es) and
+  flushed in `stage_frame` because only the engine hooks see the renderer.
+
+  **`State` is a shell and twelve parts** (architecture RFC phase 2, finished
+  2026-10-13; it was some 250 flat fields). The shell's own fields are what every
+  pane shares: the window (size, scale, title, the CSD drag and window action), the
+  widget roster (`slots`, `ui_context`, `positions`), the pointer, focus and drags
+  (`cursor_x`/`_y`, `modifiers`, `focused_pane`, `focused_widget`, `drag_widget`,
+  `app_drag`), the chords and the pending command, the config and settings polling,
+  the startup project and GPU settings, `viewport_dirty`, and the panes' flags and
+  layout (`show_*`, `collapsed_panes`, the splitter and circular layouts,
+  `pending_plates`) — left flat, since a part of their own would touch some 330
+  sites for little cohesion. Everything else is one field per concern:
+
+  - `doc: Document` and `net: NetworkView` — the open project and the network
+    editor, described below.
+  - `camera: CameraView` (`src/app/camera.rs`) — the active camera's name, the
+    orbit and pan drags and the pan's exact write-back, the viewer state, and the
+    view the scene was last staged from (`last_scene_mvp`, the eye, the pane rect)
+    with the key the point numbers' dimming was worked out for.
+  - `view: ViewDisplay` (`src/app/view.rs`) — the viewport block's settings the
+    widget does not hold: the square aspect, the guides' sizes, the point markers'
+    size and colour, the eight element-overlay switches, the marked groups, the
+    attribute visualizers.
+  - `render: RenderSettings` (`src/settings.rs`) — the draw-time render settings,
+    the render block field for field.
+  - `scene: SceneData` (`src/app/scene.rs`) — the scene as `rebuild_scene_geometry`
+    and `present_scene` leave it: the traced copy and its version, the smooth fill,
+    the wire edges, the evaluated base with its attributes and groups, the
+    environment, the page image and what it was composed from, the sim cache, and
+    the playbar strip's key.
+  - `stage: SceneStage` (`src/app/stage.rs`) — what is staged for the renderer: the
+    GPU meshes (`SceneMeshes`), the uploads waiting for the flush, the `StageKey`
+    the raster scene was last staged from, the see-through sort's and the traced
+    scene's keys, `seen_renderer`. `StagedMesh` is defined there too.
+  - `markers: SceneMarkers` (`src/app/markers.rs`) — what is drawn ON the scene:
+    the group, marked-group and row markers, the pull arrows, Show Point and Vertex
+    Markers, the normals' whiskers, the element numbers and their dimming, with the
+    positions a size change re-builds them from.
+  - `params: ParamsPane` (`src/app/params.rs`) — the node the rows were loaded
+    from, the plate (on or off, as drawn, the HUD's width), the Value and float2
+    rows' spans, the pickers, the visualizers' hold on the HUD, Copy Parameter's
+    clipboard.
+  - `sheet: SheetPane` (`src/app/sheet.rs`) — what the rows were last read from,
+    where their points stood, the plate's height; and the table itself,
+    `State::geometry_to_spreadsheet_columns`.
+  - `menus: ContextMenus` (`src/app/menus.rs`) — which context menu is open and what
+    its shown rows do (the `*MenuAction` enums live there), the viewport menu's page,
+    where the network menu, a plate page and the dialog were turned from, the rename
+    target.
+  - `detached: DetachedWindows` (`src/app/detached.rs`) — whether this process is a
+    detached window and for which pane, the panes and child processes the main
+    window handed out, and the sync channel's poll and autosave.
+
+  Each part is a plain struct in a child module of `app`, so it reaches `State`'s
+  private items as `app.rs` does, and `app.rs` re-exports its types
+  (`crate::app::StageKey` still resolves). Access is direct —
+  `self.camera.active_camera`, `self.markers.pull_arrows` — so two parts borrow
+  apart, and a method that writes several (`stage_frame` writes the camera
+  and the stage, `present_scene` the scene, the markers and the stage) stays a
+  `State` method; only a helper that reads its own part alone belongs on the part.
+  So the methods did not move with the fields: they are still `app.rs`'s and the
+  feature files' (`render.rs`, `dialog.rs`, `project.rs`, …), but for the network
+  editor's (`network.rs`), the input cascade (`input.rs`) and the spreadsheet's
+  column builder (`sheet.rs`). A new field goes in the part it is about; a new file under
+  `src/app/` goes in the two source scans' lists
+  (`nothing_shells_out_to_cce_cloud_any_more`, `the_dialog_plate_is_the_menu_plate`).
 - `src/app/input.rs` — `State::handle_event`, the one entry every window event
   takes (from `process_window_event` and the tests), split by the kind of event:
   `on_wheel`, `on_pointer_moved`, `on_mouse_button`, `on_key`. Each of those is a
