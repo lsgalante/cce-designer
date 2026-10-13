@@ -1232,6 +1232,32 @@ impl State {
         taken.unwrap_or(false)
     }
 
+    /// What the context's widgets reported since the last sweep
+    /// (`UiContext::take_events`), landed; true when something was. Swept
+    /// after every way an event reaches a widget — the end of
+    /// `process_window_event`, the frame's widget ticks, and wherever the
+    /// dialog hands its dropdown an event — so a pick made from the keyboard
+    /// or by an assistive tool lands with what made it, not with the next
+    /// pointer event.
+    ///
+    /// Of what the context holds only the dialog's live dropdown reports
+    /// anything. The panes speak through their controllers' own drains (the
+    /// graph's requests, the menubars' clicks, the breadcrumb's segment),
+    /// which carry payloads and are not events, and the controls in the
+    /// params pane and in the dialog's rows are by-value children their
+    /// composites drain themselves.
+    pub(crate) fn drain_widget_events(&mut self) -> bool {
+        let dropdown = self.dialog_dd().id();
+        let mut landed = false;
+        for (id, ev) in self.ui_context.take_events() {
+            match ev {
+                cce_ui::widget::WidgetEvent::Changed if id == dropdown => landed |= self.land_dialog_dropdown_change(),
+                _ => {}
+            }
+        }
+        landed
+    }
+
     /// Slide the camera across its own view by a pointer delta, in logical
     /// px: the pivot and the eye move together, in the plane of the screen,
     /// so the view turns nowhere and the scene follows the pointer. What is
@@ -6501,6 +6527,10 @@ impl State {
                     graph_ticked = true;
                 }
             }
+        }
+        // What was reported outside an event (an assistive tool's change), landed now.
+        if self.drain_widget_events() {
+            tick_changed = true;
         }
         // A simnet's geometry is a function of the frame, so advancing the
         // timeline invalidates the scene the way editing a node does. Gated on

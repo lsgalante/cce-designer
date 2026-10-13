@@ -2763,17 +2763,28 @@ impl State {
         taken
     }
 
-    /// Land what the dropdown picked, however the event that picked it
-    /// reached it, and note whether it is still expanded.
+    /// Note whether the dropdown is still expanded, and land what it picked
+    /// (`State::drain_widget_events`), however the event that picked it
+    /// reached it.
     fn land_dialog_dropdown_pick(&mut self) {
-        let picked = {
-            let dd = self.dialog_dd();
-            let dd = self.ui_context[dd].inner_mut();
-            dd.take_change().then(|| dd.options.get(dd.selected).cloned()).flatten()
-        };
         self.ui_context[self.slots.dialog].dropdown_armed = self.ui_context[self.dialog_dd()].is_expanded();
-        if let (Some(value), Some(id)) = (picked, self.ui_context[self.slots.dialog].dropdown_row.clone()) {
-            self.land_dialog_choice(&id, &value);
+        self.drain_widget_events();
+    }
+
+    /// The dropdown reported a change: land the option it now holds on the
+    /// row it serves. False when it serves none — the dialog closed under
+    /// it.
+    pub(crate) fn land_dialog_dropdown_change(&mut self) -> bool {
+        let value = {
+            let dd = self.ui_context[self.dialog_dd()].inner();
+            dd.options.get(dd.selected).cloned()
+        };
+        match (value, self.ui_context[self.slots.dialog].dropdown_row.clone()) {
+            (Some(value), Some(id)) => {
+                self.land_dialog_choice(&id, &value);
+                true
+            }
+            _ => false,
         }
     }
 

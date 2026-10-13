@@ -46,6 +46,10 @@ impl State {
         {
             let state = &mut *self;
             let mut changed = state.handle_event(&ev);
+            // What the widgets reported, landed with the event that raised it.
+            if state.drain_widget_events() {
+                changed = true;
+            }
 
             if let Some(seg) = state.path_mut().path_click() {
                 if seg < state.doc.current_path.len() {

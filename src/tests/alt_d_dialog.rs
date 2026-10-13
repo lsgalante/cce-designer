@@ -703,6 +703,38 @@ fn a_choice_row_is_a_dropdown() {
     assert!(!state.ui_context[state.dialog_dd()].open, "a closed dialog leaves no plate behind");
 }
 
+/// The dropdown's pick is collected by the sweep of what the widgets
+/// reported (`State::drain_widget_events`), so a change that reaches it
+/// outside the dialog's own dispatch — an assistive tool setting its value
+/// — lands with the next frame, not with the next event the dropdown is
+/// handed; and a change with no row to serve lands nowhere.
+#[test]
+fn a_dropdown_change_made_outside_its_events_lands_on_the_next_sweep() {
+    use crate::dialog::setting_row_id;
+    let mut state = State::new(false);
+    state.resize(1600.0, 900.0, 1.0);
+    state.rebuild_positions();
+    state.apply_layout();
+    state.run_command("command_palette");
+    state.open_dialog_dropdown(&setting_row_id("World Unit"));
+    assert!(state.dialog_dropdown_open());
+    let before = state.doc.world_unit.suffix().to_string();
+    let other = state.ui_context[state.dialog_dd()].options.iter().find(|u| **u != before).cloned().expect("another unit");
+    let dd = state.dialog_dd();
+    assert!(state.ui_context[dd].set_value_string(&other), "as a screen reader's SetValue would");
+    assert_eq!(state.doc.world_unit.suffix(), before, "nothing lands until the sweep");
+    state.tick_frame(1.0 / 60.0);
+    assert_eq!(state.doc.world_unit.suffix(), other, "the frame's sweep landed it");
+    assert!(!state.drain_widget_events(), "and drained it: a second sweep finds nothing");
+
+    // Closed under it, the dropdown serves no row: a late change is
+    // swept and dropped.
+    state.close_dialog();
+    assert!(state.ui_context[dd].set_value_string(&before));
+    assert!(!state.drain_widget_events());
+    assert_eq!(state.doc.world_unit.suffix(), other);
+}
+
 /// A control in the palette lifts under the pointer: the row whose
 /// switch, slider or colour well the pointer is over is the hovered
 /// control, and the label beside it is not.

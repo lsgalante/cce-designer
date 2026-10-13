@@ -4491,7 +4491,17 @@ selection stays where it was:
   animation and frosted style — painted after the rows
   (`render_popover`), over them. Up/Down/Enter/Escape are the dropdown's
   own; Tab closes it; Left/Right on a closed row still step it in place;
-  every pick lands through `land_dialog_choice`. Four things it took:
+  every pick lands through `land_dialog_choice`. The pick is HEARD through
+  cce-ui's widget-event sweep (`UiContext::take_events`, in
+  `State::drain_widget_events`, since 2026-10-13): of everything the
+  context holds the dropdown is the one widget that reports a click or a
+  change — the panes speak through their controllers' own drains, and the
+  params pane's and the rows' controls are by-value children their
+  composites drain — and the sweep runs after every window event, every
+  frame, and wherever the dialog hands the dropdown an event, so a change
+  an assistive tool makes lands with the next frame
+  (`a_dropdown_change_made_outside_its_events_lands_on_the_next_sweep`).
+  Four things it took:
   - **Text is painted twice** (`paint_retagged`): a trigger's text must
     carry the DIALOG's bounds or the dialog's occluder clamps it away.
   - **The open plate is an occluder registered AFTER the dialog's** —
