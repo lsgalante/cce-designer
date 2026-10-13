@@ -1389,6 +1389,10 @@ fn a_node_name_on_a_light_floor_is_written_dark() {
     let mut state = State::new(false);
     let light = cce_ui::color::parse_hex_rgba_linear("#d8dae4cc").unwrap();
     let dark = cce_ui::color::parse_hex_rgba_linear("#202028cc").unwrap();
+    // The label floor's own keys are read from config.kdl like the node's,
+    // so the machine's config would decide this test: start from neither.
+    state.net.label_compression = None;
+    state.net.label_tint = None;
     // No floor: a name stands on the bare scene and keeps the widget's
     // light ink, whatever the tint.
     state.net.node_compression = None;
