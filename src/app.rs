@@ -2715,13 +2715,19 @@ impl State {
             }
         }
         if let Some((key, target, ball)) = value_row {
+            // An attribute the input lacks has no width to read: the row
+            // is presented as wide as its text, which is what the node
+            // would create were the attribute there (Modify on a missing
+            // attribute writes nothing, so the controls cost nothing).
+            let written = |text: &str| text.split([':', ',', ' ']).filter(|s| !s.is_empty()).count();
             let width = match target {
                 ValueTarget::Width(w) => w,
                 ValueTarget::Named(name) => lists
                     .widths
                     .iter()
                     .find(|(n, _)| n.eq_ignore_ascii_case(&name))
-                    .map_or(0, |(_, w)| *w),
+                    .map(|(_, w)| *w)
+                    .unwrap_or_else(|| params.iter().find(|r| r.0 == key).map_or(0, |r| written(&r.1))),
             };
             // The span the row already has stands through a drag: a new
             // one rebuilds the pane, which would drop the slider being held.

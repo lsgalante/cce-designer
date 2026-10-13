@@ -618,8 +618,9 @@ fn the_value_rows_span_adapts_to_the_value() {
 /// or four rows for more: Modify on Pos (the pull node), on an input
 /// Float3 (N) or Float2 (uv), Create by its Type. A single number is
 /// spread over the components, as the node spreads it, and the pane
-/// writing it back unchanged is not an edit. A text that fits no width,
-/// an attribute the input lacks and an expression keep the text box;
+/// writing it back unchanged is not an edit; an attribute the input lacks
+/// has no width, and the row is as wide as its text. A text that fits no
+/// width and an expression keep the text box;
 /// read from an attribute, there is no Value row at all.
 #[test]
 fn an_attribute_value_row_is_a_control_as_wide_as_its_target() {
@@ -668,7 +669,10 @@ fn an_attribute_value_row_is_a_control_as_wide_as_its_target() {
     assert_eq!(value_row(&mut state), "float2:-10:10:soft", "Modify on an input Float2: 2 needs ±10");
     set(&mut state, "value", "0.00:0.06:0.00");
     set(&mut state, "attribute_name", "nothing_here");
-    assert_eq!(value_row(&mut state), "text", "an attribute the input lacks has no width");
+    assert_eq!(value_row(&mut state), wide, "an attribute the input lacks is as wide as the text");
+    set(&mut state, "value", "1:2");
+    assert_eq!(value_row(&mut state), "float2:-10:10:soft", "two numbers for an attribute the input lacks");
+    set(&mut state, "value", "0.00:0.06:0.00");
 
     set(&mut state, "operation", "Create");
     set(&mut state, "attribute_name", "vel");

@@ -1031,8 +1031,11 @@ old text Center a float3 from the load on. Tests build parameters with
   component, as the node spreads it (`fit` in `apply_attribute`), and the
   pane's write-back reading that spread back unchanged is not an edit
   (`same_value_row_text`), or every sync would rewrite `1.00` as
-  `1.00:1.00:1.00` and file an undo step. An expression, a text that fits
-  no width and an attribute the input lacks keep the text box; the
+  `1.00:1.00:1.00` and file an undo step. An expression and a text that
+  fits no width keep the text box. A Modify of an attribute the input
+  lacks has no width to read, and is presented as wide as its text
+  (since 2026-10-13; it was a text box, so a Modify aimed at an attribute
+  nothing upstream made yet read as a string). The
   parameter, the file and MCP see text throughout. **Value From** (Constant
   / Attribute, since the same day, Create and Modify) replaces the Value
   row with **From Attribute**, an `attribute` row: each point's own value
