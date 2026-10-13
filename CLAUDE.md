@@ -224,7 +224,7 @@ engine's shaping/glyph pass (the app has no `FontSystem` or buffer cache of its 
 `cce_ui::cosmic_text`; `glyphon` is not a dependency of this crate at all, having
 gone from cce-ui with the wgpu path).
 
-- `src/app.rs` (~9.2k lines) — the heart: `State` (the entire app model), `McpAction` /
+- `src/app.rs` (~8k lines) — the heart: `State` (the entire app model), `McpAction` /
   `CustomEvent`, pane layout. `tick_frame` (simulation:
   config polling, inertia, widget ticks) and `stage_frame` (renderer staging) are the
   two halves of the old render loop. GPU mesh updates are staged CPU-side
@@ -259,8 +259,17 @@ gone from cce-ui with the wgpu path).
   the deselect memory, the group drag and the clipboard, the lattice
   (`grid`, `grid_base`), the pan and its drag-release fling, the scroll
   settings, the wheel's target over the plateless network, and the nodes'
-  look (opacity, compression, tint, the drop glow). Also a child module, and
-  in the same two source scans.
+  look (opacity, compression, tint, the drop glow). The network editor's
+  `State` methods are here too, as an `impl State` block: navigation
+  (`on_path_changed`, `move_up`) and the tree operations it drives
+  (`delete_node`, `set_bypassed`, `connect_port`, `sync_nodes`), the lattice
+  derivations (`cell_center`, `cell_rect`, `cell_at`) and the cursor region
+  (`grid_cursor_region`, `selected_slots`), the grid and scroll settings and
+  their config reload, `zoom`, Arrange, deselect, the hjkl families, the group
+  drag and its settle, copy and paste, framing (`frame_cursor`,
+  `frame_all_nodes`), and the read-back of the graph widget
+  (`read_panel_offsets`, `sync_cursor_and_selection`). Also a child module,
+  and in the same two source scans.
 - `src/model.rs` (~1.6k lines) — the node tree and the project file, with no window or
   GPU: `FsNode`, `Project` (load, migrations, template merge), node ids, the wire and
   splice operations, parameter rows, `load_fs_tree` (node-template loading).
