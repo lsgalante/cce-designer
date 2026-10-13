@@ -1212,23 +1212,14 @@ impl State {
     /// `*mut dyn WidgetHost` casts until 2026-10-12, which held the widget
     /// and the context mutably at once.)
     ///
-    /// Two things differ from a direct call, and neither is visible:
-    ///
-    /// - The slot is not marked dirty here. `UiContext::deliver` does that;
-    ///   the app's own `changed` answer is what asks for a frame.
-    /// - The coverage memo (`is_coordinate_covered`) is built from the
-    ///   widgets the context can see, which leaves out one that is lent. A
-    ///   query made during the lend therefore leaves this slot's popover
-    ///   out, and the memo would serve that answer to the next query at the
-    ///   same point — the next slot of `broadcast_pointer`, which hands
-    ///   them all one point. So a slot that has a popover drops the memo
-    ///   when it comes back.
+    /// One thing differs from a direct call, and it is not visible: the
+    /// slot is not marked dirty here. `UiContext::deliver` does that; the
+    /// app's own `changed` answer is what asks for a frame. (The coverage
+    /// memo a query builds while the slot is out, without its popover, is
+    /// the context's to drop when the slot comes back, and `lend` does.)
     pub(crate) fn deliver_to_slot(&mut self, idx: usize, ev: &cce_ui::widget::Event) -> bool {
         let taken = self.ui_context.lend(self.slots.id(idx), |w, ui| w.handle_event(ev, ui));
         debug_assert!(taken.is_some(), "slot {idx} is not in the context, or is already lent");
-        if self.slots.get_dyn(&self.ui_context, idx).popover_rect().is_some() {
-            self.ui_context.invalidate_coverage_cache();
-        }
         taken.unwrap_or(false)
     }
 
