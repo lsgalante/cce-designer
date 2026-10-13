@@ -209,12 +209,12 @@ impl State {
     pub fn plate_can_detach(&self, idx: usize) -> bool {
         // A detached window never offers to detach its own pane again, and a
         // pane already handed out cannot be handed out twice.
-        if self.is_detached_network || self.detached_pane.is_some() {
+        if self.detached.is_detached_network || self.detached.detached_pane.is_some() {
             return false;
         }
         match idx {
-            NETWORK_PANEL_IDX => !self.detached_circular_network,
-            other => pane_detach_flag(other).is_some() && !self.detached_panes[other],
+            NETWORK_PANEL_IDX => !self.detached.detached_circular_network,
+            other => pane_detach_flag(other).is_some() && !self.detached.detached_panes[other],
         }
     }
 
@@ -237,8 +237,8 @@ impl State {
         match std::env::current_exe() {
             Ok(exe) => match std::process::Command::new(exe).arg(flag).spawn() {
                 Ok(child) => {
-                    self.detached_children.insert(idx, child);
-                    self.detached_panes[idx] = true;
+                    self.detached.detached_children.insert(idx, child);
+                    self.detached.detached_panes[idx] = true;
                     self.rebuild_positions();
                     self.apply_layout();
                 }
@@ -350,7 +350,7 @@ impl State {
     /// every other slot goes dark; in the PARENT the panes it has handed out
     /// stop being laid out, so the space they held is released.
     pub(crate) fn apply_detached_panes(&mut self) {
-        if let Some(idx) = self.detached_pane {
+        if let Some(idx) = self.detached.detached_pane {
             for i in 0..WIDGET_COUNT {
                 if i == idx {
                     continue;
@@ -373,7 +373,7 @@ impl State {
         // dropping it: the stub carries the corner control, which is the only
         // way back. Hiding the pane outright left no way to reattach it.
         for idx in PLATE_SLOTS {
-            if self.detached_panes[idx] {
+            if self.detached.detached_panes[idx] {
                 self.stub_slot(idx);
             }
         }
@@ -402,9 +402,9 @@ impl State {
     /// is separate because its detached window is the circular one.
     pub fn pane_is_detached(&self, idx: usize) -> bool {
         if idx == NETWORK_PANEL_IDX {
-            return self.detached_circular_network;
+            return self.detached.detached_circular_network;
         }
-        PLATE_SLOTS.contains(&idx) && self.detached_panes[idx]
+        PLATE_SLOTS.contains(&idx) && self.detached.detached_panes[idx]
     }
 
     /// Is this pane drawn as a stub rather than in full — collapsed, or left
@@ -452,7 +452,7 @@ impl State {
             return;
         }
 
-        self.detached_panes[idx] = false;
+        self.detached.detached_panes[idx] = false;
         self.rebuild_positions();
         self.apply_layout();
     }
@@ -460,7 +460,7 @@ impl State {
     /// Close the detached child and reap it. Best-effort: a child the user
     /// already closed is simply gone, and reattaching must work anyway.
     fn close_detached_child(&mut self, idx: usize) {
-        if let Some(mut child) = self.detached_children.remove(&idx) {
+        if let Some(mut child) = self.detached.detached_children.remove(&idx) {
             let _ = child.kill();
             // Reap it, or the process table keeps a zombie for the rest of the
             // session — the same trap the liveness probe fell into.
@@ -481,7 +481,7 @@ impl State {
             if !self.pane_is_detached(idx) {
                 continue;
             }
-            let exited = match self.detached_children.get_mut(&idx) {
+            let exited = match self.detached.detached_children.get_mut(&idx) {
                 // `Ok(None)` is the only "still running" answer; an Err handle
                 // is no more useful than an exited one.
                 Some(child) => !matches!(child.try_wait(), Ok(None)),
@@ -490,14 +490,14 @@ impl State {
             if !exited {
                 continue;
             }
-            self.detached_children.remove(&idx);
+            self.detached.detached_children.remove(&idx);
             if idx == NETWORK_PANEL_IDX {
-                self.detached_circular_network = false;
+                self.detached.detached_circular_network = false;
                 let val = false;
                 self.menu_mut(crate::slots::LEFT_MENUBAR_IDX).set_item_checked(2, 3, val);
                 self.menu_mut(crate::slots::HEADER_IDX).set_item_checked(2, 3, val);
             } else {
-                self.detached_panes[idx] = false;
+                self.detached.detached_panes[idx] = false;
             }
             reclaimed = true;
         }

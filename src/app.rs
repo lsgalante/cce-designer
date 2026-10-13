@@ -173,6 +173,9 @@ pub use sheet::SheetPane;
 // `State::menus`: which context menu is open, what its rows do.
 mod menus;
 pub use menus::ContextMenus;
+// `State::detached`: detached windows and the sync channel between them.
+mod detached;
+pub use detached::DetachedWindows;
 
 /// Which node the params pane is showing: the editor's level, the slot
 /// there, and the node's id. All three, because no one of them is an
@@ -805,30 +808,10 @@ pub struct State {
     pub last_config_read: Instant,
     pub circular_network_pane: bool,
     pub circular_network_layout: crate::panes::CircularPaneLayout,
-    pub is_detached_network: bool,
-    pub detached_circular_network: bool,
-    /// This process IS the detached window for one pane — the generic sibling
-    /// of `is_detached_network`, which stays its own flag because the network's
-    /// detached window is not merely detached: it is CIRCULAR, with a radial
-    /// border resize and custom CSD that no rectangular pane wants.
-    pub detached_pane: Option<usize>,
-    /// The MAIN window's record of which panes it has handed to a detached
-    /// window, so it lays them out as stubs. `detached_circular_network` is the
-    /// network's equivalent.
-    pub detached_panes: [bool; WIDGET_COUNT],
-    /// The detached child PROCESS per pane — so Reattach can close the window it
-    /// is taking the pane back from, and so the parent can notice a child the
-    /// user closed themselves and take the pane back on its own.
-    ///
-    /// The handle, not a bare pid: an exited child the parent never waits on is
-    /// a ZOMBIE, and `kill(pid, 0)` succeeds for zombies — a pid-based liveness
-    /// probe reports a closed window as still running, forever. `try_wait`
-    /// reaps and reports for real.
-    pub detached_children: std::collections::HashMap<usize, std::process::Child>,
-    pub last_project_mod_time: Option<std::time::SystemTime>,
-    pub last_project_check: std::time::Instant,
-    pub needs_autosave: bool,
-    pub last_autosave_time: std::time::Instant,
+    /// Detached windows: whether this process is one and for which pane, the
+    /// panes and child processes the main window handed out, and the sync
+    /// channel's autosave and poll (`src/app/detached.rs`).
+    pub detached: DetachedWindows,
     pub last_design_mod_time: Option<std::time::SystemTime>,
     pub last_config_mod_time: Option<std::time::SystemTime>,
     /// The active app-mode drag (pane edge resize), if any. See [`AppDrag`].
@@ -1044,7 +1027,7 @@ impl State {
     /// viewport, and it reloads the sync channel on every write, so letting
     /// it apply and persist would race the main window's own state.kdl.
     pub(crate) fn apply_display_settings(&mut self, d: &DisplaySettings) {
-        if self.is_detached_network || self.detached_pane.is_some() {
+        if self.detached.is_detached_network || self.detached.detached_pane.is_some() {
             return;
         }
         let (v, r) = (&d.viewport, &d.render);
@@ -1063,7 +1046,7 @@ impl State {
         self.view.grid_thickness = v.grid_thickness;
         self.params.params_plate = v.params_plate;
         self.set_node_wire_style(cce_ui::widget::display::WireStyle::parse(&v.node_wire_style));
-        self.circular_network_pane = self.is_detached_network || v.circular_pane;
+        self.circular_network_pane = self.detached.is_detached_network || v.circular_pane;
         self.view.show_point_markers = v.show_point_markers;
         self.view.show_point_numbers = v.show_point_numbers;
         self.view.show_point_normals = v.show_point_normals;
@@ -1196,7 +1179,7 @@ impl State {
     }
 
     pub fn get_col_geometries(&self) -> (f32, f32, f32, f32, f32, f32) {
-        let left_visible = self.show_network && !self.circular_network_pane && !self.is_detached_network && !self.detached_circular_network;
+        let left_visible = self.show_network && !self.circular_network_pane && !self.detached.is_detached_network && !self.detached.detached_circular_network;
         let center_visible = self.show_viewport || self.show_spreadsheet;
         let right_visible = self.show_parameters;
 
@@ -1383,7 +1366,7 @@ impl State {
     /// pass stages the scene by, and `None` where there is no scene to
     /// stage — a detached window, a hidden viewport, a pane of no size.
     pub(crate) fn scene_view(&self) -> Option<((u32, u32, u32, u32), Mat4, Mat4)> {
-        if self.is_detached_network || self.detached_pane.is_some() || !self.show_viewport {
+        if self.detached.is_detached_network || self.detached.detached_pane.is_some() || !self.show_viewport {
             return None;
         }
         let s = self.scale as f32;
@@ -1499,7 +1482,7 @@ impl State {
     pub fn network_overlay(&self) -> bool {
         self.show_network
             && !self.circular_network_pane
-            && !self.is_detached_network
+            && !self.detached.is_detached_network
     }
 
     /// Whether the cursor is over a pane that FLOATS above the network —
@@ -1615,7 +1598,7 @@ impl State {
         if self.over_floating_pane_at(px, py) {
             return true;
         }
-        if !self.show_network || self.is_detached_network {
+        if !self.show_network || self.detached.is_detached_network {
             return false;
         }
         if self.circular_network_pane {
@@ -1920,7 +1903,7 @@ impl State {
         };
         take(SPREADSHEET_IDX);
         take(PLAYBAR_IDX);
-        if self.circular_network_pane && self.show_network && !self.detached_circular_network {
+        if self.circular_network_pane && self.show_network && !self.detached.detached_circular_network {
             let l = &self.circular_network_layout;
             out.push((l.x - l.r, l.y - l.r, 2.0 * l.r, 2.0 * l.r));
         }
@@ -1993,10 +1976,10 @@ impl State {
     }
 
     pub fn clamp_splitters(&mut self) {
-        if self.is_detached_network {
+        if self.detached.is_detached_network {
             return;
         }
-        self.splitter_layout.clamp(self.width, self.detached_circular_network);
+        self.splitter_layout.clamp(self.width, self.detached.detached_circular_network);
     }
 
     /// [`Document::current_dir`]: the level the network editor shows.
@@ -2085,7 +2068,7 @@ impl State {
             return;
         }
         let mut file_to_open = None;
-        if !self.is_detached_network && self.params.param_pane_source == self.param_pane_target() {
+        if !self.detached.is_detached_network && self.params.param_pane_source == self.param_pane_target() {
             if let Some(slot_idx) = self.param_editor_selected() {
                 let updated_params = self.param().node_params();
                 // Live pane state, so a pane toggle only fires the visibility
@@ -2684,7 +2667,7 @@ impl State {
         if self.params.vis_hud.is_some() && self.param_pane_target() != self.params.vis_hud_from {
             self.params.vis_hud = None;
         }
-        if self.params.vis_hud.is_some() && !self.is_detached_network {
+        if self.params.vis_hud.is_some() && !self.detached.is_detached_network {
             let rows = param_display(&self.visualizer_hud_params());
             self.param_mut().set_display_params(&rows);
             self.params.param_pane_source = None;
@@ -2693,7 +2676,7 @@ impl State {
         // Selection reads through the param-editor accessors: whichever
         // network editor took the last node click feeds the pane, at ITS
         // level — no matter the tab.
-        let params = if !self.is_detached_network {
+        let params = if !self.detached.is_detached_network {
             if let Some(slot_idx) = self.param_editor_selected() {
                 let dir = self.param_editor_dir();
                 if slot_idx < dir.children.len() {
@@ -2710,7 +2693,7 @@ impl State {
         let params = self.add_pick_lists(params);
         let params = self.present_float2_rows(params);
         self.param_mut().set_display_params(&params);
-        self.params.param_pane_source = if self.is_detached_network { None } else { self.param_pane_target() };
+        self.params.param_pane_source = if self.detached.is_detached_network { None } else { self.param_pane_target() };
     }
 
     /// The shown node's `float2` rows over the span each already has:
@@ -2721,7 +2704,7 @@ impl State {
     /// ([`value_row_span`]), kept per parameter.
     fn present_float2_rows(&mut self, mut params: Vec<(String, String, String)>) -> Vec<(String, String, String)> {
         let rows: Vec<(String, String, [f32; 2])> = {
-            if self.is_detached_network {
+            if self.detached.is_detached_network {
                 return params;
             }
             let Some(slot) = self.param_editor_selected() else { return params };
@@ -2797,7 +2780,7 @@ impl State {
         // there is one, by name otherwise — so the kind is looked up the
         // same way the pane's write-back resolves a row.
         let (node_id, kinds, value_row) = {
-            if self.is_detached_network {
+            if self.detached.is_detached_network {
                 return params;
             }
             let Some(slot) = self.param_editor_selected() else { return params };
@@ -3426,7 +3409,7 @@ impl State {
     /// resolved back, as the write-back resolves it. None off a row, off the
     /// pane, or on a section header.
     pub fn param_row_at(&self, x: f32, y: f32) -> Option<(usize, String)> {
-        if !self.show_parameters || self.is_detached_network {
+        if !self.show_parameters || self.detached.is_detached_network {
             return None;
         }
         // A row under a plate is the plate's, not the HUD's.
@@ -4835,7 +4818,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         // The spreadsheet (and the group markers with it) read the network
         // editor's selection, as the parameters pane does.
         let mut selected_node = None;
-        if !self.is_detached_network {
+        if !self.detached.is_detached_network {
             if let Some(slot_idx) = self.param_editor_selected() {
                 let dir = self.param_editor_dir();
                 if slot_idx < dir.children.len() {
@@ -4973,7 +4956,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     /// step feedback a node inside a simnet needs is a cache hit instead of
     /// a solve from the seed on every frame of playback.
     pub(crate) fn sync_pull_arrows(&mut self) {
-        let node = if self.is_detached_network {
+        let node = if self.detached.is_detached_network {
             None
         } else {
             self.param_editor_selected()
@@ -5568,18 +5551,20 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             last_config_read: Instant::now(),
             circular_network_pane: is_detached_network || settings.viewport.circular_pane,
             circular_network_layout: crate::panes::CircularPaneLayout::new(250.0, 300.0, 180.0),
-            is_detached_network,
-            detached_circular_network: false,
-            detached_pane: None,
-            detached_panes: [false; WIDGET_COUNT],
-            detached_children: std::collections::HashMap::new(),
-            last_project_mod_time: {
-                let default_proj_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("default_project.json");
-                std::fs::metadata(&default_proj_path).and_then(|m| m.modified()).ok()
+            detached: DetachedWindows {
+                is_detached_network,
+                detached_circular_network: false,
+                detached_pane: None,
+                detached_panes: [false; WIDGET_COUNT],
+                detached_children: std::collections::HashMap::new(),
+                last_project_mod_time: {
+                    let default_proj_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("default_project.json");
+                    std::fs::metadata(&default_proj_path).and_then(|m| m.modified()).ok()
+                },
+                last_project_check: std::time::Instant::now(),
+                needs_autosave: false,
+                last_autosave_time: std::time::Instant::now(),
             },
-            last_project_check: std::time::Instant::now(),
-            needs_autosave: false,
-            last_autosave_time: std::time::Instant::now(),
             last_design_mod_time: {
                 let design_path = DesignSettings::file_path();
                 std::fs::metadata(&design_path).and_then(|m| m.modified()).ok()
@@ -5664,7 +5649,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         let so = state.viewport().show_origin;
         let cp = state.viewport().show_camera_pivot;
         let cnp = state.circular_network_pane;
-        let dcn = state.detached_circular_network;
+        let dcn = state.detached.detached_circular_network;
         let sn = state.show_network;
         let sv = state.show_viewport;
         let sp = state.show_parameters;
@@ -5703,7 +5688,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         let body_h = self.body_h();
 
 
-        if self.is_detached_network {
+        if self.detached.is_detached_network {
             let cx = self.width / 2.0;
             let cy = self.height / 2.0;
             let r = (self.width.min(self.height) / 2.0 - 10.0).max(50.0);
@@ -5752,7 +5737,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             self.ui_context[self.slots.param_menubar].set_visible(false);
             self.ui_context[self.slots.spreadsheet].set_visible(false);
             self.ui_context[self.slots.spreadsheet_menubar].set_visible(false);
-        } else if self.detached_circular_network {
+        } else if self.detached.detached_circular_network {
             // Parent process: Network pane is detached (hidden from main window)
             let pb_h = if self.show_playbar { PLAYBAR_H } else { 0.0 };
             let body_h = body_h - pb_h;
@@ -6072,7 +6057,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             }
         }
 
-        if !self.is_detached_network {
+        if !self.detached.is_detached_network {
             let mut active_menubar = self.focused_pane;
             if active_menubar == LEFT_MENUBAR_IDX && !self.show_network {
                 active_menubar = HEADER_IDX;
@@ -6109,10 +6094,10 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         // The params HUD stops above the spreadsheet and the playbar as
         // they finally stand — a collapse or a detach above moved them —
         // in the floating layout that lays it out from the viewport.
-        if !self.is_detached_network
-            && !self.detached_circular_network
+        if !self.detached.is_detached_network
+            && !self.detached.detached_circular_network
             && !self.circular_network_pane
-            && self.detached_pane.is_none()
+            && self.detached.detached_pane.is_none()
             && self.show_parameters
             && !self.pane_is_stubbed(PARAM_IDX)
         {
@@ -6174,7 +6159,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     }
 
     pub fn sync_layout(&mut self) {
-        let left_visible = self.show_network && !self.circular_network_pane && !self.is_detached_network && !self.detached_circular_network;
+        let left_visible = self.show_network && !self.circular_network_pane && !self.detached.is_detached_network && !self.detached.detached_circular_network;
         let center_visible = self.show_viewport || self.show_spreadsheet;
         let right_visible = self.show_parameters;
 
@@ -6477,23 +6462,23 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                     eprintln!("Failed to save default project before detaching: {:?}", e);
                 }
 
-                self.detached_circular_network = !self.detached_circular_network;
-                let val = self.detached_circular_network;
+                self.detached.detached_circular_network = !self.detached.detached_circular_network;
+                let val = self.detached.detached_circular_network;
                 self.menu_mut(LEFT_MENUBAR_IDX).set_item_checked(2, 3, val);
                 self.menu_mut(HEADER_IDX).set_item_checked(2, 3, val);
 
-                if self.detached_circular_network {
+                if self.detached.detached_circular_network {
                     match std::process::Command::new(std::env::current_exe().unwrap())
                         .arg("--detached-network")
                         .spawn()
                     {
                         Ok(child) => {
-                            self.detached_children.insert(NETWORK_PANEL_IDX, child);
+                            self.detached.detached_children.insert(NETWORK_PANEL_IDX, child);
                         }
                         Err(e) => eprintln!("Failed to spawn detached network: {e:?}"),
                     }
                 } else {
-                    self.detached_children.remove(&NETWORK_PANEL_IDX);
+                    self.detached.detached_children.remove(&NETWORK_PANEL_IDX);
                 }
 
                 self.rebuild_positions();
@@ -7166,10 +7151,10 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     /// playbar detached neither window ever wrote the channel again after
     /// the detach, and the detached window showed what it started with.
     pub fn syncing_windows(&self) -> bool {
-        self.is_detached_network
-            || self.detached_circular_network
-            || self.detached_pane.is_some()
-            || self.detached_panes.iter().any(|d| *d)
+        self.detached.is_detached_network
+            || self.detached.detached_circular_network
+            || self.detached.detached_pane.is_some()
+            || self.detached.detached_panes.iter().any(|d| *d)
     }
 
     /// [`Self::sync_trackball_view`] from the camera this window knows
@@ -7182,8 +7167,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     pub fn sync_trackball_view_from_camera(&mut self) -> bool {
         let (position, rotation, pivot) = self.active_camera_pose();
         let moved = self.sync_trackball_view(position, rotation, pivot);
-        if moved && self.syncing_windows() && !self.is_detached_network && self.detached_pane.is_none() {
-            self.needs_autosave = true;
+        if moved && self.syncing_windows() && !self.detached.is_detached_network && self.detached.detached_pane.is_none() {
+            self.detached.needs_autosave = true;
         }
         moved
     }
@@ -7228,7 +7213,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         let mut trackball_moved = false;
         // A detached pane has no 3D canvas to resolve a camera for, but the
         // sync channel gave it the main window's: see the balls from that.
-        if self.detached_pane.is_some() {
+        if self.detached.detached_pane.is_some() {
             trackball_moved = self.sync_trackball_view_from_camera();
         }
 
@@ -7237,7 +7222,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         // previous backdrop (the renderer's equivalent of the old cached pass).
         // A detached pane's window has no 3D canvas: the scene would stage
         // behind the pane and show through its translucent plate.
-        if !self.is_detached_network && self.detached_pane.is_none() && self.show_viewport {
+        if !self.detached.is_detached_network && self.detached.detached_pane.is_none() && self.show_viewport {
             let cx_logical = 0.0;
             let cy_logical = HEADER_H;
             let cw_logical = self.width;
@@ -7494,7 +7479,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 self.stage.last_viewport.show_viewport = false;
                 self.viewport_dirty = false;
             }
-        } else if !self.is_detached_network && self.viewport_dirty {
+        } else if !self.detached.is_detached_network && self.viewport_dirty {
             // Viewport hidden: clear the backdrop (the old path's clear pass),
             // and force a re-stage when it comes back.
             renderer
@@ -7507,8 +7492,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         // tracer is still refining, and for the one that shows a trackball
         // its new view.
         trackball_moved
-            || (!self.is_detached_network
-                && self.detached_pane.is_none()
+            || (!self.detached.is_detached_network
+                && self.detached.detached_pane.is_none()
                 && self.show_viewport
                 && self.viewport().rt_mode
                 && renderer.rt_accumulating())

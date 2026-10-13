@@ -877,7 +877,7 @@ impl State {
     }
 
     fn append_context_border(&self, pc: &mut PaintCtx) {
-        if self.is_detached_network {
+        if self.detached.is_detached_network {
             return;
         }
         // Plated panes mark focus through their bevel's specular tint
@@ -891,7 +891,7 @@ impl State {
 
         let (x, y, w, h) = match self.focused_pane {
             LEFT_MENUBAR_IDX => {
-                if !self.show_network || self.detached_circular_network {
+                if !self.show_network || self.detached.detached_circular_network {
                     return;
                 }
                 if self.circular_network_pane {

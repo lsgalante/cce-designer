@@ -94,33 +94,33 @@ impl State {
             return false;
         }
 
-        if self.needs_autosave {
+        if self.detached.needs_autosave {
             let now = Instant::now();
-            if now.duration_since(self.last_autosave_time) >= Duration::from_millis(200) {
-                self.needs_autosave = false;
-                self.last_autosave_time = now;
+            if now.duration_since(self.detached.last_autosave_time) >= Duration::from_millis(200) {
+                self.detached.needs_autosave = false;
+                self.detached.last_autosave_time = now;
                 let path = Self::default_project_path();
                 if let Err(e) = self.save_to_file(&path) {
                     eprintln!("Failed to auto-save default project: {:?}", e);
                 } else if let Ok(m) = std::fs::metadata(&path) {
                     if let Ok(mod_time) = m.modified() {
-                        self.last_project_mod_time = Some(mod_time);
+                        self.detached.last_project_mod_time = Some(mod_time);
                     }
                 }
             }
         }
 
         let now = Instant::now();
-        if now.duration_since(self.last_project_check) >= Duration::from_millis(100) {
-            self.last_project_check = now;
+        if now.duration_since(self.detached.last_project_check) >= Duration::from_millis(100) {
+            self.detached.last_project_check = now;
             let path = Self::default_project_path();
             if let Ok(m) = std::fs::metadata(&path) {
                 if let Ok(mod_time) = m.modified() {
-                    if Some(mod_time) != self.last_project_mod_time {
-                        self.last_project_mod_time = Some(mod_time);
+                    if Some(mod_time) != self.detached.last_project_mod_time {
+                        self.detached.last_project_mod_time = Some(mod_time);
                         // The main window keeps its own view: what changed
                         // on disk was a detached window's edit to the tree.
-                        let keep_own_view = !self.is_detached_network && self.detached_pane.is_none();
+                        let keep_own_view = !self.detached.is_detached_network && self.detached.detached_pane.is_none();
                         if let Err(e) = self.load_sync_channel(&path, keep_own_view) {
                             eprintln!("Failed to auto-reload project: {:?}", e);
                         } else {
@@ -134,7 +134,7 @@ impl State {
     }
 
     pub(crate) fn autosave_on_exit(&mut self) {
-        if self.needs_autosave && self.syncing_windows() {
+        if self.detached.needs_autosave && self.syncing_windows() {
             let _ = self.save_to_file(&Self::default_project_path());
         }
     }
@@ -161,7 +161,7 @@ impl Application for State {
         if let Some(idx) = detached_pane {
             // Set after construction, so the layout that `State::new` already
             // ran has to be redone against the detached shape.
-            state.detached_pane = Some(idx);
+            state.detached.detached_pane = Some(idx);
             state.rebuild_positions();
             state.apply_layout();
             // The main window wrote the channel just before it started this
@@ -182,9 +182,9 @@ impl Application for State {
     }
 
     fn settings(&self) -> WindowSettings {
-        let (app_id, min_size) = if self.is_detached_network {
+        let (app_id, min_size) = if self.detached.is_detached_network {
             ("circular-network-pane", (200, 200))
-        } else if let Some(idx) = self.detached_pane {
+        } else if let Some(idx) = self.detached.detached_pane {
             (crate::plate_menu::pane_app_id(idx), (240, 160))
         } else {
             ("cce-designer", (480, 320))
@@ -219,10 +219,10 @@ impl Application for State {
     /// pane's edits — nothing the runner can be woken by — so while a pane is
     /// detached the loop may not sleep past this between ticks.
     fn idle_poll_interval(&self) -> Option<std::time::Duration> {
-        let syncing = self.is_detached_network
-            || self.detached_circular_network
-            || self.detached_pane.is_some()
-            || self.detached_panes.iter().any(|d| *d);
+        let syncing = self.detached.is_detached_network
+            || self.detached.detached_circular_network
+            || self.detached.detached_pane.is_some()
+            || self.detached.detached_panes.iter().any(|d| *d);
         syncing.then(|| std::time::Duration::from_millis(250))
     }
 
@@ -278,7 +278,7 @@ impl Application for State {
         self.sync_modifiers_from_ctx();
         self.cursor_x = pos.x;
         self.cursor_y = pos.y;
-        if self.is_detached_network && button == MouseButton::Left {
+        if self.detached.is_detached_network && button == MouseButton::Left {
             match state {
                 ElementState::Pressed => {
                     if let Some(action) = self.circular_chrome_at(pos.x, pos.y) {
@@ -325,7 +325,7 @@ impl Application for State {
         self.cursor_y = pos.y;
         // 1:1 camera zoom over the 3D viewport; anywhere else falls back to
         // the engine's ctrl+wheel synthesis (which is what zooms the graph).
-        if self.is_detached_network || !self.cursor_in_viewport() {
+        if self.detached.is_detached_network || !self.cursor_in_viewport() {
             return false;
         }
         self.viewport_mut().pinch_zoom(factor);
@@ -393,7 +393,7 @@ impl Application for State {
     }
 
     fn cursor_icon(&self, x: f32, y: f32) -> Option<CursorIcon> {
-        if !self.is_detached_network {
+        if !self.detached.is_detached_network {
             // Main window: resize cursor over the pane edge-resize hotspots and
             // for the duration of a pane-edge drag; `None` elsewhere so the
             // engine's standard CSD edge cursors still apply.
@@ -423,7 +423,7 @@ impl Application for State {
 impl cce_ui::engine::Csd for State {
     fn standard_csd(&self) -> bool {
         // The detached window's chrome is the circle, not the rect.
-        !self.is_detached_network
+        !self.detached.is_detached_network
     }
 
     fn take_window_action(&mut self) -> Option<WindowAction> {

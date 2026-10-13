@@ -554,7 +554,7 @@ impl State {
         }
         self.rebase_structure();
         if self.syncing_windows() {
-            self.needs_autosave = true;
+            self.detached.needs_autosave = true;
         }
         true
     }

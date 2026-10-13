@@ -2201,7 +2201,7 @@ impl State {
             "toggle_square_viewport" => self.view.square_viewport,
             "toggle_params_plate" => self.params.params_plate,
             "toggle_circular_pane" => self.circular_network_pane,
-            "detach_circular_window" => self.detached_circular_network,
+            "detach_circular_window" => self.detached.detached_circular_network,
             "toggle_spreadsheet" => self.show_spreadsheet,
             "show_network_pane" => self.show_network,
             "show_viewport_pane" => self.show_viewport,

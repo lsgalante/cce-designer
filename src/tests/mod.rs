@@ -421,7 +421,7 @@ fn test_detached_pane_claims_its_window_and_leaves_the_parent() {
 
     // Child: the detached window.
     let mut child = State::new(false);
-    child.detached_pane = Some(PARAM_IDX);
+    child.detached.detached_pane = Some(PARAM_IDX);
     child.resize(600.0, 400.0, 1.0);
     for i in 0..WIDGET_COUNT {
         let visible = child.slots.get_dyn(&child.ui_context, i).visible();
@@ -440,7 +440,7 @@ fn test_detached_pane_claims_its_window_and_leaves_the_parent() {
     assert!(parent.slots.get_dyn(&parent.ui_context, PARAM_IDX).visible(), "params starts in the parent");
     let (_, _, _, full_h) = parent.slots.get_dyn(&parent.ui_context, PARAM_IDX).rect();
 
-    parent.detached_panes[PARAM_IDX] = true;
+    parent.detached.detached_panes[PARAM_IDX] = true;
     parent.rebuild_positions();
     parent.apply_layout();
 

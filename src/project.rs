@@ -34,7 +34,7 @@ impl State {
 
 
     pub(crate) fn update_window_title(&mut self) {
-        let base_title = if self.is_detached_network {
+        let base_title = if self.detached.is_detached_network {
             "Network Pane"
         } else {
             "Designer"
@@ -216,11 +216,11 @@ impl State {
         // only: a detached pane window writing the sync channel would stamp
         // its single-pane layout into the file, and the main window's next
         // reload would apply it (the load side is gated the same way).
-        if !self.is_detached_network && self.detached_pane.is_none() {
+        if !self.detached.is_detached_network && self.detached.detached_pane.is_none() {
             self.migrate_meta_settings_node();
         }
         if path.file_name().map_or(false, |n| n == "default_project.json") {
-            let view_state = if self.is_detached_network || self.detached_pane.is_some() {
+            let view_state = if self.detached.is_detached_network || self.detached.detached_pane.is_some() {
                 self.detached_view_state(path)
             } else {
                 self.project_view_state()
@@ -276,7 +276,7 @@ impl State {
     /// detached windows own their single-pane layout, and the sync channel
     /// must not re-shape them.
     fn apply_pane_state_from_project(&mut self, vs: &ProjectViewState) {
-        if self.is_detached_network || self.detached_pane.is_some() {
+        if self.detached.is_detached_network || self.detached.detached_pane.is_some() {
             return;
         }
         // Absent (an older save, or one written before pane state moved off
@@ -717,7 +717,7 @@ impl State {
         // The pane layout an old save carried on its `view` subnet, in the
         // shape `apply_pane_state_from_project` now reads.
         let view = params("view");
-        if !view.is_empty() && !(self.is_detached_network || self.detached_pane.is_some()) {
+        if !view.is_empty() && !(self.detached.is_detached_network || self.detached.detached_pane.is_some()) {
             for (name, get, action) in Self::PANE_FLAGS {
                 let Some(p) = view
                     .iter()

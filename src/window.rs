@@ -178,7 +178,7 @@ impl State {
                 // Once a frame, not once an event: see `title_dirty`.
                 state.title_dirty = true;
                 if state.syncing_windows() {
-                    state.needs_autosave = true;
+                    state.detached.needs_autosave = true;
                 }
                 result = true;
             }
@@ -213,7 +213,7 @@ impl State {
         if needs_redraw {
             self.update_window_title();
             if self.syncing_windows() {
-                self.needs_autosave = true;
+                self.detached.needs_autosave = true;
             }
         }
         needs_redraw

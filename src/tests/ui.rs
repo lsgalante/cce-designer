@@ -292,7 +292,7 @@ fn test_reattach_brings_a_detached_pane_back() {
     state.resize(1600.0, 900.0, 1.0);
     let (_, _, _, full_h) = state.slots.get_dyn(&state.ui_context, PARAM_IDX).rect();
 
-    state.detached_panes[PARAM_IDX] = true;
+    state.detached.detached_panes[PARAM_IDX] = true;
     state.rebuild_positions();
     state.apply_layout();
 
@@ -322,8 +322,8 @@ fn test_parent_reclaims_a_pane_whose_window_exited() {
     // `kill(pid, 0)` probe calls a zombie alive and never reclaims the pane
     // — this test only bites if the poll reaps for itself.
     let child = std::process::Command::new("true").spawn().expect("spawn a short-lived child");
-    state.detached_children.insert(SPREADSHEET_IDX, child);
-    state.detached_panes[SPREADSHEET_IDX] = true;
+    state.detached.detached_children.insert(SPREADSHEET_IDX, child);
+    state.detached.detached_panes[SPREADSHEET_IDX] = true;
     state.rebuild_positions();
     state.apply_layout();
     assert!(state.pane_is_detached(SPREADSHEET_IDX));
@@ -338,7 +338,7 @@ fn test_parent_reclaims_a_pane_whose_window_exited() {
     }
     assert!(reclaimed, "poll never noticed the exited child");
     assert!(!state.pane_is_detached(SPREADSHEET_IDX), "pane stayed detached after its window exited");
-    assert!(!state.detached_children.contains_key(&SPREADSHEET_IDX), "stale child handle kept");
+    assert!(!state.detached.detached_children.contains_key(&SPREADSHEET_IDX), "stale child handle kept");
 }
 
 /// Detach must not be offered where it cannot work: twice for one pane, or
@@ -350,12 +350,12 @@ fn test_detach_is_only_offered_where_it_works() {
     state.resize(1600.0, 900.0, 1.0);
     assert!(state.plate_can_detach(PARAM_IDX), "params should be detachable");
 
-    state.detached_panes[PARAM_IDX] = true;
+    state.detached.detached_panes[PARAM_IDX] = true;
     assert!(!state.plate_can_detach(PARAM_IDX), "params offered detach twice");
     assert!(state.plate_can_detach(SPREADSHEET_IDX), "one detach blocked the others");
 
     let mut child = State::new(false);
-    child.detached_pane = Some(PARAM_IDX);
+    child.detached.detached_pane = Some(PARAM_IDX);
     child.resize(600.0, 400.0, 1.0);
     assert!(!child.plate_can_detach(PARAM_IDX), "a detached window offered to detach again");
 }
@@ -982,7 +982,7 @@ fn a_detached_windows_save_does_not_reset_the_main_layout() {
     main.rebuild_positions();
 
     let mut child = State::new(false);
-    child.detached_pane = Some(crate::slots::PARAM_IDX);
+    child.detached.detached_pane = Some(crate::slots::PARAM_IDX);
     child.resize(400.0, 300.0, 1.0);
     child.rebuild_positions();
     child.doc.fs_root.children[0].name = "synced_edit".to_string();
@@ -1019,7 +1019,7 @@ fn a_detached_window_leaves_the_channels_layout_alone() {
     main.save_to_file(&channel).expect("main writes the channel");
 
     let mut child = State::new(false);
-    child.detached_pane = Some(crate::slots::PARAM_IDX);
+    child.detached.detached_pane = Some(crate::slots::PARAM_IDX);
     child.resize(400.0, 300.0, 1.0);
     child.rebuild_positions();
     child.doc.fs_root.children[0].name = "synced_edit".to_string();
@@ -2679,7 +2679,7 @@ fn the_dialog_plate_is_the_menu_plate() {
     let r = cce_ui::layout::menu_corner_radius();
     let rect = cce_ui::scene::layout::Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 };
     assert_eq!(dialog.corner_style(rect).map(|(r, _)| r), (r > 0.0).then_some(r));
-    for file in ["src/dialog.rs", "src/render.rs", "src/app.rs", "src/app/input.rs", "src/app/document.rs", "src/app/network.rs", "src/app/camera.rs", "src/app/view.rs", "src/app/scene.rs", "src/app/stage.rs", "src/app/markers.rs", "src/app/params.rs", "src/app/sheet.rs", "src/app/menus.rs"] {
+    for file in ["src/dialog.rs", "src/render.rs", "src/app.rs", "src/app/input.rs", "src/app/document.rs", "src/app/network.rs", "src/app/camera.rs", "src/app/view.rs", "src/app/scene.rs", "src/app/stage.rs", "src/app/markers.rs", "src/app/params.rs", "src/app/sheet.rs", "src/app/menus.rs", "src/app/detached.rs"] {
         let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(file)).unwrap();
         assert!(!src.contains("dialog/compression") && !src.contains("DIALOG_COMPRESSION"), "{file} overrides the menu material");
     }
