@@ -870,6 +870,25 @@ fn dialog_settings_write_reaches_the_owning_subnet() {
     assert!((state.grid_thickness - 0.04).abs() < 1e-6, "a param edit reverted the thickness");
 }
 
+/// A Grid Color edit re-bakes the grid mesh in the new colour.
+///
+/// The colour had two copies, one on `State` and one on the viewport
+/// widget: the row wrote the viewport's and the mesh was baked from
+/// `State`'s, so an edit was saved and never seen until a project load
+/// set both.
+#[test]
+fn a_grid_color_edit_reaches_the_grid_mesh() {
+    let mut state = State::new(false);
+    state.run_command("toggle_dialog");
+    state.pending_grid = None;
+    state.apply_setting("Grid Color", "#ff0000");
+    assert_eq!(state.viewport().grid_color, [1.0, 0.0, 0.0], "the row wrote the live colour");
+    let want = cce_ui::color::to_linear_rgb([1.0, 0.0, 0.0]);
+    let grid = state.pending_grid.as_ref().expect("the grid re-baked");
+    assert!(!grid.is_empty());
+    assert!(grid.iter().all(|v| v.color == want), "the grid is baked in the edited colour");
+}
+
 /// The recent projects are rows of the Commands list.
 ///
 /// The list was the Main utility node's "Open" dropdown and went with

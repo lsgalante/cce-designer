@@ -787,7 +787,6 @@ pub struct State {
     pub window_action: Option<cce_ui::engine::WindowAction>,
     pub vertex_count_spheres: u32,
     pub node_color: [f32; 4],
-    pub grid_color: [f32; 3],
     pub origin_size: f32,
     pub camera_pivot_size: f32,
 
@@ -1597,7 +1596,6 @@ impl State {
             vp.grid_color = v.grid_color;
             vp.rt_mode = v.rt_mode;
         }
-        self.grid_color = v.grid_color;
         self.square_viewport = v.square;
         self.camera_pivot_size = v.camera_pivot_size;
         self.origin_size = v.origin_size;
@@ -1660,7 +1658,7 @@ impl State {
     // and flush to the GPU meshes in `stage_renderer`.
 
     pub fn update_grid_geometry(&mut self) {
-        let linear_grid_color = cce_ui::color::to_linear_rgb(self.grid_color);
+        let linear_grid_color = cce_ui::color::to_linear_rgb(self.viewport().grid_color);
         self.pending_grid = Some(grid_vertices(self.grid_thickness, linear_grid_color));
         self.viewport_dirty = true;
     }
@@ -6149,7 +6147,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             window_action: None,
             vertex_count_spheres: 0,
             node_color: cce_ui::color::graph_node_color(),
-            grid_color: settings.viewport.grid_color,
             origin_size: settings.viewport.origin_size,
             camera_pivot_size: settings.viewport.camera_pivot_size,
             fs_root: fs_root.clone(),
@@ -10277,7 +10274,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     }
 
     pub fn init_renderer(&mut self, renderer: &mut cce_ui::vk::VkRenderer) {
-        let linear_grid_color = cce_ui::color::to_linear_rgb(self.grid_color);
+        let linear_grid_color = cce_ui::color::to_linear_rgb(self.viewport().grid_color);
         let grid_verts = grid_vertices(self.grid_thickness, linear_grid_color);
         let origin_verts = origin_vectors_vertices(self.origin_size);
         let pivot_verts = camera_pivot_vertices(self.camera_pivot_size);
