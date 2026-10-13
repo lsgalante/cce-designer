@@ -1804,8 +1804,8 @@ fn stepping_the_cursor_does_not_rewire_the_nodes_it_lands_on() {
             .unwrap();
     }
     s.focused_pane = LEFT_MENUBAR_IDX;
-    s.grid_cursor_col = 13;
-    s.grid_cursor_row = 7;
+    s.net.grid_cursor_col = 13;
+    s.net.grid_cursor_row = 7;
     s.sync_cursor_and_selection();
     s.sync_parameters_pane();
     let before = params(&s);
@@ -1813,7 +1813,7 @@ fn stepping_the_cursor_does_not_rewire_the_nodes_it_lands_on() {
     for row in [6, 5] {
         s.process_window_event(WindowEvent::KeyboardInput { event: key(cce_ui::widget::ElementState::Pressed) });
         s.process_window_event(WindowEvent::KeyboardInput { event: key(cce_ui::widget::ElementState::Released) });
-        assert_eq!(s.grid_cursor_row, row, "the step has to have happened, or the check is vacuous");
+        assert_eq!(s.net.grid_cursor_row, row, "the step has to have happened, or the check is vacuous");
     }
     assert_eq!(s.graph().selected_node(), Some(base + 1), "the cursor landed on the relax");
     assert_eq!(params(&s), before, "no node's parameters may change from walking over it");
@@ -1847,8 +1847,8 @@ fn test_the_network_navigation_families() {
     assert_eq!(state.current_dir().children[slot].position, (3.0, 2.0));
 
     state.focused_pane = LEFT_MENUBAR_IDX;
-    state.grid_cursor_col = 3;
-    state.grid_cursor_row = 2;
+    state.net.grid_cursor_col = 3;
+    state.net.grid_cursor_row = 2;
     state.sync_cursor_and_selection();
     assert_eq!(state.graph().selected_node(), Some(slot), "the cursor should select what it sits on");
 
@@ -1858,7 +1858,7 @@ fn test_the_network_navigation_families() {
     // correctly, which is exactly why the empty cell has to be chosen
     // deliberately rather than assumed.
     assert!(state.run_command("nav_up"));
-    assert_eq!((state.grid_cursor_col, state.grid_cursor_row), (3, 1));
+    assert_eq!((state.net.grid_cursor_col, state.net.grid_cursor_row), (3, 1));
     assert_eq!(state.graph().selected_node(), None, "the cursor left the node");
     assert!(state.run_command("nav_down"));
     assert_eq!(state.graph().selected_node(), Some(slot), "and came back to it");
@@ -1878,17 +1878,17 @@ fn test_the_network_navigation_families() {
     // than leaving it behind on the first press.
     assert!(state.run_command("move_down"));
     assert_eq!(state.current_dir().children[slot].position, (3.0, 3.0));
-    assert_eq!((state.grid_cursor_col, state.grid_cursor_row), (3, 3));
+    assert_eq!((state.net.grid_cursor_col, state.net.grid_cursor_row), (3, 3));
     assert_eq!(state.graph().selected_node(), Some(slot), "the node should still be selected");
     assert!(state.run_command("move_down"));
     assert_eq!(state.current_dir().children[slot].position, (3.0, 4.0));
 
     // Ctrl pans the view: the cursor, the selection and the node all stay.
-    let before = (state.pan_x, state.pan_y);
-    let cursor = (state.grid_cursor_col, state.grid_cursor_row);
+    let before = (state.net.pan_x, state.net.pan_y);
+    let cursor = (state.net.grid_cursor_col, state.net.grid_cursor_row);
     assert!(state.run_command("view_right"));
-    assert_ne!((state.pan_x, state.pan_y), before, "the view did not pan");
-    assert_eq!((state.grid_cursor_col, state.grid_cursor_row), cursor);
+    assert_ne!((state.net.pan_x, state.net.pan_y), before, "the view did not pan");
+    assert_eq!((state.net.grid_cursor_col, state.net.grid_cursor_row), cursor);
     assert_eq!(state.current_dir().children[slot].position, (3.0, 4.0));
     assert_eq!(state.graph().selected_node(), Some(slot));
 
@@ -1896,8 +1896,8 @@ fn test_the_network_navigation_families() {
     // into view when it has gone off an edge — which would make the
     // command do nothing in the case you actually press it in.
     state.positions[crate::slots::CONTENT_IDX] = (0.0, 0.0, 800.0, 600.0);
-    state.grid_cursor_col = 9;
-    state.grid_cursor_row = 7;
+    state.net.grid_cursor_col = 9;
+    state.net.grid_cursor_row = 7;
     assert!(state.run_command("frame_cursor"));
     // The cell's centre IS its lattice intersection. Pane-relative,
     // because the command's rebuild_positions puts the real pane origin
@@ -1918,15 +1918,15 @@ fn test_the_network_navigation_families() {
     // the commands run and do nothing, rather than moving a cursor nobody
     // can see.
     state.focused_pane = RIGHT_MENUBAR_IDX;
-    let cursor = (state.grid_cursor_col, state.grid_cursor_row);
+    let cursor = (state.net.grid_cursor_col, state.net.grid_cursor_row);
     let pos = state.current_dir().children[slot].position;
-    let pan = (state.pan_x, state.pan_y);
+    let pan = (state.net.pan_x, state.net.pan_y);
     for id in ["nav_left", "nav_right", "nav_up", "nav_down", "move_left", "view_left", "frame_cursor"] {
         assert!(state.run_command(id), "{id} should be a known command");
     }
-    assert_eq!((state.grid_cursor_col, state.grid_cursor_row), cursor, "the cursor moved from another pane");
+    assert_eq!((state.net.grid_cursor_col, state.net.grid_cursor_row), cursor, "the cursor moved from another pane");
     assert_eq!(state.current_dir().children[slot].position, pos, "a node moved from another pane");
-    assert_eq!((state.pan_x, state.pan_y), pan, "the view panned from another pane");
+    assert_eq!((state.net.pan_x, state.net.pan_y), pan, "the view panned from another pane");
 }
 
 /// The navigation scheme is the plugin's, and the registry says so: hjkl
@@ -2288,7 +2288,7 @@ fn the_suite_runs_on_a_lattice_of_its_own() {
 
     let state = State::new(false);
     assert_eq!(
-        (state.grid.pitch_x, state.grid.pitch_y, state.grid.node_w, state.grid.node_h),
+        (state.net.grid.pitch_x, state.net.grid.pitch_y, state.net.grid.node_w, state.net.grid.node_h),
         (140.0, 70.0, 80.0, 40.0),
         "State::new did not start on the pinned lattice"
     );
@@ -2441,8 +2441,8 @@ fn test_deselect_sticks_until_the_cursor_moves() {
     let slot = state.current_dir().children.len() - 1;
 
     state.focused_pane = LEFT_MENUBAR_IDX;
-    state.grid_cursor_col = 6;
-    state.grid_cursor_row = 6;
+    state.net.grid_cursor_col = 6;
+    state.net.grid_cursor_row = 6;
     state.sync_cursor_and_selection();
     assert_eq!(state.graph().selected_node(), Some(slot));
 

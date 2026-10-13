@@ -128,7 +128,7 @@ impl State {
         };
         ProjectViewState {
             active_camera: self.active_camera.clone(),
-            pan: (self.pan_x, self.pan_y),
+            pan: (self.net.pan_x, self.net.pan_y),
             current_path: self.doc.current_path.clone(),
             selected_node: self.graph().selected_node(),
             visible_panes: Some(
@@ -365,12 +365,12 @@ impl State {
             self.apply_pane_state_from_project(&proj.view_state);
         }
         self.set_active_camera(proj.view_state.active_camera);
-        self.pan_x = proj.view_state.pan.0;
-        self.pan_y = proj.view_state.pan.1;
-        self.pan_velocity_x = 0.0;
-        self.pan_velocity_y = 0.0;
-        self.last_frame_pan_x = self.pan_x;
-        self.last_frame_pan_y = self.pan_y;
+        self.net.pan_x = proj.view_state.pan.0;
+        self.net.pan_y = proj.view_state.pan.1;
+        self.net.pan_velocity_x = 0.0;
+        self.net.pan_velocity_y = 0.0;
+        self.net.last_frame_pan_x = self.net.pan_x;
+        self.net.last_frame_pan_y = self.net.pan_y;
         self.doc.current_path = proj.view_state.current_path;
         if !keep_own_view {
             self.apply_default_view_from_project(proj.view_state.default_view);
@@ -443,12 +443,12 @@ impl State {
         }
         self.apply_pane_state_from_project(&proj.view_state);
         self.set_active_camera(proj.view_state.active_camera);
-        self.pan_x = proj.view_state.pan.0;
-        self.pan_y = proj.view_state.pan.1;
-        self.pan_velocity_x = 0.0;
-        self.pan_velocity_y = 0.0;
-        self.last_frame_pan_x = self.pan_x;
-        self.last_frame_pan_y = self.pan_y;
+        self.net.pan_x = proj.view_state.pan.0;
+        self.net.pan_y = proj.view_state.pan.1;
+        self.net.pan_velocity_x = 0.0;
+        self.net.pan_velocity_y = 0.0;
+        self.net.last_frame_pan_x = self.net.pan_x;
+        self.net.last_frame_pan_y = self.net.pan_y;
         self.doc.current_path = proj.view_state.current_path;
         self.apply_default_view_from_project(proj.view_state.default_view);
 
@@ -564,15 +564,15 @@ impl State {
         self.doc.structure_base = None;
         self.migrate_meta_settings_node();
         self.set_active_camera("Default Camera");
-        self.pan_x = 0.0;
-        self.pan_y = 0.0;
-        self.pan_velocity_x = 0.0;
-        self.pan_velocity_y = 0.0;
-        self.last_frame_pan_x = 0.0;
-        self.last_frame_pan_y = 0.0;
+        self.net.pan_x = 0.0;
+        self.net.pan_y = 0.0;
+        self.net.pan_velocity_x = 0.0;
+        self.net.pan_velocity_y = 0.0;
+        self.net.last_frame_pan_x = 0.0;
+        self.net.last_frame_pan_y = 0.0;
         self.doc.current_path.clear();
-        self.grid_cursor_col = 0;
-        self.grid_cursor_row = 0;
+        self.net.grid_cursor_col = 0;
+        self.net.grid_cursor_row = 0;
 
         self.focused_widget = None;
         self.drag_widget = None;

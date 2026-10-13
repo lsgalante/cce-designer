@@ -490,20 +490,20 @@ fn the_network_menu_is_a_page_of_the_viewport_menu_without_the_plate() {
     let (px, py) = (cx + cw * 0.3, cy + ch * 0.6);
     assert!(state.graph().node_at(px, py).is_none() && !state.over_floating_pane_at(px, py));
     let cell = state.cell_at(px, py);
-    assert_ne!((state.grid_cursor_col, state.grid_cursor_row), cell, "pick a cell the cursor is not on");
+    assert_ne!((state.net.grid_cursor_col, state.net.grid_cursor_row), cell, "pick a cell the cursor is not on");
     press(&mut state, px, py, MouseButton::Right);
     assert!(state.viewport_menu_open(), "empty graph space is the scene's");
     assert_eq!(state.viewport_menu_actions.first(), Some(&A::NetworkPage));
     assert!(context_menu::leads_to_page(0), "a page row");
     assert_eq!(context_menu::options().first().map(String::as_str), Some("Network"));
-    assert_ne!((state.grid_cursor_col, state.grid_cursor_row), cell, "opening the menu moves no cursor");
+    assert_ne!((state.net.grid_cursor_col, state.net.grid_cursor_row), cell, "opening the menu moves no cursor");
 
     // The turn: the network menu, under a band back to the viewport's.
     assert!(state.run_menu_turn(PageTurn::Into(0)));
     assert_eq!(state.open_menu_origin(), Some(MenuOrigin::Network));
     assert_eq!(state.network_menu_actions.first(), Some(&NetworkMenuAction::Command("add_node")));
     assert_eq!(state.network_menu_from, Some(MenuOrigin::Viewport));
-    assert_eq!((state.grid_cursor_col, state.grid_cursor_row), cell, "the cursor is on the cell pressed");
+    assert_eq!((state.net.grid_cursor_col, state.net.grid_cursor_row), cell, "the cursor is on the cell pressed");
     assert_eq!(state.focused_pane, LEFT_MENUBAR_IDX, "the network has focus");
 
     // Back to the viewport menu, then forward again by its row.
@@ -559,14 +559,14 @@ fn a_scroll_over_the_plateless_network_orbits_unless_it_begins_on_a_node() {
     let (ex, ey) = (cx + cw * 0.3, cy + ch * 0.6);
     assert!(state.graph().node_at(ex, ey).is_none() && !state.over_floating_pane_at(ex, ey));
     at(&mut state, ex, ey);
-    let (turned, pan) = (orbit(&state), (state.pan_x, state.pan_y));
+    let (turned, pan) = (orbit(&state), (state.net.pan_x, state.net.pan_y));
     wheel(&mut state);
     assert_ne!(orbit(&state), turned, "a scroll over empty space orbits");
-    assert_eq!((state.pan_x, state.pan_y), pan, "and does not pan the graph");
+    assert_eq!((state.net.pan_x, state.net.pan_y), pan, "and does not pan the graph");
     assert_eq!(state.focused_pane, RIGHT_MENUBAR_IDX);
 
     // On a node: the graph's, not the camera's.
-    state.overlay_wheel = None;
+    state.net.overlay_wheel = None;
     let find_node = |state: &State| state
         .current_dir()
         .children
@@ -586,9 +586,9 @@ fn a_scroll_over_the_plateless_network_orbits_unless_it_begins_on_a_node() {
     // (That scroll panned the graph: find the node again.)
     let (nx, ny) = find_node(&state);
     at(&mut state, nx, ny);
-    state.overlay_wheel = None;
+    state.net.overlay_wheel = None;
     assert!(state.overlay_wheel_to_graph(ScrollPhase::Finger));
-    state.pan_x += cw;
+    state.net.pan_x += cw;
     state.sync_grid_settings();
     assert!(state.graph().node_at(nx, ny).is_none(), "the node moved away");
     assert!(state.overlay_wheel_to_graph(ScrollPhase::Finger), "held mid-gesture");

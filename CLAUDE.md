@@ -254,6 +254,13 @@ gone from cce-ui with the wgpu path).
   and `State` keeps one-line forwarders, so `self.current_dir()` still reads;
   `self.doc.current_dir_mut()` borrows the document alone and leaves the panes
   free. Also a child module, and in the same two source scans.
+- `src/app/network.rs` — `NetworkView`, held as `State::net`: the network
+  editor's own state beside its widgets — the grid cursor, its region and
+  the deselect memory, the group drag and the clipboard, the lattice
+  (`grid`, `grid_base`), the pan and its drag-release fling, the scroll
+  settings, the wheel's target over the plateless network, and the nodes'
+  look (opacity, compression, tint, the drop glow). Also a child module, and
+  in the same two source scans.
 - `src/model.rs` (~1.6k lines) — the node tree and the project file, with no window or
   GPU: `FsNode`, `Project` (load, migrations, template merge), node ids, the wire and
   splice operations, parameter rows, `load_fs_tree` (node-template loading).
@@ -1509,7 +1516,7 @@ position write-back carries into the tree, and the release drains
 - **The swap wins over a splice**: a node's own wires run into its body,
   so a ghost on a node always touches one.
 - **A dragged node always snaps to a cell it could land on** (the same
-  day): `State::grid_snap_enabled` is always on, and config.kdl's
+  day): `State::net.grid_snap_enabled` is always on, and config.kdl's
   `style.surface.graph.grid_snap` is not read — off on the user's machine,
   it let a dragged node float freely and land somewhere else. With swap on
   every crossing is one it could land on (a free one moves it, a node's
@@ -2922,7 +2929,7 @@ That makes the pane's RECT useless as a hit test, and these route off it:
   `State::overlay_wheel_to_graph`): one begun on a node pans the graph, one
   begun anywhere else orbits the camera, as a click would. Until then the
   graph took every scroll by its window-wide rect, so without the plate a
-  trackpad could not orbit at all. The target is held (`State::overlay_wheel`)
+  trackpad could not orbit at all. The target is held (`State::net.overlay_wheel`)
   to the finger's lift, a pause of `OVERLAY_WHEEL_GAP` or the pointer
   moving: a pan slides the node out from under a pointer that does not
   move, and the rest of the swipe would otherwise turn the camera. The
@@ -3259,12 +3266,12 @@ override, left from the cell model. `get_state` over MCP reports `grid`
 and node size), which is the one way to check from outside that a config
 edit reached the lattice.
 
-`State::grid`, a `GridGeometry` (`pitch_x` / `pitch_y` and `node_w` /
+`State::net.grid`, a `GridGeometry` (`pitch_x` / `pitch_y` and `node_w` /
 `node_h`), is the zoomed geometry — `configured_grid_geometry` at 100%,
 scaled TOGETHER by `scale_grid_geometry` (`GridGeometry::scaled`), which is
 the only relation between the pitch and the node. **A
 config.kdl edit to the spacing or node size shows at once** (since
-2026-10-06): `State::grid_base` is the configured geometry the live one is
+2026-10-06): `State::net.grid_base` is the configured geometry the live one is
 a zoom of, and the config reload (`update_graph_settings_from_config`)
 re-applies a changed one at the zoom in hand — until then the live
 geometry was read at startup and only zoomed after, so an edit waited for

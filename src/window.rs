@@ -62,8 +62,8 @@ impl State {
                             }
                         };
                         if let Some((pos_x, pos_y)) = pos {
-                            state.grid_cursor_col = pos_x as i32;
-                            state.grid_cursor_row = pos_y as i32;
+                            state.net.grid_cursor_col = pos_x as i32;
+                            state.net.grid_cursor_row = pos_y as i32;
                             state.sync_cursor_and_selection();
                         }
                     }
@@ -259,8 +259,8 @@ impl State {
             // config edit reached the lattice on screen.
             let cfg = crate::app::configured_grid_geometry();
             v["grid"] = serde_json::json!({
-                "pitch": [self.grid.pitch_x, self.grid.pitch_y],
-                "node_size": [self.grid.node_w, self.grid.node_h],
+                "pitch": [self.net.grid.pitch_x, self.net.grid.pitch_y],
+                "node_size": [self.net.grid.node_w, self.net.grid.node_h],
                 "zoom_percent": self.zoom_percent(),
                 "configured_pitch": [cfg.pitch_x, cfg.pitch_y],
                 "configured_node_size": [cfg.node_w, cfg.node_h],

@@ -477,8 +477,8 @@ fn the_viewport_menu_frames_an_image_that_is_shown() {
 fn adding_to_an_image_wires_a_node_after_it() {
     let mut state = State::new(false);
     // No cell of the bundled project's is in the way down here.
-    state.grid_cursor_col = 40;
-    state.grid_cursor_row = 40;
+    state.net.grid_cursor_col = 40;
+    state.net.grid_cursor_row = 40;
     assert!(state.run_command("add_image_ellipse"), "add_image_ellipse is not a command");
 
     let names = |s: &State, ty: &str| {

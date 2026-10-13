@@ -239,7 +239,7 @@ fn dialog_zoom_slider_row_belongs_to_the_network_pane() {
     state.set_zoom_percent(150.0);
     assert!((state.zoom_percent() - 150.0).abs() < 0.5);
     state.set_zoom_percent(100_000.0);
-    assert!((state.grid.pitch_x - crate::app::MAX_PITCH_X).abs() < 0.5, "clamped to the max pitch");
+    assert!((state.net.grid.pitch_x - crate::app::MAX_PITCH_X).abs() < 0.5, "clamped to the max pitch");
     assert!((state.ui_context[state.slots.dialog].rows[0].slider_value().unwrap() - state.zoom_percent()).abs() < 1e-3);
     state.set_zoom_percent(100.0);
 
@@ -589,12 +589,12 @@ fn dialog_keys_never_reach_the_pane_underneath() {
     use crate::window::WindowEvent;
     let mut state = State::new(false);
     state.focused_pane = crate::slots::LEFT_MENUBAR_IDX;
-    let col = state.grid_cursor_col;
+    let col = state.net.grid_cursor_col;
     state.run_command("toggle_dialog");
 
     // "l" is Cursor Right in the network pane and a plain letter here.
     state.handle_event(&WindowEvent::KeyboardInput { event: typed("l") });
-    assert_eq!(state.grid_cursor_col, col, "the grid cursor must not move");
+    assert_eq!(state.net.grid_cursor_col, col, "the grid cursor must not move");
     assert_eq!(state.ui_context[state.slots.dialog].query, "l");
 }
 
@@ -1032,11 +1032,11 @@ fn dragging_the_network_grid_expands_the_cursor() {
     // A plain press on empty space is the scene's: it orbits, and the
     // cursor stays. With ctrl it is the grid's.
     move_to(&mut state, anchor);
-    let before = (state.grid_cursor_col, state.grid_cursor_row);
+    let before = (state.net.grid_cursor_col, state.net.grid_cursor_row);
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
-    assert!(state.orbit_drag.is_some() && state.grid_cursor_drag.is_none(), "a plain press orbits");
+    assert!(state.orbit_drag.is_some() && state.net.grid_cursor_drag.is_none(), "a plain press orbits");
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
-    assert_eq!((state.grid_cursor_col, state.grid_cursor_row), before);
+    assert_eq!((state.net.grid_cursor_col, state.net.grid_cursor_row), before);
     state.modifiers.ctrl = true;
     state.handle_event(&WindowEvent::MouseInput {
         state: ElementState::Pressed,
@@ -1045,7 +1045,7 @@ fn dragging_the_network_grid_expands_the_cursor() {
     state.modifiers.ctrl = false;
     assert_eq!(state.focused_pane, crate::slots::LEFT_MENUBAR_IDX, "the network has focus");
     assert_eq!(
-        (state.grid_cursor_col, state.grid_cursor_row),
+        (state.net.grid_cursor_col, state.net.grid_cursor_row),
         anchor,
         "the press alone moves the cursor — not the release"
     );
@@ -1057,7 +1057,7 @@ fn dragging_the_network_grid_expands_the_cursor() {
     move_to(&mut state, far);
     assert_eq!(state.grid_cursor_region(), (1, 4, 3, 3));
     assert_eq!(
-        (state.grid_cursor_col, state.grid_cursor_row),
+        (state.net.grid_cursor_col, state.net.grid_cursor_row),
         anchor,
         "the anchor is still the cursor cell — Add Node places there"
     );
@@ -1075,9 +1075,9 @@ fn dragging_the_network_grid_expands_the_cursor() {
         state: ElementState::Released,
         button: MouseButton::Left,
     });
-    assert!(state.grid_cursor_drag.is_none());
+    assert!(state.net.grid_cursor_drag.is_none());
     assert_eq!(state.grid_cursor_region(), (2, 5, 1, 1));
-    assert!(state.grid_cursor_expanse.is_none(), "collapsed outright, not a 1x1 region");
+    assert!(state.net.grid_cursor_expanse.is_none(), "collapsed outright, not a 1x1 region");
 
     // Motion with no drag armed leaves the cursor alone.
     move_to(&mut state, (0, 2));
@@ -1151,19 +1151,19 @@ fn a_grid_spacing_edit_applies_at_the_zoom_in_hand() {
     use crate::app::{configured_grid_geometry, GridGeometry};
     let mut state = State::new(false);
     let cfg = configured_grid_geometry();
-    assert_eq!(state.grid_base, cfg);
+    assert_eq!(state.net.grid_base, cfg);
     // As if the config had said 90 rows apart, and the view is at 150%.
-    state.grid_base = GridGeometry { pitch_y: 90.0, ..cfg };
+    state.net.grid_base = GridGeometry { pitch_y: 90.0, ..cfg };
     state.set_grid_geometry(GridGeometry { pitch_x: cfg.pitch_x * 1.5, pitch_y: 135.0, node_w: cfg.node_w * 1.5, node_h: cfg.node_h * 1.5 });
     // The file now says what `cfg` says.
     state.update_graph_settings_from_config();
-    assert_eq!(state.grid_base, cfg);
-    assert_eq!(state.grid.pitch_y, cfg.pitch_y * 1.5, "the new spacing, at the same 150%");
-    assert_eq!(state.grid.pitch_x, cfg.pitch_x * 1.5);
-    assert_eq!((state.grid.node_w, state.grid.node_h), (cfg.node_w * 1.5, cfg.node_h * 1.5));
+    assert_eq!(state.net.grid_base, cfg);
+    assert_eq!(state.net.grid.pitch_y, cfg.pitch_y * 1.5, "the new spacing, at the same 150%");
+    assert_eq!(state.net.grid.pitch_x, cfg.pitch_x * 1.5);
+    assert_eq!((state.net.grid.node_w, state.net.grid.node_h), (cfg.node_w * 1.5, cfg.node_h * 1.5));
     // A reload that changes nothing leaves the zoom alone.
     state.update_graph_settings_from_config();
-    assert_eq!(state.grid.pitch_x, cfg.pitch_x * 1.5);
+    assert_eq!(state.net.grid.pitch_x, cfg.pitch_x * 1.5);
 }
 
 /// A node dropped on another node swaps places with it, connections
@@ -1205,7 +1205,7 @@ fn dropping_a_node_on_a_node_swaps_their_places() {
     // Grab b and drop it on a — the pointer between cells, not on a
     // crossing: the node snaps, whatever the config's grid_snap says.
     state.update_graph_settings_from_config();
-    assert!(state.grid_snap_enabled, "a dragged node always snaps");
+    assert!(state.net.grid_snap_enabled, "a dragged node always snaps");
     move_to(&mut state, (1, 6));
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
     let (ax, ay) = state.cell_center(1, 5);
@@ -1321,12 +1321,12 @@ fn dragging_a_selected_node_carries_the_selection() {
     // down. Both travel; c, unselected, does not.
     move_to(&mut state, (2, 7));
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
-    assert!(state.node_drag_group.is_some(), "the press picked up the selection");
+    assert!(state.net.node_drag_group.is_some(), "the press picked up the selection");
     assert_eq!(state.grid_cursor_region(), (1, 5, 2, 3), "the press left the region alone");
     move_to(&mut state, (3, 8));
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
 
-    assert!(state.node_drag_group.is_none());
+    assert!(state.net.node_drag_group.is_none());
     assert_eq!(state.current_dir().children[b].position, (3.0, 8.0), "the grabbed node");
     assert_eq!(state.current_dir().children[a].position, (2.0, 6.0), "carried along");
     assert_eq!(state.current_dir().children[c].position, (1.0, 11.0), "not selected");
@@ -1337,7 +1337,7 @@ fn dragging_a_selected_node_carries_the_selection() {
     // the anchor moves onto it and the region collapses with it.
     move_to(&mut state, (1, 11));
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
-    assert!(state.node_drag_group.is_none(), "one node, the widget's own drag");
+    assert!(state.net.node_drag_group.is_none(), "one node, the widget's own drag");
     assert_eq!(state.grid_cursor_region(), (1, 11, 1, 1), "collapsed onto what was grabbed");
     move_to(&mut state, (0, 11));
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
@@ -1406,13 +1406,13 @@ fn a_drag_settles_onto_the_nodes_it_caught() {
 
     // One node caught collapses the region onto it, and the ordinary
     // single selection takes over from there.
-    state.grid_cursor_col = 0;
-    state.grid_cursor_row = 3;
-    state.grid_cursor_expanse = Some(((0, 3), (3, 6)));
+    state.net.grid_cursor_col = 0;
+    state.net.grid_cursor_row = 3;
+    state.net.grid_cursor_expanse = Some(((0, 3), (3, 6)));
     assert_eq!(state.selected_slots(), vec![a]);
     assert!(state.settle_cursor_expansion());
     assert_eq!(state.grid_cursor_region(), (1, 5, 1, 1));
-    assert!(state.grid_cursor_expanse.is_none());
+    assert!(state.net.grid_cursor_expanse.is_none());
     assert_eq!(state.graph().selected_node(), Some(a), "the cursor sits on it now");
 }
 
@@ -1448,9 +1448,9 @@ fn an_expanded_cursor_selects_every_node_inside_it() {
     let (a, b, c) = (slot(&state, "a"), slot(&state, "b"), slot(&state, "c"));
 
     // A region from (8, 8) to (11, 10) holds a and b, and not c at (14, 8).
-    state.grid_cursor_col = 8;
-    state.grid_cursor_row = 8;
-    state.grid_cursor_expanse = Some(((8, 8), (11, 10)));
+    state.net.grid_cursor_col = 8;
+    state.net.grid_cursor_row = 8;
+    state.net.grid_cursor_expanse = Some(((8, 8), (11, 10)));
     assert_eq!(state.grid_cursor_region(), (8, 8, 4, 3));
     assert_eq!(state.selected_slots(), vec![a, b]);
     assert!(!state.selected_slots().contains(&c));
@@ -1475,7 +1475,7 @@ fn an_expanded_cursor_selects_every_node_inside_it() {
     );
 
     // Delete takes the whole selection, not just one of it.
-    state.grid_cursor_expanse = Some(((7, 8), (10, 10)));
+    state.net.grid_cursor_expanse = Some(((7, 8), (10, 10)));
     assert_eq!(state.selected_slots().len(), 2);
     let before = state.current_dir().children.len();
     state.handle_event(&crate::window::WindowEvent::KeyboardInput {
@@ -1520,8 +1520,8 @@ fn shift_hjkl_extends_the_selection_from_a_fixed_anchor() {
     // The cursor starts ON a node, and extending KEEPS it: the anchor's
     // cell is part of its own region, which is what makes this an extend
     // rather than a second way to start a selection.
-    state.grid_cursor_col = 1;
-    state.grid_cursor_row = 4;
+    state.net.grid_cursor_col = 1;
+    state.net.grid_cursor_row = 4;
     state.sync_cursor_and_selection();
     assert_eq!(state.selected_slots(), vec![a]);
 
@@ -1531,7 +1531,7 @@ fn shift_hjkl_extends_the_selection_from_a_fixed_anchor() {
     assert!(state.run_command("extend_right"));
     assert_eq!(state.selected_slots(), vec![a, b, c]);
     assert_eq!(
-        (state.grid_cursor_col, state.grid_cursor_row),
+        (state.net.grid_cursor_col, state.net.grid_cursor_row),
         (1, 4),
         "the anchor is the fixed end"
     );
@@ -1541,7 +1541,7 @@ fn shift_hjkl_extends_the_selection_from_a_fixed_anchor() {
     assert_eq!(state.selected_slots(), vec![a, b]);
     assert!(state.run_command("extend_left"));
     assert_eq!(state.grid_cursor_region(), (1, 4, 1, 1), "collapsed, not 1x1-with-an-expanse");
-    assert!(state.grid_cursor_expanse.is_none());
+    assert!(state.net.grid_cursor_expanse.is_none());
     assert_eq!(state.selected_slots(), vec![a], "the plain single selection again");
 
     // The other way round: past the anchor, so the region grows leftward.
@@ -1589,9 +1589,9 @@ fn every_node_in_the_region_is_painted_selected() {
     }
     state.rebuild_positions();
     state.apply_layout();
-    state.grid_cursor_col = 1;
-    state.grid_cursor_row = 4;
-    state.grid_cursor_expanse = Some(((1, 4), (2, 6)));
+    state.net.grid_cursor_col = 1;
+    state.net.grid_cursor_row = 4;
+    state.net.grid_cursor_expanse = Some(((1, 4), (2, 6)));
     assert_eq!(state.selected_slots().len(), 2, "a and b, not c");
 
     // The selected look is a specular tint of the highlight colour, and a
@@ -1663,17 +1663,17 @@ fn copying_a_region_keeps_the_shape_on_paste() {
             )
             .unwrap();
     }
-    state.grid_cursor_col = 8;
-    state.grid_cursor_row = 8;
-    state.grid_cursor_expanse = Some(((8, 8), (11, 10)));
+    state.net.grid_cursor_col = 8;
+    state.net.grid_cursor_row = 8;
+    state.net.grid_cursor_expanse = Some(((8, 8), (11, 10)));
     state.copy_selected_nodes();
-    assert_eq!(state.node_clipboard.len(), 2);
+    assert_eq!(state.net.node_clipboard.len(), 2);
 
     // Paste at a clear corner of the sheet: the set's top-left lands on
     // the cursor and the second node keeps its (+2, +1) offset.
-    state.grid_cursor_col = 20;
-    state.grid_cursor_row = 20;
-    state.grid_cursor_expanse = None;
+    state.net.grid_cursor_col = 20;
+    state.net.grid_cursor_row = 20;
+    state.net.grid_cursor_expanse = None;
     let before = state.current_dir().children.len();
     assert!(state.paste_nodes());
     assert_eq!(state.current_dir().children.len(), before + 2);
@@ -1709,18 +1709,18 @@ fn a_paste_on_a_wire_is_spliced_into_its_chain() {
     };
 
     // One node, onto the wire a -> c.
-    state.node_clipboard = vec![state.current_dir().children[2].clone()];
-    state.grid_cursor_col = 2;
-    state.grid_cursor_row = 2;
+    state.net.node_clipboard = vec![state.current_dir().children[2].clone()];
+    state.net.grid_cursor_col = 2;
+    state.net.grid_cursor_row = 2;
     assert!(state.paste_nodes());
     assert_eq!(input_of(&state, "p2").as_deref(), Some("a"), "renamed past p1, and reading the upstream");
     assert_eq!(input_of(&state, "c").as_deref(), Some("p2"));
 
     // The chain p1 -> q1, onto the wire p2 -> c: in whole, wired inside
     // to its own copies and not to the originals.
-    state.node_clipboard = state.current_dir().children[2..4].to_vec();
-    state.grid_cursor_col = 2;
-    state.grid_cursor_row = 3;
+    state.net.node_clipboard = state.current_dir().children[2..4].to_vec();
+    state.net.grid_cursor_col = 2;
+    state.net.grid_cursor_row = 3;
     state.sync_nodes();
     assert!(state.paste_nodes());
     assert_eq!(input_of(&state, "p3").as_deref(), Some("p2"), "the head reads the wire's upstream");
@@ -1771,7 +1771,7 @@ fn a_port_press_does_not_arm_the_cursor_expansion() {
              read it as empty grid unless the guard holds"
     );
     assert!(
-        state.grid_cursor_drag.is_none(),
+        state.net.grid_cursor_drag.is_none(),
         "the graph took this press — the cursor must not start expanding"
     );
 
@@ -1905,8 +1905,8 @@ fn dialog_add_node_mode_lists_the_templates() {
 fn dialog_add_node_filters_and_adds_at_the_cursor() {
     let mut state = State::new(false);
     state.focused_pane = crate::slots::LEFT_MENUBAR_IDX;
-    state.grid_cursor_col = 3;
-    state.grid_cursor_row = 2;
+    state.net.grid_cursor_col = 3;
+    state.net.grid_cursor_row = 2;
     let before = state.current_dir().children.len();
 
     state.open_node_palette();
@@ -1949,8 +1949,8 @@ fn a_node_added_on_a_wire_is_wired_into_its_chain() {
         crate::geometry::node_param_node(n, "input")
     };
     let add = |state: &mut State, template: &str, col: i32, row: i32| {
-        state.grid_cursor_col = col;
-        state.grid_cursor_row = row;
+        state.net.grid_cursor_col = col;
+        state.net.grid_cursor_row = row;
         state.open_node_palette();
         state.take_dialog_pick(template.to_string());
         state.current_dir().children.last().unwrap().name.clone()
@@ -2085,7 +2085,7 @@ fn the_add_node_list_offers_what_belongs_at_the_level() {
 
     // A paste: the box copied into the root is refused whole.
     let boxed = state.current_dir().children.iter().position(|c| c.node_type == "box").unwrap();
-    state.node_clipboard = vec![state.current_dir().children[boxed].clone()];
+    state.net.node_clipboard = vec![state.current_dir().children[boxed].clone()];
     state.doc.current_path.clear();
     state.on_path_changed();
     let count = state.doc.fs_root.children.len();
@@ -2124,7 +2124,7 @@ fn command_palette_opens_the_dialog_on_commands() {
 /// start, which is indistinguishable from one that failed to.
 #[test]
 fn nothing_shells_out_to_cce_cloud_any_more() {
-    for name in ["app.rs", "app/input.rs", "app/document.rs", "window.rs", "dialog.rs", "render.rs", "api.rs", "slots.rs"] {
+    for name in ["app.rs", "app/input.rs", "app/document.rs", "app/network.rs", "window.rs", "dialog.rs", "render.rs", "api.rs", "slots.rs"] {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(name);
         let src = std::fs::read_to_string(&path).expect("read source");
         for needle in ["CloudPopup", "run_dmenu", "CloudPopupTracker"] {
@@ -2192,18 +2192,18 @@ fn frame_all_keeps_the_node_labels_inside_the_pane() {
         right <= px + pw - padding + 0.5,
         "the long label ends at {right:.1}, past the pane's padded right edge {:.1} (pitch {:.1})",
         px + pw - padding,
-        state.grid.pitch_x
+        state.net.grid.pitch_x
     );
     let (ax, _, _, _) = state.cell_rect(0, 0);
     assert!(ax >= px + padding - 0.5, "the left-hand body starts at {ax:.1}, inside the padding");
     // The fit is by the labels: the bodies alone would have fitted at
     // 100%, so the zoom had to come down for the name.
-    assert!(state.grid.pitch_x < 140.0, "the zoom stayed at 100% ({}), so the label was not counted", state.grid.pitch_x);
+    assert!(state.net.grid.pitch_x < 140.0, "the zoom stayed at 100% ({}), so the label was not counted", state.net.grid.pitch_x);
 
     // And a level whose labels already fit frames at 100% — the label
     // rule must not shrink a level that has room.
     state.apply_action(crate::app::McpAction::RenameNode { slot: long, new_name: "b".into() }, &mut redraw).unwrap();
     state.frame_all_nodes();
-    assert!((state.grid.pitch_x - 140.0).abs() < 0.01, "short labels fit at 100%, got pitch {}", state.grid.pitch_x);
+    assert!((state.net.grid.pitch_x - 140.0).abs() < 0.01, "short labels fit at 100%, got pitch {}", state.net.grid.pitch_x);
     assert!(label_right(&state, long) <= px + pw - padding + 0.5);
 }

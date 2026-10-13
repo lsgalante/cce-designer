@@ -251,10 +251,10 @@ impl State {
         // coast advance in Graph::tick and are read
         // back in tick_frame. A wheel also ends any
         // drag-release fling still sliding.
-        self.pan_x = gx - active_node_area_x;
-        self.pan_y = gy - active_node_area_y;
-        self.pan_velocity_x = 0.0;
-        self.pan_velocity_y = 0.0;
+        self.net.pan_x = gx - active_node_area_x;
+        self.net.pan_y = gy - active_node_area_y;
+        self.net.pan_velocity_x = 0.0;
+        self.net.pan_velocity_y = 0.0;
     }
 
     /// A wheel over the network that no widget took: ctrl zooms about
@@ -282,17 +282,17 @@ impl State {
             // or a hidden graph): a plain instant pan.
             let (dx, dy) = match delta {
                 MouseScrollDelta::LineDelta(x, y) => {
-                    (*x * 30.0 * self.graph_scroll_speed, *y * 30.0 * self.graph_scroll_speed)
+                    (*x * 30.0 * self.net.graph_scroll_speed, *y * 30.0 * self.net.graph_scroll_speed)
                 }
                 MouseScrollDelta::PixelDelta(pos) => (
-                    (pos.x as f32 / self.scale as f32) * self.graph_scroll_speed,
-                    (pos.y as f32 / self.scale as f32) * self.graph_scroll_speed,
+                    (pos.x as f32 / self.scale as f32) * self.net.graph_scroll_speed,
+                    (pos.y as f32 / self.scale as f32) * self.net.graph_scroll_speed,
                 ),
             };
-            self.pan_x -= dx;
-            self.pan_y -= dy;
-            self.pan_velocity_x = 0.0;
-            self.pan_velocity_y = 0.0;
+            self.net.pan_x -= dx;
+            self.net.pan_y -= dy;
+            self.net.pan_velocity_x = 0.0;
+            self.net.pan_velocity_y = 0.0;
             self.sync_grid_settings();
             true
         }
@@ -357,11 +357,11 @@ impl State {
         // An expansion drag on the network grid, likewise armed by
         // its own press and competing with nothing: the cursor grows
         // from the pressed cell to the one under the pointer.
-        if self.grid_cursor_drag.is_some() {
+        if self.net.grid_cursor_drag.is_some() {
             return self.grid_cursor_drag_motion();
         }
 
-        if self.is_panning {
+        if self.net.is_panning {
             self.network_pan_motion();
             changed = true;
         } else {
@@ -437,10 +437,10 @@ impl State {
     }
 
     fn network_pan_motion(&mut self) {
-        let dx = self.cursor_x - self.pan_start_cx;
-        let dy = self.cursor_y - self.pan_start_cy;
-        self.pan_x = self.pan_start_x + dx;
-        self.pan_y = self.pan_start_y + dy;
+        let dx = self.cursor_x - self.net.pan_start_cx;
+        let dy = self.cursor_y - self.net.pan_start_cy;
+        self.net.pan_x = self.net.pan_start_x + dx;
+        self.net.pan_y = self.net.pan_start_y + dy;
         self.sync_grid_settings();
         self.rebuild_positions();
         self.apply_layout();
@@ -477,7 +477,7 @@ impl State {
             self.deliver_to_slot(idx, &ev)
         } {
             changed = true;
-            if idx == CONTENT_IDX && self.node_drag_group.is_some() {
+            if idx == CONTENT_IDX && self.net.node_drag_group.is_some() {
                 // The companions follow in whole cells, from
                 // where the widget says the dragged body will
                 // LAND (`drop_target_cell_rect` runs
@@ -570,8 +570,8 @@ impl State {
 
     /// A press stops what is coasting: the network's pan and the camera.
     fn stop_inertia(&mut self) {
-        self.pan_velocity_x = 0.0;
-        self.pan_velocity_y = 0.0;
+        self.net.pan_velocity_x = 0.0;
+        self.net.pan_velocity_y = 0.0;
 
         self.viewport_mut().reset_velocity();
     }
@@ -604,25 +604,25 @@ impl State {
         // nothing else wants that gesture.
         let is_pan_trigger = self.in_network_area(self.cursor_x, self.cursor_y)
             && (*button == MouseButton::Middle
-                || (*button == MouseButton::Left && self.space_pressed));
+                || (*button == MouseButton::Left && self.net.space_pressed));
 
         if is_pan_trigger {
             match btn_state {
                 ElementState::Pressed => {
-                    self.is_panning = true;
-                    self.pan_start_cx = self.cursor_x;
-                    self.pan_start_cy = self.cursor_y;
-                    self.pan_start_x = self.pan_x;
-                    self.pan_start_y = self.pan_y;
-                    self.pan_velocity_x = 0.0;
-                    self.pan_velocity_y = 0.0;
-                    self.last_frame_pan_x = self.pan_x;
-                    self.last_frame_pan_y = self.pan_y;
+                    self.net.is_panning = true;
+                    self.net.pan_start_cx = self.cursor_x;
+                    self.net.pan_start_cy = self.cursor_y;
+                    self.net.pan_start_x = self.net.pan_x;
+                    self.net.pan_start_y = self.net.pan_y;
+                    self.net.pan_velocity_x = 0.0;
+                    self.net.pan_velocity_y = 0.0;
+                    self.net.last_frame_pan_x = self.net.pan_x;
+                    self.net.last_frame_pan_y = self.net.pan_y;
                     return Some(true);
                 }
                 ElementState::Released => {
-                    if self.is_panning {
-                        self.is_panning = false;
+                    if self.net.is_panning {
+                        self.net.is_panning = false;
                         self.sync_layout();
                         self.read_panel_offsets();
                         return Some(true);
@@ -631,8 +631,8 @@ impl State {
             }
         }
 
-        if self.is_panning && *btn_state == ElementState::Released {
-            self.is_panning = false;
+        if self.net.is_panning && *btn_state == ElementState::Released {
+            self.net.is_panning = false;
             self.sync_layout();
             self.read_panel_offsets();
             return Some(true);
@@ -990,10 +990,10 @@ impl State {
             && self.app_drag.is_none()
         {
             let (col, row) = self.cell_at(self.cursor_x, self.cursor_y);
-            self.grid_cursor_col = col;
-            self.grid_cursor_row = row;
-            self.grid_cursor_expanse = None;
-            self.grid_cursor_drag = Some((col, row));
+            self.net.grid_cursor_col = col;
+            self.net.grid_cursor_row = row;
+            self.net.grid_cursor_expanse = None;
+            self.net.grid_cursor_drag = Some((col, row));
             self.focused_pane = LEFT_MENUBAR_IDX;
             if let Some(old) = self.focused_widget.take() {
                 self.ui_context.unfocus_id(self.slots.id(old));
@@ -1064,8 +1064,8 @@ impl State {
                 return true;
             }
             let (col, row) = self.cell_at(self.cursor_x, self.cursor_y);
-            self.grid_cursor_col = col;
-            self.grid_cursor_row = row;
+            self.net.grid_cursor_col = col;
+            self.net.grid_cursor_row = row;
             self.open_network_context_menu();
             return true;
         }
@@ -1189,8 +1189,8 @@ impl State {
         }
         if click_target.is_none() && in_circle_network_pane {
             let (col, row) = self.cell_at(self.cursor_x, self.cursor_y);
-            self.grid_cursor_col = col;
-            self.grid_cursor_row = row;
+            self.net.grid_cursor_col = col;
+            self.net.grid_cursor_row = row;
             changed = true;
         }
         changed
@@ -1278,7 +1278,7 @@ impl State {
                         .filter(|&i| i != slot_idx)
                         .map(|i| (i, dir.children[i].position))
                         .collect();
-                    self.node_drag_group = Some(NodeDragGroup {
+                    self.net.node_drag_group = Some(NodeDragGroup {
                         dragged: slot_idx,
                         from: (pos.0 as i32, pos.1 as i32),
                         others: cells,
@@ -1290,8 +1290,8 @@ impl State {
                     self.ui_context[self.slots.content].inner_mut().set_swap_on_drop(false);
                 } else {
                     self.ui_context[self.slots.content].inner_mut().set_swap_on_drop(true);
-                    self.grid_cursor_col = pos.0 as i32;
-                    self.grid_cursor_row = pos.1 as i32;
+                    self.net.grid_cursor_col = pos.0 as i32;
+                    self.net.grid_cursor_row = pos.1 as i32;
                 }
             }
         } else {
@@ -1303,11 +1303,11 @@ impl State {
             // gesture — a press that never moves simply
             // leaves a one-cell cursor behind.
             let (col, row) = self.cell_at(self.cursor_x, self.cursor_y);
-            self.grid_cursor_col = col;
-            self.grid_cursor_row = row;
-            self.grid_cursor_expanse = None;
+            self.net.grid_cursor_col = col;
+            self.net.grid_cursor_row = row;
+            self.net.grid_cursor_expanse = None;
             if !widget_took {
-                self.grid_cursor_drag = Some((col, row));
+                self.net.grid_cursor_drag = Some((col, row));
             }
             changed = true;
         }
@@ -1328,7 +1328,7 @@ impl State {
     fn on_release(&mut self, btn_state: &ElementState, button: &MouseButton, changed: &mut bool) -> Option<bool> {
         // The expansion drag ends by SETTLING onto what it
         // caught — see `settle_cursor_expansion`.
-        if self.grid_cursor_drag.take().is_some() && self.settle_cursor_expansion() {
+        if self.net.grid_cursor_drag.take().is_some() && self.settle_cursor_expansion() {
             *changed = true;
         }
         if let Some(r) = self.release_camera_drag() {
@@ -1424,7 +1424,7 @@ impl State {
                 child.position = node.position;
             }
         }
-        if let Some(group) = self.node_drag_group.take() {
+        if let Some(group) = self.net.node_drag_group.take() {
             // Re-lay the companions from the cell the
             // dragged node actually COMMITTED to: the
             // widget walks it off an occupied cell, so
@@ -1434,9 +1434,9 @@ impl State {
                 .get(group.dragged)
                 .map(|n| (n.position.0 as i32, n.position.1 as i32))
                 .unwrap_or(group.from);
-            self.node_drag_group = Some(group.clone());
+            self.net.node_drag_group = Some(group.clone());
             self.drag_group_to(dest);
-            self.node_drag_group = None;
+            self.net.node_drag_group = None;
             // The region travels with what it holds,
             // as it does for alt+hjkl — the anchor sat
             // still through the drag precisely so it
@@ -1444,8 +1444,8 @@ impl State {
             self.shift_grid_cursor(dest.0 - group.from.0, dest.1 - group.from.1);
         } else if let Some(sel_idx) = self.graph().selected_node() {
             if let Some(node) = updated_nodes.get(sel_idx) {
-                self.grid_cursor_col = node.position.0 as i32;
-                self.grid_cursor_row = node.position.1 as i32;
+                self.net.grid_cursor_col = node.position.0 as i32;
+                self.net.grid_cursor_row = node.position.1 as i32;
             }
         }
         self.rebuild_positions();
@@ -1529,7 +1529,7 @@ impl State {
     /// last the focused widget.
     fn on_key(&mut self, event: &KeyEvent) -> bool {
         if event.logical_key == Key::Named(NamedKey::Space) {
-            self.space_pressed = event.state == ElementState::Pressed;
+            self.net.space_pressed = event.state == ElementState::Pressed;
         }
 
         // The dialog owns the keyboard outright while it is open —

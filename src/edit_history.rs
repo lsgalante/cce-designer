@@ -388,13 +388,13 @@ impl State {
     fn gesture_held(&self) -> bool {
         self.drag_widget.is_some()
             || self.app_drag.is_some()
-            || self.node_drag_group.is_some()
+            || self.net.node_drag_group.is_some()
             // A camera orbit or a pan is not an edit, but an orbit with a
             // camera node active writes its rotation every motion — and a
             // changed parameter is a full-tree clone here (`rebase_structure`).
             || self.orbit_drag.is_some()
             || self.pan_drag.is_some()
-            || self.is_panning
+            || self.net.is_panning
     }
 
     /// Look at the tree, and record what of its structure has changed
@@ -536,11 +536,11 @@ impl State {
                 }
                 let slot = selected.and_then(|id| self.current_dir().children.iter().position(|n| n.id == id));
                 self.graph_mut().set_selected_node(slot);
-                self.grid_cursor_expanse = None;
+                self.net.grid_cursor_expanse = None;
                 let at = slot.and_then(|i| self.current_dir().children.get(i)).map(|n| n.position);
                 if let Some((col, row)) = at {
-                    self.grid_cursor_col = col as i32;
-                    self.grid_cursor_row = row as i32;
+                    self.net.grid_cursor_col = col as i32;
+                    self.net.grid_cursor_row = row as i32;
                 }
                 self.sync_nodes();
                 self.rebuild_positions();

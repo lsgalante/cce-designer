@@ -215,10 +215,10 @@ impl State {
     fn show_and_select(&mut self, slot: usize) {
         self.current_dir_mut().set_child_geometry_visible(slot, true);
         if let Some(cell) = self.current_dir().children.get(slot).map(|n| n.position) {
-            self.grid_cursor_col = cell.0 as i32;
-            self.grid_cursor_row = cell.1 as i32;
+            self.net.grid_cursor_col = cell.0 as i32;
+            self.net.grid_cursor_row = cell.1 as i32;
         }
-        self.deselected_cell = None;
+        self.net.deselected_cell = None;
         self.sync_nodes();
         self.graph_mut().set_selected_node(Some(slot));
         self.rebuild_positions();
@@ -230,7 +230,7 @@ impl State {
 
     /// `New Image`: a page node at the grid cursor, shown and selected.
     pub fn new_image(&mut self) -> Option<usize> {
-        let at = (self.grid_cursor_col as f32, self.grid_cursor_row as f32);
+        let at = (self.net.grid_cursor_col as f32, self.net.grid_cursor_row as f32);
         let slot = self.add_template_node("Page", at)?;
         self.show_and_select(slot);
         Some(slot)

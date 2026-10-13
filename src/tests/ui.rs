@@ -1393,15 +1393,15 @@ fn a_node_name_on_a_light_floor_is_written_dark() {
     let dark = cce_ui::color::parse_hex_rgba_linear("#202028cc").unwrap();
     // No floor: a name stands on the bare scene and keeps the widget's
     // light ink, whatever the tint.
-    state.node_compression = None;
-    state.node_tint = Some(light);
+    state.net.node_compression = None;
+    state.net.node_tint = Some(light);
     assert_eq!(state.node_ink(), None);
     // A floor in a dark tint keeps it too; a floor in a light one is
     // written dark.
-    state.node_compression = Some(0.85);
-    state.node_tint = Some(dark);
+    state.net.node_compression = Some(0.85);
+    state.net.node_tint = Some(dark);
     assert_eq!(state.node_ink(), None);
-    state.node_tint = Some(light);
+    state.net.node_tint = Some(light);
     assert!(state.node_ink().is_some_and(|ink| ink.iter().all(|&c| c < 0x40)));
 }
 
@@ -2679,7 +2679,7 @@ fn the_dialog_plate_is_the_menu_plate() {
     let r = cce_ui::layout::menu_corner_radius();
     let rect = cce_ui::scene::layout::Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 };
     assert_eq!(dialog.corner_style(rect).map(|(r, _)| r), (r > 0.0).then_some(r));
-    for file in ["src/dialog.rs", "src/render.rs", "src/app.rs", "src/app/input.rs", "src/app/document.rs"] {
+    for file in ["src/dialog.rs", "src/render.rs", "src/app.rs", "src/app/input.rs", "src/app/document.rs", "src/app/network.rs"] {
         let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(file)).unwrap();
         assert!(!src.contains("dialog/compression") && !src.contains("DIALOG_COMPRESSION"), "{file} overrides the menu material");
     }
@@ -3085,12 +3085,12 @@ fn the_camera_pans_with_the_pointer() {
     // The network lies over the whole window, and the middle button is
     // its pan wherever it is laid out: the graph slides, the camera not.
     let (pivot, turned) = (state.viewport().pivot, orbit(&state));
-    let graph = (state.pan_x, state.pan_y);
+    let graph = (state.net.pan_x, state.net.pan_y);
     press(&mut state, MouseButton::Middle, ElementState::Pressed);
     assert!(state.pan_drag.is_none(), "over the network the middle button is the graph's");
     at(&mut state, cx + 40.0, cy + 10.0);
     press(&mut state, MouseButton::Middle, ElementState::Released);
-    assert_ne!((state.pan_x, state.pan_y), graph, "the graph panned");
+    assert_ne!((state.net.pan_x, state.net.pan_y), graph, "the graph panned");
     assert_eq!(state.viewport().pivot, pivot);
 
     // With the network hidden it is the camera's.

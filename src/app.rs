@@ -146,6 +146,9 @@ mod input;
 // `State::doc`: the node tree, the path into it, undo, the save baseline.
 mod document;
 pub use document::Document;
+// `State::net`: the network editor's cursor, lattice, pan and look.
+mod network;
+pub use network::NetworkView;
 
 /// Which node the params pane is showing: the editor's level, the slot
 /// there, and the node's id. All three, because no one of them is an
@@ -862,7 +865,7 @@ pub struct PendingWindowDrag {
     pub action: cce_ui::engine::WindowAction,
 }
 
-/// Animated drop-target glow (see [`State::drop_glow`]).
+/// Animated drop-target glow (see [`NetworkView::drop_glow`]).
 #[derive(Debug, Clone, Copy)]
 pub struct DropGlow {
     pub x: f32,
@@ -889,7 +892,6 @@ pub struct State {
     pub pending_window_drag: Option<PendingWindowDrag>,
     pub window_action: Option<cce_ui::engine::WindowAction>,
     pub vertex_count_spheres: u32,
-    pub node_color: [f32; 4],
     pub origin_size: f32,
     pub camera_pivot_size: f32,
 
@@ -901,11 +903,6 @@ pub struct State {
     /// writes nothing when the selection has moved on since. See
     /// [`State::param_pane_target`].
     pub(crate) param_pane_source: Option<ParamPaneTarget>,
-    /// The copied nodes, with the positions they were copied FROM — a paste
-    /// lays them back out in the same shape, offset to the cursor. A Vec
-    /// rather than one node because an expanded cursor selects many, and a
-    /// copy that silently took one of them would be a trap.
-    pub node_clipboard: Vec<FsNode>,
 
     pub shortcut_manager: ShortcutManager,
     /// A chord matched this frame, run on the next tick — the command's
@@ -971,12 +968,6 @@ pub struct State {
     /// grid cursor goes if the menu is turned to the network's, so Add Node
     /// places at the cell pointed at, as the plated network's press does.
     pub network_menu_cell: Option<(i32, i32)>,
-    /// Which of the two a scroll gesture over the plateless network goes
-    /// to — the graph (a node was under the pointer when it began) or the
-    /// scene — with where and when its last event came. Held for the whole
-    /// gesture: a pan slides the node out from under a pointer that does
-    /// not move, and the rest of the swipe must not become an orbit.
-    pub overlay_wheel: Option<OverlayWheel>,
     /// The plate corner menu — same `context_menu` thread-local again; the slot
     /// says which plate's control opened it (and doubles as the pressed state
     /// the corner control paints with).
@@ -1006,15 +997,6 @@ pub struct State {
     /// first call is this process's own and every later one is a REPLACEMENT
     /// after a reconnect. Remembering is the only way to tell them apart.
     pub seen_renderer: bool,
-    /// The grid cell an explicit deselect happened in.
-    ///
-    /// The selection IS whatever sits in the cursor's cell — that is what
-    /// `sync_cursor_and_selection` means — so simply clearing it does not
-    /// stick: the sync runs on nearly every frame that changes anything and
-    /// puts it straight back. Remembering the cell lets the sync leave that one
-    /// alone, and only that one: navigate anywhere else and selection resumes,
-    /// which is why this is a cell rather than a flag.
-    pub deselected_cell: Option<(i32, i32)>,
     /// An in-flight camera orbit drag: the cursor position the last motion was
     /// measured from. `None` when no orbit drag is running.
     pub orbit_drag: Option<(f32, f32)>,
@@ -1058,27 +1040,9 @@ pub struct State {
 
     pub cursor_x: f32,
     pub cursor_y: f32,
-    pub grid_cursor_col: i32,
-    pub grid_cursor_row: i32,
-    /// The grid cursor EXPANDED over a region: the cell it was anchored at
-    /// when a drag began, and the far cell that drag reached.
-    ///
-    /// Read through [`grid_cursor_region`](State::grid_cursor_region), which
-    /// hands it back only while its anchor is still the live cursor cell.
-    /// That is the whole collapse rule: every OTHER way the cursor moves — a
-    /// nav key, a click, a load, a selection following a node — leaves the
-    /// anchor behind and the region goes with it, without a line in any of
-    /// those places. A flag reset by hand at fifteen call sites is a flag
-    /// that gets missed at one of them, and a cursor left stretched across
-    /// the sheet is not a subtle wrong.
-    pub grid_cursor_expanse: Option<((i32, i32), (i32, i32))>,
-    /// A node drag that is carrying the whole selection. `None` for an
-    /// ordinary one-node drag, which the widget handles by itself.
-    pub node_drag_group: Option<NodeDragGroup>,
-    /// The anchor of a LIVE expansion drag — a left press on empty grid,
-    /// cleared on release. `Some` is what makes motion grow the region
-    /// rather than do nothing; the region it leaves behind outlives it.
-    pub grid_cursor_drag: Option<(i32, i32)>,
+    /// The network editor's own state: the grid cursor and its region, the
+    /// lattice, the pan and its fling, the nodes' look (`src/app/network.rs`).
+    pub net: NetworkView,
     pub modifiers: ModifiersState,
 
     pub width: f32,
@@ -1087,38 +1051,7 @@ pub struct State {
     pub physical_height: u32,
     pub scale: f64,
     pub square_viewport: bool,
-    /// Whether a dragged node snaps to cells: always, in this app — to a
-    /// cell it can land on (cce-ui's `Graph::drag_update`). Not read from
-    /// `style.surface.graph.grid_snap`.
-    pub grid_snap_enabled: bool,
-    /// The configured grid geometry (`configured_grid_geometry`) the live
-    /// one is a zoom of — the 100% baseline as it was last read. A config
-    /// reload that moves it re-applies the grid at the zoom in hand
-    /// (`update_graph_settings_from_config`).
-    pub grid_base: GridGeometry,
-    /// The network grid at the current zoom. The pitch — centre of one grid
-    /// line to the centre of the next, per axis — is the grid's one size,
-    /// and a node's (col, row) is the intersection its centre sits on. The
-    /// node body's size is its own, not the pitch's; zoom scales the two
-    /// together (`scale_grid_geometry`) and nothing else relates them.
-    pub grid: GridGeometry,
 
-    pub pan_x: f32,
-    pub pan_y: f32,
-    /// Drag-release fling only (middle / space+left drag over the network
-    /// pane): tracked while `is_panning`, integrated by the kinetic slide in
-    /// `tick_frame`. Wheel and trackpad panning no longer feed it — that
-    /// motion is the Graph widget's own `ScrollMotion` (glide / coast).
-    pub pan_velocity_x: f32,
-    pub pan_velocity_y: f32,
-    pub last_frame_pan_x: f32,
-    pub last_frame_pan_y: f32,
-    pub is_panning: bool,
-    pub pan_start_cx: f32,
-    pub pan_start_cy: f32,
-    pub pan_start_x: f32,
-    pub pan_start_y: f32,
-    pub space_pressed: bool,
     pub active_camera: String,
     pub show_network: bool,
     /// Whether the params pane draws its PLATE. With it off the rows stand
@@ -1136,9 +1069,6 @@ pub struct State {
     pub last_spreadsheet_read_at: (i32, u64),
     pub grid_thickness: f32,
     pub focused_pane: usize,
-    pub graph_scroll_speed: f32,
-    pub graph_inertial_scroll: bool,
-    pub graph_scroll_friction: f32,
     pub last_config_read: Instant,
     pub circular_network_pane: bool,
     pub circular_network_layout: crate::panes::CircularPaneLayout,
@@ -1166,33 +1096,11 @@ pub struct State {
     pub last_project_check: std::time::Instant,
     pub needs_autosave: bool,
     pub last_autosave_time: std::time::Instant,
-    /// The drop-target glow's animation state: position glides toward the
-    /// cell an in-flight node drag will land on, alpha fades in on drag
-    /// start and out after release (the glow lingers at its last cell while
-    /// fading). None once fully faded. Advanced in [`State::tick_frame`],
-    /// drawn by the CONTENT branch in render.rs.
-    pub drop_glow: Option<DropGlow>,
     /// The params plate as drawn: `[x, y, w, h, round]`, eased each tick
     /// toward `params_plate_target` — `round` 0 is the plate fitted to the
     /// rows, 1 the small circle it collapses to with no rows to show. `None`
     /// with no plate, and before the first tick (the target is drawn then).
     pub params_plate_shown: Option<[f32; 5]>,
-    pub network_opacity: f32,
-    /// Node-domain opacity (style.surface.graph.node.opacity) — independent of
-    /// the pane's network_opacity; fades node bodies/wires/ports and node text.
-    pub node_opacity: f32,
-    /// The node bodies' own backdrop compression (`style.surface.graph.
-    /// node_compression`, 0..1), overriding the pane material's for nodes
-    /// only — the plates can stay clear while the tablets sitting on them
-    /// pull the view toward the tint's key and read as solid. None = the
-    /// pane's.
-    pub node_compression: Option<f32>,
-    /// The node bodies' own tint (`style.surface.graph.node_tint`, rgba,
-    /// LINEAR once read), overriding the pane material's for the bodies and
-    /// the name floors — what compression pulls the backdrop toward, so a
-    /// light tint is a light node. None = the pane's. See
-    /// [`State::node_ink`] for what it does to the names.
-    pub node_tint: Option<[f32; 4]>,
     pub last_design_mod_time: Option<std::time::SystemTime>,
     pub last_config_mod_time: Option<std::time::SystemTime>,
     /// The active app-mode drag (pane edge resize), if any. See [`AppDrag`].
@@ -1834,8 +1742,8 @@ impl State {
             || self.app_drag.is_some()
             || self.orbit_drag.is_some()
             || self.pan_drag.is_some()
-            || self.is_panning
-            || self.grid_cursor_drag.is_some()
+            || self.net.is_panning
+            || self.net.grid_cursor_drag.is_some()
             || self.viewer_tool.as_ref().map_or(false, |t| t.drag.is_some())
             || (self.slider_menu_open() && cce_ui::widget::context_menu::slider_dragging())
             || self.dialog_visible()
@@ -2197,11 +2105,11 @@ impl State {
     pub(crate) fn overlay_wheel_to_graph(&mut self, phase: cce_ui::widget::scroll_motion::ScrollPhase) -> bool {
         let now = Instant::now();
         let at = (self.cursor_x, self.cursor_y);
-        let held = self.overlay_wheel.filter(|w| {
+        let held = self.net.overlay_wheel.filter(|w| {
             now.duration_since(w.last) < OVERLAY_WHEEL_GAP && (w.at.0 - at.0).abs() < 4.0 && (w.at.1 - at.1).abs() < 4.0
         });
         let graph = held.map_or_else(|| self.overlay_claims(at.0, at.1), |w| w.graph);
-        self.overlay_wheel = if phase == cce_ui::widget::scroll_motion::ScrollPhase::FingerEnd {
+        self.net.overlay_wheel = if phase == cce_ui::widget::scroll_motion::ScrollPhase::FingerEnd {
             None
         } else {
             Some(OverlayWheel { graph, at, last: now })
@@ -4969,8 +4877,8 @@ impl State {
     /// to the cell the menu was opened over, when it was opened over one.
     pub(crate) fn open_network_menu_from_viewport(&mut self, at: (f32, f32)) {
         if let Some((col, row)) = self.network_menu_cell.take() {
-            self.grid_cursor_col = col;
-            self.grid_cursor_row = row;
+            self.net.grid_cursor_col = col;
+            self.net.grid_cursor_row = row;
         }
         if self.focused_pane != LEFT_MENUBAR_IDX {
             self.focused_pane = LEFT_MENUBAR_IDX;
@@ -5366,14 +5274,14 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         self.drag_widget = None;
         self.app_drag = None;
         self.focused_widget = None;
-        self.pan_x = 0.0;
-        self.pan_y = 0.0;
-        self.pan_velocity_x = 0.0;
-        self.pan_velocity_y = 0.0;
-        self.last_frame_pan_x = 0.0;
-        self.last_frame_pan_y = 0.0;
-        self.grid_cursor_col = 0;
-        self.grid_cursor_row = 0;
+        self.net.pan_x = 0.0;
+        self.net.pan_y = 0.0;
+        self.net.pan_velocity_x = 0.0;
+        self.net.pan_velocity_y = 0.0;
+        self.net.last_frame_pan_x = 0.0;
+        self.net.last_frame_pan_y = 0.0;
+        self.net.grid_cursor_col = 0;
+        self.net.grid_cursor_row = 0;
         self.sync_grid_settings();
         self.sync_nodes();
         self.rebuild_scene_geometry();
@@ -5397,8 +5305,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                     }
                 };
                 if let Some((pos_x, pos_y)) = pos {
-                    self.grid_cursor_col = pos_x as i32;
-                    self.grid_cursor_row = pos_y as i32;
+                    self.net.grid_cursor_col = pos_x as i32;
+                    self.net.grid_cursor_row = pos_y as i32;
                     self.sync_cursor_and_selection();
                 }
             }
@@ -6150,7 +6058,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             pending_window_drag: None,
             window_action: None,
             vertex_count_spheres: 0,
-            node_color: cce_ui::color::graph_node_color(),
             origin_size: settings.viewport.origin_size,
             camera_pivot_size: settings.viewport.camera_pivot_size,
             doc: Document {
@@ -6167,7 +6074,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                     .unwrap_or(cce_ui::units::Unit::Mm),
             },
             param_pane_source: None,
-            node_clipboard: Vec::new(),
             shortcut_manager,
             pending_command: None,
             exit_requested: false,
@@ -6194,14 +6100,12 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             network_menu_actions: Vec::new(),
             network_menu_from: None,
             network_menu_cell: None,
-            overlay_wheel: None,
             sim_cache: crate::geometry::SimCache::default(),
             playbar_cache_key: None,
             page_image: None,
             page_shown: None,
             page_composed: None,
             seen_renderer: false,
-            deselected_cell: None,
             orbit_drag: None,
             pan_drag: None,
             pan_exact: None,
@@ -6217,11 +6121,40 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             focused_widget: None,
             cursor_x: 0.0,
             cursor_y: 0.0,
-            grid_cursor_col: 0,
-            grid_cursor_row: 0,
-            grid_cursor_expanse: None,
-            grid_cursor_drag: None,
-            node_drag_group: None,
+            net: NetworkView {
+                grid_cursor_col: 0,
+                grid_cursor_row: 0,
+                grid_cursor_expanse: None,
+                grid_cursor_drag: None,
+                deselected_cell: None,
+                node_drag_group: None,
+                node_clipboard: Vec::new(),
+                grid_snap_enabled: true,
+                grid_base: cfg_grid,
+                grid: cfg_grid,
+                pan_x,
+                pan_y,
+                pan_velocity_x: 0.0,
+                pan_velocity_y: 0.0,
+                last_frame_pan_x: pan_x,
+                last_frame_pan_y: pan_y,
+                is_panning: false,
+                pan_start_cx: 0.0,
+                pan_start_cy: 0.0,
+                pan_start_x: 0.0,
+                pan_start_y: 0.0,
+                space_pressed: false,
+                graph_scroll_speed: 1.0,
+                graph_inertial_scroll: true,
+                graph_scroll_friction: 0.90,
+                overlay_wheel: None,
+                network_opacity: 0.95,
+                node_opacity: 1.0,
+                node_compression: None,
+                node_tint: None,
+                node_color: cce_ui::color::graph_node_color(),
+                drop_glow: None,
+            },
             modifiers: ModifiersState::default(),
             width: lw,
             height: lh,
@@ -6229,21 +6162,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             physical_height: ph,
             scale,
             square_viewport: settings.viewport.square,
-            grid_snap_enabled: true,
-            grid_base: cfg_grid,
-            grid: cfg_grid,
-            pan_x,
-            pan_y,
-            pan_velocity_x: 0.0,
-            pan_velocity_y: 0.0,
-            last_frame_pan_x: pan_x,
-            last_frame_pan_y: pan_y,
-            is_panning: false,
-            pan_start_cx: 0.0,
-            pan_start_cy: 0.0,
-            pan_start_x: 0.0,
-            pan_start_y: 0.0,
-            space_pressed: false,
             active_camera,
             show_network: true,
             params_plate: settings.viewport.params_plate,
@@ -6261,9 +6179,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             // shape the drag-release fling and the unrouted wheel fallback
             // only — routed wheel/trackpad panning is tuned by cce-ui's
             // smooth-scroll settings (input.kdl) inside the Graph widget.
-            graph_scroll_speed: 1.0,
-            graph_inertial_scroll: true,
-            graph_scroll_friction: 0.90,
             last_config_read: Instant::now(),
             circular_network_pane: is_detached_network || settings.viewport.circular_pane,
             circular_network_layout: crate::panes::CircularPaneLayout::new(250.0, 300.0, 180.0),
@@ -6282,12 +6197,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             // Cells and gaps render as ONE surface (the graph's bg_color is
             // the cell tint): the checkerboard grout is off by design; the
             // drop-target glow (render.rs) carries the only cell highlight.
-            drop_glow: None,
             params_plate_shown: None,
-            network_opacity: 0.95,
-            node_opacity: 1.0,
-            node_compression: None,
-            node_tint: None,
             last_design_mod_time: {
                 let design_path = DesignSettings::file_path();
                 std::fs::metadata(&design_path).and_then(|m| m.modified()).ok()
@@ -6385,7 +6295,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         state.update_inertial_settings();
         state.update_graph_settings_from_config();
         state.update_window_title();
-        color::set_node_color(state.node_color);
+        color::set_node_color(state.net.node_color);
         state.migrate_meta_settings_node();
         state.sync_nodes();
         state.rebuild_scene_geometry();
@@ -6429,18 +6339,18 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     /// hands the widget, so the cursor drawn here and the nodes the widget
     /// draws cannot disagree.
     pub fn node_size(&self) -> (f32, f32) {
-        (self.grid.node_w, self.grid.node_h)
+        (self.net.grid.node_w, self.net.grid.node_h)
     }
 
     /// Put the grid at a geometry outright (Reset Zoom, Frame All's fit).
     pub fn set_grid_geometry(&mut self, g: GridGeometry) {
-        self.grid = g;
+        self.net.grid = g;
     }
 
     /// Scale the grid geometry by one factor — the pitch and the node body
     /// together, which is the only way the two are related.
     pub fn scale_grid_geometry(&mut self, f: f32) {
-        self.grid = self.grid.scaled(f);
+        self.net.grid = self.net.grid.scaled(f);
     }
 
     /// The window-space centre of lattice cell (col, row) in the network
@@ -6450,8 +6360,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     pub fn cell_center(&self, col: i32, row: i32) -> (f32, f32) {
         let (px, py, _, _) = self.positions[CONTENT_IDX];
         (
-            px + self.pan_x + col as f32 * self.grid.pitch_x,
-            py + self.pan_y + row as f32 * self.grid.pitch_y,
+            px + self.net.pan_x + col as f32 * self.net.grid.pitch_x,
+            py + self.net.pan_y + row as f32 * self.net.grid.pitch_y,
         )
     }
 
@@ -6468,18 +6378,18 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     /// its intersection, so a click between two nodes belongs to the closer.
     pub fn cell_at(&self, x: f32, y: f32) -> (i32, i32) {
         let (px, py, _, _) = self.positions[CONTENT_IDX];
-        let col = if self.grid.pitch_x > 0.0 { ((x - px - self.pan_x) / self.grid.pitch_x).round() } else { 0.0 };
-        let row = if self.grid.pitch_y > 0.0 { ((y - py - self.pan_y) / self.grid.pitch_y).round() } else { 0.0 };
+        let col = if self.net.grid.pitch_x > 0.0 { ((x - px - self.net.pan_x) / self.net.grid.pitch_x).round() } else { 0.0 };
+        let row = if self.net.grid.pitch_y > 0.0 { ((y - py - self.net.pan_y) / self.net.grid.pitch_y).round() } else { 0.0 };
         (col as i32, row as i32)
     }
 
     /// The lattice region the cursor covers: `(col, row, cols, rows)`, never
     /// smaller than one cell. The expanse a drag left behind counts only
     /// while its anchor is still where the cursor is — see
-    /// [`grid_cursor_expanse`](State::grid_cursor_expanse).
+    /// [`grid_cursor_expanse`](NetworkView::grid_cursor_expanse).
     pub fn grid_cursor_region(&self) -> (i32, i32, i32, i32) {
-        let anchor = (self.grid_cursor_col, self.grid_cursor_row);
-        let far = match self.grid_cursor_expanse {
+        let anchor = (self.net.grid_cursor_col, self.net.grid_cursor_row);
+        let far = match self.net.grid_cursor_expanse {
             Some((a, far)) if a == anchor => far,
             _ => anchor,
         };
@@ -6539,10 +6449,10 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     /// selection being dragged across the sheet needs, since stepping the
     /// anchor alone is precisely the thing that collapses the region.
     pub fn shift_grid_cursor(&mut self, dc: i32, dr: i32) {
-        self.grid_cursor_col += dc;
-        self.grid_cursor_row += dr;
-        if let Some((anchor, far)) = self.grid_cursor_expanse {
-            self.grid_cursor_expanse =
+        self.net.grid_cursor_col += dc;
+        self.net.grid_cursor_row += dr;
+        if let Some((anchor, far)) = self.net.grid_cursor_expanse {
+            self.net.grid_cursor_expanse =
                 Some(((anchor.0 + dc, anchor.1 + dr), (far.0 + dc, far.1 + dr)));
         }
     }
@@ -6550,13 +6460,13 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     /// Grow the live expansion drag to the cell under the cursor. `true` when
     /// the region actually changed, which is the redraw.
     fn grid_cursor_drag_motion(&mut self) -> bool {
-        let Some(anchor) = self.grid_cursor_drag else { return false };
+        let Some(anchor) = self.net.grid_cursor_drag else { return false };
         let far = self.cell_at(self.cursor_x, self.cursor_y);
         let next = (anchor != far).then_some((anchor, far));
-        if self.grid_cursor_expanse == next {
+        if self.net.grid_cursor_expanse == next {
             return false;
         }
-        self.grid_cursor_expanse = next;
+        self.net.grid_cursor_expanse = next;
         true
     }
 
@@ -6564,12 +6474,12 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         let active_node_area_y = self.positions[CONTENT_IDX].1;
         let active_node_area_x = self.positions[CONTENT_IDX].0;
 
-        let grid_pitch_x = self.grid.pitch_x;
-        let grid_pitch_y = self.grid.pitch_y;
+        let grid_pitch_x = self.net.grid.pitch_x;
+        let grid_pitch_y = self.net.grid.pitch_y;
         let (node_w, node_h) = self.node_size();
-        let pan_x = self.pan_x;
-        let pan_y = self.pan_y;
-        let grid_snap_enabled = self.grid_snap_enabled;
+        let pan_x = self.net.pan_x;
+        let pan_y = self.net.pan_y;
+        let grid_snap_enabled = self.net.grid_snap_enabled;
         let graph = self.graph_mut();
         // The lattice is not drawn (since 2026-10-07): the widget is told
         // so, though the designer never asks it to paint the grid either.
@@ -6579,14 +6489,14 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         graph.set_grid_origin(active_node_area_x + pan_x, active_node_area_y + pan_y);
         graph.set_grid_snap_enabled(grid_snap_enabled);
         if let Some(graph) = self.ui_context[self.slots.content].as_any_mut().downcast_mut::<cce_ui::widget::Graph>() {
-            graph.set_network_opacity(self.network_opacity);
-            graph.set_node_opacity(self.node_opacity);
+            graph.set_network_opacity(self.net.network_opacity);
+            graph.set_node_opacity(self.net.node_opacity);
         }
         if let Some(menubar) = self.ui_context[self.slots.left_menubar].as_any_mut().downcast_mut::<cce_ui::widget::MenuBar>() {
-            menubar.set_network_opacity(self.network_opacity);
+            menubar.set_network_opacity(self.net.network_opacity);
         }
         if let Some(breadcrumb) = self.ui_context[self.slots.breadcrumb].as_any_mut().downcast_mut::<cce_ui::widget::Breadcrumb>() {
-            breadcrumb.set_network_opacity(self.network_opacity);
+            breadcrumb.set_network_opacity(self.net.network_opacity);
         }
 
     }
@@ -6624,9 +6534,9 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         // The viewport's orbit and zoom are ScrollMotions too: they take the
         // speed and the on/off switch from here, and how long a coast runs
         // from input.kdl's `scroll_friction`, as the network pan does.
-        self.graph_scroll_speed = speed;
-        self.graph_inertial_scroll = enabled;
-        self.graph_scroll_friction = friction;
+        self.net.graph_scroll_speed = speed;
+        self.net.graph_inertial_scroll = enabled;
+        self.net.graph_scroll_friction = friction;
         self.viewport_mut().scroll_speed = speed;
         self.viewport_mut().inertial_scroll = enabled;
     }
@@ -6648,25 +6558,25 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
 
         let mut changed = false;
 
-        if self.node_tint != node_tint {
-            self.node_tint = node_tint;
+        if self.net.node_tint != node_tint {
+            self.net.node_tint = node_tint;
             changed = true;
         }
 
-        if self.node_compression != node_compression {
-            self.node_compression = node_compression;
+        if self.net.node_compression != node_compression {
+            self.net.node_compression = node_compression;
             changed = true;
         }
-        if (self.network_opacity - opacity).abs() > 0.001 {
-            self.network_opacity = opacity;
+        if (self.net.network_opacity - opacity).abs() > 0.001 {
+            self.net.network_opacity = opacity;
             changed = true;
         }
-        if (self.node_opacity - node_opacity).abs() > 0.001 {
-            self.node_opacity = node_opacity;
+        if (self.net.node_opacity - node_opacity).abs() > 0.001 {
+            self.net.node_opacity = node_opacity;
             changed = true;
         }
-        if self.node_color != node_color {
-            self.node_color = node_color;
+        if self.net.node_color != node_color {
+            self.net.node_color = node_color;
             color::set_node_color(node_color);
             changed = true;
         }
@@ -6679,10 +6589,10 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         // 2026-10-06 the live geometry was set at startup and only zoomed
         // after it, so an edit waited for Reset Zoom or a restart.
         let base = configured_grid_geometry();
-        if base != self.grid_base {
-            let zoom = if self.grid_base.pitch_x > 0.0 { self.grid.pitch_x / self.grid_base.pitch_x } else { 1.0 };
+        if base != self.net.grid_base {
+            let zoom = if self.net.grid_base.pitch_x > 0.0 { self.net.grid.pitch_x / self.net.grid_base.pitch_x } else { 1.0 };
             self.set_grid_geometry(base.scaled(zoom));
-            self.grid_base = base;
+            self.net.grid_base = base;
             changed = true;
         }
 
@@ -6698,10 +6608,10 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     /// centre when none is given): the pitch scales, and the pan moves so the
     /// lattice point under the anchor stays under it.
     pub fn zoom(&mut self, factor: f32, center: Option<(f32, f32)>) {
-        self.pan_velocity_x = 0.0;
-        self.pan_velocity_y = 0.0;
-        let old_px = self.grid.pitch_x;
-        let old_py = self.grid.pitch_y;
+        self.net.pan_velocity_x = 0.0;
+        self.net.pan_velocity_y = 0.0;
+        let old_px = self.net.grid.pitch_x;
+        let old_py = self.net.grid.pitch_y;
 
         // The x pitch is clamped and the y pitch follows by the SAME factor,
         // so the node body — scaled by that factor too — keeps its shape.
@@ -6716,15 +6626,15 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         let (area_x, area_y, _, _) = self.positions[CONTENT_IDX];
         let (cx, cy) = match center {
             Some(pt) => pt,
-            None => self.cell_center(self.grid_cursor_col, self.grid_cursor_row),
+            None => self.cell_center(self.net.grid_cursor_col, self.net.grid_cursor_row),
         };
 
         // The anchor's lattice coordinate, in pitches, is what must not move.
-        let col_f = (cx - area_x - self.pan_x) / old_px;
-        let row_f = (cy - area_y - self.pan_y) / old_py;
+        let col_f = (cx - area_x - self.net.pan_x) / old_px;
+        let row_f = (cy - area_y - self.net.pan_y) / old_py;
 
-        self.pan_x = cx - area_x - col_f * new_px;
-        self.pan_y = cy - area_y - row_f * new_py;
+        self.net.pan_x = cx - area_x - col_f * new_px;
+        self.net.pan_y = cy - area_y - row_f * new_py;
 
         self.scale_grid_geometry(factor);
 
@@ -6733,7 +6643,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
 
 
     pub fn keep_cursor_in_view(&mut self) {
-        self.keep_cell_in_view(self.grid_cursor_col, self.grid_cursor_row);
+        self.keep_cell_in_view(self.net.grid_cursor_col, self.net.grid_cursor_row);
     }
 
     /// Pan the least that brings one lattice cell fully into the pane. The
@@ -6745,15 +6655,15 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         let (cx, cy, cw, ch) = self.cell_rect(col, row);
 
         if cx < px {
-            self.pan_x -= cx - px;
+            self.net.pan_x -= cx - px;
         } else if cx + cw > px + pw {
-            self.pan_x -= cx + cw - (px + pw);
+            self.net.pan_x -= cx + cw - (px + pw);
         }
 
         if cy < py {
-            self.pan_y -= cy - py;
+            self.net.pan_y -= cy - py;
         } else if cy + ch > py + ph {
-            self.pan_y -= cy + ch - (py + ph);
+            self.net.pan_y -= cy + ch - (py + ph);
         }
         self.sync_grid_settings();
     }
@@ -7333,8 +7243,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 .selected_node()
                 .and_then(|sel| self.current_dir().children.get(sel).map(|c| c.position));
             if let Some((cx, cy)) = sel_pos {
-                self.grid_cursor_col = cx as i32;
-                self.grid_cursor_row = cy as i32;
+                self.net.grid_cursor_col = cx as i32;
+                self.net.grid_cursor_row = cy as i32;
             }
             self.keep_cursor_in_view();
             self.rebuild_positions();
@@ -7359,8 +7269,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         // cursor comes back on the next sync anyway, while a region would
         // stand until the cursor was moved off its anchor.
         if self.grid_cursor_expanded() {
-            self.grid_cursor_expanse = None;
-            self.grid_cursor_drag = None;
+            self.net.grid_cursor_expanse = None;
+            self.net.grid_cursor_drag = None;
             self.sync_parameters_pane();
             return true;
         }
@@ -7368,7 +7278,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             return false;
         }
         self.graph_mut().set_selected_node(None);
-        self.deselected_cell = Some((self.grid_cursor_col, self.grid_cursor_row));
+        self.net.deselected_cell = Some((self.net.grid_cursor_col, self.net.grid_cursor_row));
         if self.focused_widget == Some(CONTENT_IDX) {
             self.focused_widget = None;
         }
@@ -7389,11 +7299,11 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         if self.focused_pane != LEFT_MENUBAR_IDX {
             return false;
         }
-        self.pan_velocity_x = 0.0;
-        self.pan_velocity_y = 0.0;
-        self.grid_cursor_col += dc;
-        self.grid_cursor_row += dr;
-        self.deselected_cell = None;
+        self.net.pan_velocity_x = 0.0;
+        self.net.pan_velocity_y = 0.0;
+        self.net.grid_cursor_col += dc;
+        self.net.grid_cursor_row += dr;
+        self.net.deselected_cell = None;
         self.sync_cursor_and_selection();
         self.keep_cursor_in_view();
         true
@@ -7409,7 +7319,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     /// picked up. It is the same bargain `network_move_node` has always made
     /// with alt+hjkl.
     fn drag_group_to(&mut self, dest: (i32, i32)) {
-        let Some(group) = self.node_drag_group.clone() else { return };
+        let Some(group) = self.net.node_drag_group.clone() else { return };
         let (dc, dr) = (dest.0 - group.from.0, dest.1 - group.from.1);
         let len = self.current_dir().children.len();
         for (slot, origin) in group.others {
@@ -7455,9 +7365,9 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             .collect();
         match cells.split_first() {
             None => {
-                self.grid_cursor_col = col + (cols - 1) / 2;
-                self.grid_cursor_row = row + (rows - 1) / 2;
-                self.grid_cursor_expanse = None;
+                self.net.grid_cursor_col = col + (cols - 1) / 2;
+                self.net.grid_cursor_row = row + (rows - 1) / 2;
+                self.net.grid_cursor_expanse = None;
             }
             Some((first, rest)) => {
                 let (mut c0, mut r0, mut c1, mut r1) = (first.0, first.1, first.0, first.1);
@@ -7467,16 +7377,16 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                     c1 = c1.max(c);
                     r1 = r1.max(r);
                 }
-                self.grid_cursor_col = c0;
-                self.grid_cursor_row = r0;
-                self.grid_cursor_expanse =
+                self.net.grid_cursor_col = c0;
+                self.net.grid_cursor_row = r0;
+                self.net.grid_cursor_expanse =
                     ((c1, r1) != (c0, r0)).then_some(((c0, r0), (c1, r1)));
             }
         }
         // A settle that lands on a node selects it, and one that lands on
         // empty grid clears the single selection — the ordinary cursor rules,
         // which is what the cursor is again whenever the region collapsed.
-        self.deselected_cell = None;
+        self.net.deselected_cell = None;
         self.sync_cursor_and_selection();
         true
     }
@@ -7498,15 +7408,15 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         if self.focused_pane != LEFT_MENUBAR_IDX {
             return false;
         }
-        let anchor = (self.grid_cursor_col, self.grid_cursor_row);
-        let far = match self.grid_cursor_expanse {
+        let anchor = (self.net.grid_cursor_col, self.net.grid_cursor_row);
+        let far = match self.net.grid_cursor_expanse {
             Some((a, far)) if a == anchor => far,
             _ => anchor,
         };
         let far = (far.0 + dc, far.1 + dr);
-        self.grid_cursor_expanse = (far != anchor).then_some((anchor, far));
-        self.pan_velocity_x = 0.0;
-        self.pan_velocity_y = 0.0;
+        self.net.grid_cursor_expanse = (far != anchor).then_some((anchor, far));
+        self.net.pan_velocity_x = 0.0;
+        self.net.pan_velocity_y = 0.0;
         self.keep_cell_in_view(far.0, far.1);
         true
     }
@@ -7515,7 +7425,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     pub(crate) fn copy_selected_nodes(&mut self) {
         let slots = self.selected_slots();
         let dir = self.current_dir();
-        self.node_clipboard = slots
+        self.net.node_clipboard = slots
             .into_iter()
             .filter_map(|i| dir.children.get(i).cloned())
             .collect();
@@ -7540,31 +7450,31 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     /// spliced into that wire, as Add Node there would be: one node, or a
     /// chain with one head and one tail, goes in whole.
     pub(crate) fn paste_nodes(&mut self) -> bool {
-        if self.node_clipboard.is_empty() {
+        if self.net.node_clipboard.is_empty() {
             return false;
         }
         // Whole or not at all: a set that half belongs here is pasted
         // nowhere, rather than as the part that does with its wires cut.
         let here = crate::context::context_at(&self.doc.current_path);
         if let Some(why) = self
-            .node_clipboard
+            .net.node_clipboard
             .iter()
             .find_map(|n| crate::context::refusal(&n.name, &n.node_type, here))
         {
             self.update_status_text(&format!("Not pasted: {why}"));
             return false;
         }
-        let origin = self.node_clipboard.iter().fold((f32::MAX, f32::MAX), |(x, y), n| {
+        let origin = self.net.node_clipboard.iter().fold((f32::MAX, f32::MAX), |(x, y), n| {
             (x.min(n.position.0), y.min(n.position.1))
         });
-        let (cx, cy) = (self.grid_cursor_col as f32, self.grid_cursor_row as f32);
+        let (cx, cy) = (self.net.grid_cursor_col as f32, self.net.grid_cursor_row as f32);
         // Asked before the paste, whose nodes' own wires would touch the cell.
         let free = !self.current_dir().children.iter().any(|c| c.position == (cx, cy));
         let wire = if free { self.graph().input_wire_through_cell(cx, cy) } else { None };
         let mut last = (cx, cy);
         let mut renamed: Vec<(String, String)> = Vec::new();
         let mut pasted: Vec<String> = Vec::new();
-        for source in self.node_clipboard.clone() {
+        for source in self.net.node_clipboard.clone() {
             let mut node = source;
             regenerate_node_ids(&mut node);
             let want = (cx + node.position.0 - origin.0, cy + node.position.1 - origin.1);
@@ -7597,9 +7507,9 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         // The cursor lands on the last node pasted, collapsed — the pasted
         // nodes are new, and the region that selected the originals means
         // nothing about them.
-        self.grid_cursor_col = last.0 as i32;
-        self.grid_cursor_row = last.1 as i32;
-        self.grid_cursor_expanse = None;
+        self.net.grid_cursor_col = last.0 as i32;
+        self.net.grid_cursor_row = last.1 as i32;
+        self.net.grid_cursor_expanse = None;
         self.sync_nodes();
         self.sync_cursor_and_selection();
         self.rebuild_positions();
@@ -7651,10 +7561,10 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             self.sync_layout();
         }
         if self.grid_cursor_expanded() {
-            self.pan_velocity_x = 0.0;
-            self.pan_velocity_y = 0.0;
+            self.net.pan_velocity_x = 0.0;
+            self.net.pan_velocity_y = 0.0;
             self.shift_grid_cursor(dc, dr);
-            self.deselected_cell = None;
+            self.net.deselected_cell = None;
             self.keep_cursor_in_view();
             return true;
         }
@@ -7670,10 +7580,10 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         if self.focused_pane != LEFT_MENUBAR_IDX {
             return false;
         }
-        self.pan_velocity_x = 0.0;
-        self.pan_velocity_y = 0.0;
-        self.pan_x -= dc as f32 * self.grid.pitch_x;
-        self.pan_y -= dr as f32 * self.grid.pitch_y;
+        self.net.pan_velocity_x = 0.0;
+        self.net.pan_velocity_y = 0.0;
+        self.net.pan_x -= dc as f32 * self.net.grid.pitch_x;
+        self.net.pan_y -= dr as f32 * self.net.grid.pitch_y;
         self.rebuild_positions();
         self.apply_layout();
         self.update_panel_bounds();
@@ -7700,10 +7610,10 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         // Pan so the cursor cell's centre — the lattice intersection it names
         // — lands at the pane's centre: the pane's half-extent minus the
         // cell's offset from the origin, which is its column times the pitch.
-        self.pan_x = pw * 0.5 - self.grid_cursor_col as f32 * self.grid.pitch_x;
-        self.pan_y = ph * 0.5 - self.grid_cursor_row as f32 * self.grid.pitch_y;
-        self.pan_velocity_x = 0.0;
-        self.pan_velocity_y = 0.0;
+        self.net.pan_x = pw * 0.5 - self.net.grid_cursor_col as f32 * self.net.grid.pitch_x;
+        self.net.pan_y = ph * 0.5 - self.net.grid_cursor_row as f32 * self.net.grid.pitch_y;
+        self.net.pan_velocity_x = 0.0;
+        self.net.pan_velocity_y = 0.0;
         self.sync_grid_settings();
         self.rebuild_positions();
         self.apply_layout();
@@ -7771,8 +7681,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
 
         if self.level_extent(&base).is_none() {
             self.set_grid_geometry(base);
-            self.pan_x = 20.0;
-            self.pan_y = 20.0;
+            self.net.pan_x = 20.0;
+            self.net.pan_y = 20.0;
         } else {
             // The extent is not linear in the zoom: a label's font stops
             // shrinking at 6 px and its width is rounded up, so the fit
@@ -7792,8 +7702,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
 
             self.set_grid_geometry(at(f));
             let (x0, x1, y0, y1) = self.level_extent(&at(f)).unwrap();
-            self.pan_x = (pw - (x1 - x0)) / 2.0 - x0;
-            self.pan_y = (ph - (y1 - y0)) / 2.0 - y0;
+            self.net.pan_x = (pw - (x1 - x0)) / 2.0 - x0;
+            self.net.pan_y = (ph - (y1 - y0)) / 2.0 - y0;
         }
 
         self.sync_grid_settings();
@@ -8165,13 +8075,13 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         // Not while a group drag is carrying the selection: the anchor is
         // holding the region still on purpose, and yanking it onto the
         // dragged node's cell would collapse the selection mid-gesture.
-        if self.node_drag_group.is_some() {
+        if self.net.node_drag_group.is_some() {
             return;
         }
         if let Some(sel_idx) = self.graph().selected_node() {
             if let Some(node) = updated_nodes.get(sel_idx) {
-                self.grid_cursor_col = node.position.0 as i32;
-                self.grid_cursor_row = node.position.1 as i32;
+                self.net.grid_cursor_col = node.position.0 as i32;
+                self.net.grid_cursor_row = node.position.1 as i32;
             }
         }
     }
@@ -8183,7 +8093,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         let dir = self.current_dir();
         let mut node_at_cursor_idx = None;
         for (i, node) in dir.children.iter().enumerate() {
-            if node.position.0 as i32 == self.grid_cursor_col && node.position.1 as i32 == self.grid_cursor_row {
+            if node.position.0 as i32 == self.net.grid_cursor_col && node.position.1 as i32 == self.net.grid_cursor_row {
                 node_at_cursor_idx = Some(i);
                 break;
             }
@@ -8193,13 +8103,13 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         // params pane — spends the remembered deselect. Otherwise clicking the
         // very node you deselected would clear itself again on this sync.
         if self.graph().selected_node().is_some() {
-            self.deselected_cell = None;
+            self.net.deselected_cell = None;
         }
 
         // An explicit deselect holds for the cell it happened in, and for no
         // other: step away and selection resumes by itself.
-        let node_at_cursor_idx = match self.deselected_cell {
-            Some(cell) if cell == (self.grid_cursor_col, self.grid_cursor_row) => None,
+        let node_at_cursor_idx = match self.net.deselected_cell {
+            Some(cell) if cell == (self.net.grid_cursor_col, self.net.grid_cursor_row) => None,
             _ => node_at_cursor_idx,
         };
 
@@ -8227,8 +8137,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 }
             };
             if let Some((pos_x, pos_y)) = pos {
-                self.grid_cursor_col = pos_x as i32;
-                self.grid_cursor_row = pos_y as i32;
+                self.net.grid_cursor_col = pos_x as i32;
+                self.net.grid_cursor_row = pos_y as i32;
             }
         } else {
             self.sync_cursor_and_selection();
@@ -8321,7 +8231,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         {
             let target = self.graph().drop_target_cell_rect();
             let ease = |k: f32| 1.0 - (-k * dt.max(1e-4)).exp();
-            match (&mut self.drop_glow, target) {
+            match (&mut self.net.drop_glow, target) {
                 (Some(g), Some((tx, ty, tw, th))) => {
                     let move_f = ease(18.0);
                     g.x += (tx - g.x) * move_f;
@@ -8343,12 +8253,12 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 (Some(g), None) => {
                     g.alpha -= g.alpha * ease(10.0);
                     if g.alpha < 0.02 {
-                        self.drop_glow = None;
+                        self.net.drop_glow = None;
                     }
                     glow_animating = true;
                 }
                 (None, Some((tx, ty, tw, th))) => {
-                    self.drop_glow = Some(DropGlow { x: tx, y: ty, w: tw, h: th, alpha: 0.0 });
+                    self.net.drop_glow = Some(DropGlow { x: tx, y: ty, w: tw, h: th, alpha: 0.0 });
                     glow_animating = true;
                 }
                 (None, None) => {}
@@ -8407,12 +8317,12 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                          self.viewport_mut().show_origin = settings.viewport.show_origin_enabled;
                          self.viewport_mut().show_camera_pivot = settings.viewport.show_camera_pivot_enabled;
                          self.viewport_mut().bg_color = settings.viewport.bg_color;
-                         self.node_color = cce_ui::color::graph_node_color();
+                         self.net.node_color = cce_ui::color::graph_node_color();
                          self.viewport_mut().grid_color = settings.viewport.grid_color;
                          self.origin_size = settings.viewport.origin_size;
                          self.camera_pivot_size = settings.viewport.camera_pivot_size;
 
-                        color::set_node_color(self.node_color);
+                        color::set_node_color(self.net.node_color);
 
                         self.update_origin_geometry();
                         self.update_grid_geometry();
@@ -8425,15 +8335,15 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         }
 
         // Panning velocity tracking
-        if self.is_panning {
+        if self.net.is_panning {
             if dt > 1e-5 {
-                let diff_x = self.pan_x - self.last_frame_pan_x;
-                let diff_y = self.pan_y - self.last_frame_pan_y;
-                self.pan_velocity_x = self.pan_velocity_x * 0.4 + (diff_x / dt) * 0.6;
-                self.pan_velocity_y = self.pan_velocity_y * 0.4 + (diff_y / dt) * 0.6;
+                let diff_x = self.net.pan_x - self.net.last_frame_pan_x;
+                let diff_y = self.net.pan_y - self.net.last_frame_pan_y;
+                self.net.pan_velocity_x = self.net.pan_velocity_x * 0.4 + (diff_x / dt) * 0.6;
+                self.net.pan_velocity_y = self.net.pan_velocity_y * 0.4 + (diff_y / dt) * 0.6;
             }
-            self.last_frame_pan_x = self.pan_x;
-            self.last_frame_pan_y = self.pan_y;
+            self.net.last_frame_pan_x = self.net.pan_x;
+            self.net.last_frame_pan_y = self.net.pan_y;
         }
 
         let mut tick_changed = false;
@@ -8489,9 +8399,9 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             let (ax, ay, _, _) = self.positions[CONTENT_IDX];
             let (gx, gy) = self.graph().grid_origin();
             let (nx, ny) = (gx - ax, gy - ay);
-            if nx != self.pan_x || ny != self.pan_y {
-                self.pan_x = nx;
-                self.pan_y = ny;
+            if nx != self.net.pan_x || ny != self.net.pan_y {
+                self.net.pan_x = nx;
+                self.net.pan_y = ny;
                 self.sync_grid_settings();
                 self.rebuild_positions();
                 self.apply_layout();
@@ -8531,23 +8441,23 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         // Drag-release fling: the velocity a middle / space+left drag had
         // when the button went up keeps the canvas sliding under friction.
         // (Wheel and trackpad motion coast inside the Graph widget instead.)
-        if !self.is_panning && (self.pan_velocity_x.abs() > 0.01 || self.pan_velocity_y.abs() > 0.01) {
-            if !self.graph_inertial_scroll {
-                self.pan_velocity_x = 0.0;
-                self.pan_velocity_y = 0.0;
+        if !self.net.is_panning && (self.net.pan_velocity_x.abs() > 0.01 || self.net.pan_velocity_y.abs() > 0.01) {
+            if !self.net.graph_inertial_scroll {
+                self.net.pan_velocity_x = 0.0;
+                self.net.pan_velocity_y = 0.0;
             } else {
-                self.pan_x += self.pan_velocity_x * dt;
-                self.pan_y += self.pan_velocity_y * dt;
+                self.net.pan_x += self.net.pan_velocity_x * dt;
+                self.net.pan_y += self.net.pan_velocity_y * dt;
 
                 // Apply dynamic friction decay
-                let decay = self.graph_scroll_friction.powf(dt * 60.0);
-                self.pan_velocity_x *= decay;
-                self.pan_velocity_y *= decay;
+                let decay = self.net.graph_scroll_friction.powf(dt * 60.0);
+                self.net.pan_velocity_x *= decay;
+                self.net.pan_velocity_y *= decay;
 
                 // If velocity magnitude is below 10.0 px/sec, stop completely.
-                if self.pan_velocity_x.hypot(self.pan_velocity_y) < 10.0 {
-                    self.pan_velocity_x = 0.0;
-                    self.pan_velocity_y = 0.0;
+                if self.net.pan_velocity_x.hypot(self.net.pan_velocity_y) < 10.0 {
+                    self.net.pan_velocity_x = 0.0;
+                    self.net.pan_velocity_y = 0.0;
                 }
 
                 self.sync_grid_settings();
@@ -8583,18 +8493,18 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                     && self.cursor_y >= py - 50.0 && self.cursor_y < py + ph + 50.0
                 {
                     if self.cursor_x < px + margin {
-                        self.pan_x += pan_speed;
+                        self.net.pan_x += pan_speed;
                         panned = true;
                     } else if self.cursor_x > px + pw - margin {
-                        self.pan_x -= pan_speed;
+                        self.net.pan_x -= pan_speed;
                         panned = true;
                     }
 
                     if self.cursor_y < py + margin {
-                        self.pan_y += pan_speed;
+                        self.net.pan_y += pan_speed;
                         panned = true;
                     } else if self.cursor_y > py + ph - margin {
-                        self.pan_y -= pan_speed;
+                        self.net.pan_y -= pan_speed;
                         panned = true;
                     }
                 }
@@ -8602,8 +8512,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         }
 
         if panned {
-            self.pan_velocity_x = 0.0;
-            self.pan_velocity_y = 0.0;
+            self.net.pan_velocity_x = 0.0;
+            self.net.pan_velocity_y = 0.0;
             self.sync_grid_settings();
             if let Some(idx) = self.drag_widget {
                 self.slots.get_dyn_mut(&mut self.ui_context, idx).set_modifiers(self.modifiers.control_key(), self.modifiers.shift_key(), self.modifiers.alt_key());

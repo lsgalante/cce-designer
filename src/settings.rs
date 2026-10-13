@@ -406,7 +406,7 @@ pub fn configured_grid_geometry() -> GridGeometry {
 /// either way. What matters is that the number is the suite's own.
 ///
 /// `graph_grid_snap` needs no pin: this app does not read it, a dragged node
-/// always snapping to a cell it can land on (`State::grid_snap_enabled`).
+/// always snapping to a cell it can land on (`State::net.grid_snap_enabled`).
 #[cfg(test)]
 pub fn configured_grid_geometry() -> GridGeometry {
     GridGeometry { pitch_x: 140.0, pitch_y: 70.0, node_w: 80.0, node_h: 40.0 }

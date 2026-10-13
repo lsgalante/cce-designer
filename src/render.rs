@@ -355,7 +355,7 @@ impl State {
             let mut fill = w.color();
             fill[3] = fill[3].abs();
             pc.circle(cx, cy, r, fill);
-            pc.arc(cx, cy, r, 3.0, 0.0, TAU, [0.35, 0.65, 0.95, 0.80 * self.network_opacity]);
+            pc.arc(cx, cy, r, 3.0, 0.0, TAU, [0.35, 0.65, 0.95, 0.80 * self.net.network_opacity]);
         } else if idx == DIALOG_IDX {
             // Modern-paint surface, the playbar's contract: the designer
             // authors the plate (the dialog floats, so the pane radii and the
@@ -501,7 +501,7 @@ impl State {
             // `node_compression` set it gets a floor of the bodies' material,
             // as each params row does (`param.backdrop_compression`).
             let label_floors =
-                if self.node_compression.is_some() { self.node_label_floors(w) } else { Vec::new() };
+                if self.net.node_compression.is_some() { self.node_label_floors(w) } else { Vec::new() };
 
             pc.clip(clip, |pc| {
                 // Node bodies wear the parameter plate's fill exactly — same
@@ -580,7 +580,7 @@ impl State {
                 // version banded visibly). Drawn under the node bodies: with
                 // grid snap the glow reads as a soft aura around the dragged
                 // body.
-                if let Some(gl) = self.drop_glow {
+                if let Some(gl) = self.net.drop_glow {
                     {
                         pc.glow(
                             rect(gl.x, gl.y, gl.w, gl.h),
@@ -895,7 +895,7 @@ impl State {
                     return;
                 }
                 if self.circular_network_pane {
-                    color[3] *= self.network_opacity;
+                    color[3] *= self.net.network_opacity;
                     pc.arc(
                         self.circular_network_layout.x,
                         self.circular_network_layout.y,
@@ -982,15 +982,15 @@ impl State {
     }
 
     /// The node bodies' material: the pane material, with the nodes' own
-    /// compression (State::node_compression) and tint (State::node_tint)
+    /// compression (NetworkView::node_compression) and tint (NetworkView::node_tint)
     /// where configured — the knobs that differ between a node body and the
     /// plate it sits on. The name floors wear it too.
     fn node_material(&self) -> cce_ui::scene::Material {
         let mut m = cce_ui::scene::Material::from_fill(cce_ui::scene::param_plate_fill());
-        if let (Some(k), cce_ui::scene::Frost::Frosted { compression, .. }) = (self.node_compression, &mut m.frost) {
+        if let (Some(k), cce_ui::scene::Frost::Frosted { compression, .. }) = (self.net.node_compression, &mut m.frost) {
             *compression = k;
         }
-        if let Some(t) = self.node_tint {
+        if let Some(t) = self.net.node_tint {
             m.tint = t;
         }
         m
@@ -1005,7 +1005,7 @@ impl State {
     /// white ink have the same contrast against it. Without a floor a name
     /// stands on the bare scene, and stays light.
     pub(crate) fn node_ink(&self) -> Option<[u8; 3]> {
-        self.node_compression?;
+        self.net.node_compression?;
         let t = self.node_material().tint;
         let key = 0.2126 * t[0] + 0.7152 * t[1] + 0.0722 * t[2];
         (key > NODE_INK_CROSSOVER).then_some(NODE_DARK_INK)
@@ -1075,9 +1075,9 @@ impl State {
                         color
                     };
                     let alpha = if is_node {
-                        self.node_opacity.clamp(0.0, 1.0)
+                        self.net.node_opacity.clamp(0.0, 1.0)
                     } else if is_network_part {
-                        self.network_opacity.clamp(0.0, 1.0)
+                        self.net.network_opacity.clamp(0.0, 1.0)
                     } else {
                         1.0
                     };
