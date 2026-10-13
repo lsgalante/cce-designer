@@ -2055,7 +2055,7 @@ fn primitives_and_vertices_are_numbered_where_they_are() {
     state.run_command("toggle_vertex_markers");
     let built = drawn(&state);
     assert!(!built.is_empty() && !state.overlay_vertex_marker_points.is_empty());
-    assert_eq!(built.len(), state.vertex_marker_instances.len() * 240, "a sphere drawn over each instance");
+    assert_eq!(built.len(), state.vertex_markers.verts.len() * 240, "a sphere drawn over each instance");
     state.point_marker_size *= 2.0;
     state.rebuild_overlay_markers();
     assert_eq!(drawn(&state).len(), built.len());
@@ -2129,7 +2129,7 @@ fn the_viewport_menu_toggles_show_point_normals() {
     let mut state = State::new(false);
     state.show_point_normals = false;
     state.rebuild_scene_geometry();
-    let whiskers = state.overlay_normal_verts.len();
+    let whiskers = state.overlay_normals.verts.len();
     let row = |state: &State| {
         let (options, actions) = state.viewport_menu_rows_of(state.viewport_menu_page_of(A::Command("toggle_point_normals")));
         let i = actions.iter().position(|a| *a == A::Command("toggle_point_normals")).expect("a Show Point Normals row");
@@ -2140,7 +2140,7 @@ fn the_viewport_menu_toggles_show_point_normals() {
     state.run_viewport_menu_action(A::Command("toggle_point_normals"));
     assert!(state.show_point_normals);
     assert_eq!(row(&state), format!("● {label}"));
-    assert!(state.overlay_normal_verts.len() > whiskers, "the whiskers were collected");
+    assert!(state.overlay_normals.verts.len() > whiskers, "the whiskers were collected");
     let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
     assert!(crate::app::DesignSettings::from_kdl_str(&kdl).viewport.show_point_normals, "persisted");
 }
@@ -2418,11 +2418,11 @@ fn the_viewport_menu_toggles_show_point_markers() {
     };
     let label = crate::command::by_id("toggle_point_markers").unwrap().label;
     assert_eq!(row(&state), format!("○ {label}"));
-    assert!(state.overlay_marker_instances.is_empty());
+    assert!(state.point_markers.verts.is_empty());
     state.run_viewport_menu_action(A::Command("toggle_point_markers"));
     assert!(state.show_point_markers);
     assert_eq!(row(&state), format!("● {label}"));
-    assert!(!state.overlay_marker_instances.is_empty(), "the overlay was built");
+    assert!(!state.point_markers.verts.is_empty(), "the overlay was built");
     assert!(!state.overlay_marker_points.is_empty(), "and its positions kept for re-sizing");
     let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
     assert!(crate::app::DesignSettings::from_kdl_str(&kdl).viewport.show_point_markers, "persisted");
@@ -2545,7 +2545,7 @@ fn the_viewport_menu_sets_the_point_marker_size_without_a_rebuild() {
     state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 4.0) });
     assert!((state.point_marker_size - 0.04).abs() < 1e-5, "{}", state.point_marker_size);
     assert_eq!(state.rt_geometry_version, version, "no rebuild ran");
-    assert!(state.overlay_dirty);
+    assert!(state.point_markers.dirty);
     let resized: Vec<[f32; 3]> = state.drawn_markers(crate::app::MarkerKind::Overlay).iter().map(|v| v.position).collect();
     context_menu::hide();
 
@@ -2576,7 +2576,7 @@ fn pull_arrow_scale_stretches_the_arrows_from_their_base() {
     state.pull_arrow_pairs = vec![(a, b)];
     state.rebuild_pull_arrow_verts();
     // The shaft is the first stroke: from the base to the tip.
-    let shaft = |state: &State| (state.pull_arrow_verts[0].position, state.pull_arrow_verts[1].position);
+    let shaft = |state: &State| (state.pull_arrows.verts[0].position, state.pull_arrows.verts[1].position);
     assert_eq!(shaft(&state).0, a.to_array(), "the base stays on the point");
     assert!((shaft(&state).1[1] - 1.06).abs() < 1e-6, "scale 1 is the true vector");
 
@@ -2632,7 +2632,7 @@ fn the_viewport_menu_sets_the_group_marker_size() {
     state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 3.0) });
     assert!((state.render.group_marker_size - 0.04).abs() < 1e-5, "{}", state.render.group_marker_size);
     assert!((radius(&state) - 0.04).abs() < 1e-5, "the markers re-sized: {}", radius(&state));
-    assert!(state.group_points_dirty, "and will re-upload");
+    assert!(state.group_markers.dirty, "and will re-upload");
     let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
     let saved = crate::app::DesignSettings::from_kdl_str(&kdl).render.group_marker_size;
     assert!((saved - 0.04).abs() < 1e-5, "persisted: {saved}");

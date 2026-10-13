@@ -1359,7 +1359,7 @@ fn the_group_markers_dialog_marks_a_groups_points() {
     state.current_dir_mut().set_child_geometry_visible(tagged, true);
     state.rebuild_scene_geometry();
     assert!(state.scene_groups.iter().any(|(n, m)| n == "five" && m.len() == 5), "{:?}", state.scene_groups.iter().map(|(n, m)| (n.clone(), m.len())).collect::<Vec<_>>());
-    assert!(state.marked_group_instances.is_empty(), "nothing is marked yet");
+    assert!(state.marked_group_markers.verts.is_empty(), "nothing is marked yet");
 
     // From the palette: the command turns it into the groups list.
     state.run_command("command_palette");
@@ -1377,12 +1377,12 @@ fn the_group_markers_dialog_marks_a_groups_points() {
     assert!(state.dialog_visible(), "a switch is worked in place");
     assert_eq!(state.ui_context[state.slots.dialog].rows[row].toggle(), Some(true));
     assert!(state.group_marked("five"));
-    assert!(!state.marked_group_instances.is_empty() && state.marked_groups_dirty, "the markers are staged");
-    let one = state.marked_group_instances.len();
+    assert!(!state.marked_group_markers.verts.is_empty() && state.marked_group_markers.dirty, "the markers are staged");
+    let one = state.marked_group_markers.verts.len();
     // On the group's points, at Group Marker Size.
     let members: Vec<[f32; 3]> = state.scene_groups.iter().find(|(n, _)| n == "five").unwrap().1.clone();
     for m in &members {
-        assert!(state.marked_group_instances.iter().any(|v| (0..3).all(|k| (v.position[k] - m[k]).abs() <= state.render.group_marker_size + 1e-4)), "a marker at {m:?}");
+        assert!(state.marked_group_markers.verts.iter().any(|v| (0..3).all(|k| (v.position[k] - m[k]).abs() <= state.render.group_marker_size + 1e-4)), "a marker at {m:?}");
     }
     let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
     assert_eq!(crate::app::DesignSettings::from_kdl_str(&kdl).viewport.marked_groups, "five", "persisted");
@@ -1390,16 +1390,16 @@ fn the_group_markers_dialog_marks_a_groups_points() {
 
     // The markers follow the geometry: a bigger sphere, farther points.
     let sphere = state.current_dir().children.iter().position(|c| c.name == "sphere1").unwrap();
-    let far = |state: &State| state.marked_group_instances.iter().map(|v| (v.position[0].powi(2) + v.position[2].powi(2)).sqrt()).fold(0.0f32, f32::max);
+    let far = |state: &State| state.marked_group_markers.verts.iter().map(|v| (v.position[0].powi(2) + v.position[2].powi(2)).sqrt()).fold(0.0f32, f32::max);
     let before = far(&state);
     state.apply_action(McpAction::SetParam { slot: sphere, name: "radius".into(), value: "2.0".into() }, &mut redraw).unwrap();
     assert!(far(&state) > before * 1.5, "{} against {before}", far(&state));
-    assert_eq!(state.marked_group_instances.len(), one);
+    assert_eq!(state.marked_group_markers.verts.len(), one);
 
     // Enter again unmarks; Escape closes; a query filters the names.
     state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
     assert!(!state.group_marked("five"));
-    assert!(state.marked_group_instances.is_empty());
+    assert!(state.marked_group_markers.verts.is_empty());
     state.dialog_key_input(&typed("z"));
     assert!(state.ui_context[state.slots.dialog].rows.is_empty(), "no group matches");
     state.dialog_key_input(&key_press(Key::Named(NamedKey::Escape)));
@@ -1407,7 +1407,7 @@ fn the_group_markers_dialog_marks_a_groups_points() {
 
     // A marked name the scene has no group for marks nothing and is kept.
     state.set_group_marked("gone", true);
-    assert!(state.marked_group_instances.is_empty());
+    assert!(state.marked_group_markers.verts.is_empty());
     assert!(state.group_marked("gone"));
 }
 

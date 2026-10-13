@@ -1518,7 +1518,7 @@ impl State {
             self.point_marker_size,
             self.point_marker_color,
         );
-        self.overlay_marker_instances = markers;
+        self.point_markers.verts = markers;
         // Kept for re-sizing the markers without this evaluation — see
         // `State::rebuild_overlay_markers`.
         self.overlay_marker_points = if self.show_point_markers {
@@ -1531,7 +1531,7 @@ impl State {
         };
         self.overlay_number_labels = labels;
         self.overlay_number_alpha.clear();
-        self.overlay_normal_verts = normals;
+        self.overlay_normals.verts = normals;
         let elements = scene_element_overlays(
             &geom,
             ElementOverlays {
@@ -1547,9 +1547,9 @@ impl State {
         self.overlay_prim_alpha.clear();
         self.overlay_vertex_labels = elements.vertex_labels;
         self.overlay_vertex_alpha.clear();
-        self.overlay_normal_verts.extend(elements.normals);
+        self.overlay_normals.verts.extend(elements.normals);
         self.overlay_vertex_marker_points = elements.vertex_markers;
-        self.vertex_marker_instances = crate::geometry::marker_instances(
+        self.vertex_markers.verts = crate::geometry::marker_instances(
             &self.overlay_vertex_marker_points,
             cce_ui::color::to_linear_rgb(VERTEX_LABEL_COLOR.map(|c| c as f32 / 255.0)),
         );
@@ -1560,11 +1560,11 @@ impl State {
 
         // Visualize's vector markers — a node's or a visualizer's — ride the
         // same LINE_LIST channel as the normal whiskers.
-        self.overlay_normal_verts.extend(crate::geometry::vis_marker_vertices(
+        self.overlay_normals.verts.extend(crate::geometry::vis_marker_vertices(
             &geom,
             cce_ui::color::to_linear_rgb,
         ));
-        self.overlay_dirty = true;
+        self.mark_overlay_dirty();
         // The numbers' dimming, for the view the scene was last staged
         // from. The 2D frame is painted BEFORE the stage pass, which works
         // the dimming out: left cleared, the first frame after every
