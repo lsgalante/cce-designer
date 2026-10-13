@@ -9,6 +9,10 @@
 
 use super::{StagedMesh, Vertex3D};
 
+/// What a list keyed by the selection was built for: the node's id, its
+/// parameters' texts, and the geometry version.
+pub type SelectionKey = (String, Vec<(String, String)>, u64);
+
 pub struct SceneMarkers {
     /// Selected-Group membership markers: marker vertices staged CPU-side by
     /// `sync_nodes` whenever the selection is a Group node (empty otherwise),
@@ -16,7 +20,7 @@ pub struct SceneMarkers {
     /// (`last_group_points_key`) — (node id, params, geometry version) —
     /// spares the re-evaluation on unrelated `sync_nodes` runs.
     pub group_markers: StagedMesh,
-    pub last_group_points_key: Option<(String, Vec<(String, String)>, u64)>,
+    pub last_group_points_key: Option<SelectionKey>,
     /// The selected Group's member positions, kept from the evaluation so
     /// the markers can be re-SIZED without re-evaluating the node — a
     /// marker size change (the viewport menu's slider, per motion of a
@@ -42,7 +46,7 @@ pub struct SceneMarkers {
     /// so Pull Arrow Scale can re-draw them without re-evaluating the node
     /// (`rebuild_pull_arrow_verts`).
     pub pull_arrow_pairs: Vec<(glam::Vec3, glam::Vec3)>,
-    pub last_pull_arrows_key: Option<(String, Vec<(String, String)>, u64)>,
+    pub last_pull_arrows_key: Option<SelectionKey>,
     /// The radii the marker spheres were last uploaded at — group, point,
     /// vertex — so the flush re-uploads them when a size moves.
     pub marker_sphere_radii: Option<[f32; 3]>,
