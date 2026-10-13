@@ -561,56 +561,86 @@ pub struct PendingWindowDrag {
     pub action: cce_ui::engine::WindowAction,
 }
 
+/// The whole app model: a shell of what every pane shares — the window,
+/// the widget roster, the panes' flags and layout, the pointer and focus,
+/// the chords, the settings and their polling — and twelve parts, one per
+/// concern, each in a child module of `app` (see CLAUDE.md, "`State` is a
+/// shell and twelve parts").
 pub struct State {
+    // The window.
     /// Window title; the engine polls `Application::settings` and applies it.
     pub title: String,
-
-    /// What is staged for the renderer: the GPU meshes, the uploads
-    /// waiting for the next flush, what the scene was last staged from
-    /// (`src/app/stage.rs`).
-    pub stage: SceneStage,
+    /// The window title wants re-deriving (`update_window_title`), at most
+    /// once a frame: deriving it serializes the whole tree to compare with
+    /// the save, and the event path asked on every changed pointer event.
+    pub title_dirty: bool,
+    /// The window's size in logical px, and in physical px at `scale`.
+    pub width: f32,
+    pub height: f32,
+    pub physical_width: u32,
+    pub physical_height: u32,
+    pub scale: f64,
+    /// Whether the compositor has told us the window's size yet. Until it
+    /// has, `width`/`height` are `State::new`'s 1280x800 placeholder.
+    pub window_configured: bool,
+    /// A press on the detached circular window's chrome, waiting to travel
+    /// far enough to become the move or resize it names.
     pub pending_window_drag: Option<PendingWindowDrag>,
+    /// The move or resize asked of the compositor, taken by
+    /// `Csd::take_window_action`.
     pub window_action: Option<cce_ui::engine::WindowAction>,
-
-    /// The open project: the node tree, the editor's path into it, undo
-    /// and what it was last saved as (`src/app/document.rs`).
-    pub doc: Document,
-    /// The params pane's own state: the node it shows, its plate, the row spans
-    /// and pickers, the visualizer HUD, the copied parameter (`src/app/params.rs`).
-    pub params: ParamsPane,
-
-    pub shortcut_manager: ShortcutManager,
-    /// A chord matched this frame, run on the next tick — the command's
-    /// ID, since a chord binds a registry row rather than an `Action`.
-    pub pending_command: Option<&'static str>,
+    /// Exit was asked for (File > Exit, over MCP too); the engine's next
+    /// look ends the loop, after the sync channel's exit autosave.
     pub exit_requested: bool,
     /// Engine event-loop sender so app-spawned threads (the cce-files
     /// choosers) can deliver results back as `CustomEvent`s; set once by
     /// `Application::new`.
     pub event_sender: Option<calloop::channel::Sender<CustomEvent>>,
 
+    // The widgets and the panes.
+    /// The widget roster (`src/slots.rs`): a typed handle per slot, the
+    /// widgets themselves in `ui_context`.
     pub slots: Box<WidgetSlots>,
+    /// Each slot's rect as laid out, `(x, y, w, h)` in logical px, by
+    /// `*_IDX` (`rebuild_positions`).
     pub positions: Vec<(f32, f32, f32, f32)>,
-    pub splitter_layout: crate::panes::SplitterLayout,
-    /// The context menus the app routes itself — which one is open and what
-    /// its rows do — and where the dialog and the pages were turned from
-    /// (`src/app/menus.rs`).
-    pub menus: ContextMenus,
-    /// The displayed scene as last built: the evaluated geometry, its
-    /// attributes and groups, the fill and edges, the light, the page
-    /// image, the sim cache (`src/app/scene.rs`).
-    pub scene: SceneData,
-    /// The window title wants re-deriving (`update_window_title`), at most
-    /// once a frame: deriving it serializes the whole tree to compare with
-    /// the save, and the event path asked on every changed pointer event.
-    pub title_dirty: bool,
-    /// A dialog setting changed during a slider drag and is saved when the
-    /// drag ends (`apply_setting`), not on every motion of it.
-    pub settings_save_pending: bool,
+    /// Which panes are shown — the save's `visible_panes`
+    /// (`State::PANE_FLAGS`).
+    pub show_network: bool,
+    pub show_viewport: bool,
+    pub show_parameters: bool,
+    pub show_spreadsheet: bool,
+    pub show_playbar: bool,
     /// Panes shrunk to their title stub, indexed by slot. Only the
     /// `plate_menu::PLATE_SLOTS` entries are ever set.
     pub collapsed_panes: [bool; WIDGET_COUNT],
+    /// The column splitters of the legacy column layout, which the
+    /// circular network's branches still lay out by (`get_col_geometries`).
+    pub splitter_layout: crate::panes::SplitterLayout,
+    /// The network drawn as a circular pane (Circular Pane), and that
+    /// circle's centre and radius.
+    pub circular_network_pane: bool,
+    pub circular_network_layout: crate::panes::CircularPaneLayout,
+    /// Plate fractions a load applied against the 1280x800 placeholder,
+    /// held so the first real `resize` can apply them again at the real
+    /// size. The startup project loads before the first configure, and
+    /// `resize` keeps plates at their pixel size, so without this every
+    /// launch in a window other than 1280x800 opened with the plates scaled
+    /// by 1280/width — and a save then stored the scaled fractions.
+    pub pending_plates: Option<PlateGeometry>,
 
+    // The pointer, the keyboard and focus.
+    /// The pointer, in logical px.
+    pub cursor_x: f32,
+    pub cursor_y: f32,
+    pub modifiers: ModifiersState,
+    /// The focused pane, by its menubar's slot (`LEFT_MENUBAR_IDX` is the
+    /// network): what the palette ranks first and the focus cues mark.
+    pub focused_pane: usize,
+    /// The slot holding keyboard focus.
+    pub focused_widget: Option<usize>,
+    /// The slot an armed widget drag belongs to: it is handed the motion and
+    /// the release wherever the pointer goes.
     pub drag_widget: Option<usize>,
     /// Where the pointer pressed when `drag_widget` armed — the drag
     /// edge-panning gate: a bare click (press ~ release with jitter) must not
@@ -618,57 +648,24 @@ pub struct State {
     /// node's cell against the panned origin and it teleports. Cleared (latch
     /// open) once the pointer strays a real-drag distance from the press.
     pub(crate) drag_press_cursor: Option<(f32, f32)>,
-    pub focused_widget: Option<usize>,
-
-    pub cursor_x: f32,
-    pub cursor_y: f32,
-    /// The network editor's own state: the grid cursor and its region, the
-    /// lattice, the pan and its fling, the nodes' look (`src/app/network.rs`).
-    pub net: NetworkView,
-    pub modifiers: ModifiersState,
-
-    pub width: f32,
-    pub height: f32,
-    pub physical_width: u32,
-    pub physical_height: u32,
-    pub scale: f64,
-    /// The viewport's display settings: the guides' sizes, the element
-    /// overlays, the marked groups, the visualizers (`src/app/view.rs`).
-    pub view: ViewDisplay,
-
-    /// The viewport's camera: which one looks, the orbit and pan drags,
-    /// the viewer state, the view last staged (`src/app/camera.rs`).
-    pub camera: CameraView,
-    pub show_network: bool,
-    pub show_viewport: bool,
-    pub show_parameters: bool,
-    pub show_spreadsheet: bool,
-    pub show_playbar: bool,
-    /// The spreadsheet's own state: what its rows were last read from, where
-    /// their points stand, its plate's height (`src/app/sheet.rs`).
-    pub sheet: SheetPane,
-    pub focused_pane: usize,
-    pub last_config_read: Instant,
-    pub circular_network_pane: bool,
-    pub circular_network_layout: crate::panes::CircularPaneLayout,
-    /// Detached windows: whether this process is one and for which pane, the
-    /// panes and child processes the main window handed out, and the sync
-    /// channel's autosave and poll (`src/app/detached.rs`).
-    pub detached: DetachedWindows,
-    pub last_design_mod_time: Option<std::time::SystemTime>,
-    pub last_config_mod_time: Option<std::time::SystemTime>,
     /// The active app-mode drag (pane edge resize), if any. See [`AppDrag`].
     pub app_drag: Option<AppDrag>,
-    /// Whether the compositor has told us the window's size yet. Until it
-    /// has, `width`/`height` are `State::new`'s 1280x800 placeholder.
-    pub window_configured: bool,
-    /// Plate fractions a load applied against that placeholder, held so the
-    /// first real `resize` can apply them again at the real size. The
-    /// startup project loads before the first configure, and `resize`
-    /// keeps plates at their pixel size, so without this every launch in a
-    /// window other than 1280x800 opened with the plates scaled by
-    /// 1280/width — and a save then stored the scaled fractions.
-    pub pending_plates: Option<PlateGeometry>,
+    /// Chord → command id: input.kdl's chords over the registry's defaults.
+    pub shortcut_manager: ShortcutManager,
+    /// A chord matched this frame, run on the next tick — the command's
+    /// ID, since a chord binds a registry row rather than an `Action`.
+    pub pending_command: Option<&'static str>,
+
+    // The settings, and the polling that reloads them.
+    /// When config.kdl was last looked at (every two seconds, from the tick),
+    /// and the mtimes the config and state.kdl had then: an edit to either
+    /// reloads what it sets.
+    pub last_config_read: Instant,
+    pub last_config_mod_time: Option<std::time::SystemTime>,
+    pub last_design_mod_time: Option<std::time::SystemTime>,
+    /// A dialog setting changed during a slider drag and is saved when the
+    /// drag ends (`apply_setting`), not on every motion of it.
+    pub settings_save_pending: bool,
     /// The configured startup project (`DesignSettings::default_project`),
     /// mirrored live so "Set As Default" can rewrite it and `save_settings` —
     /// which reconstructs DesignSettings from live state — can carry it.
@@ -680,17 +677,58 @@ pub struct State {
     /// `CCE_VK_DEVICE` as the renderer read it — "integrated" when unset —
     /// so the setting row can say whether a change is still pending.
     pub gpu_at_launch: String,
+    /// Stage the scene again whatever its `StageKey` says: the restage flag
+    /// any pane may raise.
     pub viewport_dirty: bool,
+    /// The status line's text as last shown (`get_state`'s `status`).
     pub last_status_text: String,
+
+    // The parts.
+    /// The open project: the node tree, the editor's path into it, undo
+    /// and what it was last saved as (`src/app/document.rs`).
+    pub doc: Document,
+    /// The network editor's own state: the grid cursor and its region, the
+    /// lattice, the pan and its fling, the nodes' look (`src/app/network.rs`).
+    pub net: NetworkView,
+    /// The viewport's camera: which one looks, the orbit and pan drags,
+    /// the viewer state, the view last staged (`src/app/camera.rs`).
+    pub camera: CameraView,
+    /// The viewport's display settings: the guides' sizes, the element
+    /// overlays, the marked groups, the visualizers (`src/app/view.rs`).
+    pub view: ViewDisplay,
     /// The draw-time render settings — the wireframe pass, the fill's
     /// opacity, shading and see-through, the group markers' size and the
     /// pull arrows' scale: the render block of state.kdl and of a project's
     /// display block, field for field (`settings::RenderSettings`, where
     /// each is described).
     pub render: RenderSettings,
+    /// The displayed scene as last built: the evaluated geometry, its
+    /// attributes and groups, the fill and edges, the light, the page
+    /// image, the sim cache (`src/app/scene.rs`).
+    pub scene: SceneData,
+    /// What is staged for the renderer: the GPU meshes, the uploads
+    /// waiting for the next flush, what the scene was last staged from
+    /// (`src/app/stage.rs`).
+    pub stage: SceneStage,
     /// What is drawn ON the scene: the marker instances, the pull arrows, the
     /// element overlays' numbers and whiskers (`src/app/markers.rs`).
     pub markers: SceneMarkers,
+    /// The params pane's own state: the node it shows, its plate, the row spans
+    /// and pickers, the visualizer HUD, the copied parameter (`src/app/params.rs`).
+    pub params: ParamsPane,
+    /// The spreadsheet's own state: what its rows were last read from, where
+    /// their points stand, its plate's height (`src/app/sheet.rs`).
+    pub sheet: SheetPane,
+    /// The context menus the app routes itself — which one is open and what
+    /// its rows do — and where the dialog and the pages were turned from
+    /// (`src/app/menus.rs`).
+    pub menus: ContextMenus,
+    /// Detached windows: whether this process is one and for which pane, the
+    /// panes and child processes the main window handed out, and the sync
+    /// channel's autosave and poll (`src/app/detached.rs`).
+    pub detached: DetachedWindows,
+
+    /// The widgets, owned; the roster holds their handles.
     pub ui_context: cce_ui::context::UiContext,
 }
 
@@ -5082,8 +5120,70 @@ impl State {
 
         let mut state = Self {
             title: String::new(),
+            title_dirty: false,
+            width: lw,
+            height: lh,
+            physical_width: pw,
+            physical_height: ph,
+            scale,
+            window_configured: false,
             pending_window_drag: None,
             window_action: None,
+            exit_requested: false,
+            event_sender: None,
+            slots,
+            positions,
+            show_network: true,
+            show_viewport: true,
+            show_parameters: true,
+            show_spreadsheet: false,
+            show_playbar: false,
+            collapsed_panes: [false; WIDGET_COUNT],
+            splitter_layout,
+            circular_network_pane: is_detached_network || settings.viewport.circular_pane,
+            circular_network_layout: crate::panes::CircularPaneLayout::new(250.0, 300.0, 180.0),
+            pending_plates: None,
+            cursor_x: 0.0,
+            cursor_y: 0.0,
+            modifiers: ModifiersState::default(),
+            focused_pane: LEFT_MENUBAR_IDX,
+            focused_widget: None,
+            drag_widget: None,
+            drag_press_cursor: None,
+            app_drag: None,
+            shortcut_manager,
+            pending_command: None,
+            last_config_read: Instant::now(),
+            last_config_mod_time: {
+                let paths = [
+                    cce_ui::config::cce_config_dir().join("config.toml"),
+                    cce_ui::config::config_home().join("ccec").join("config.toml"),
+                ];
+                let mut mod_time = None;
+                for path in &paths {
+                    if let Ok(m) = std::fs::metadata(path) {
+                        if let Ok(t) = m.modified() {
+                            mod_time = Some(t);
+                            break;
+                        }
+                    }
+                }
+                mod_time
+            },
+            last_design_mod_time: {
+                let design_path = DesignSettings::file_path();
+                std::fs::metadata(&design_path).and_then(|m| m.modified()).ok()
+            },
+            settings_save_pending: false,
+            default_project_setting: settings.default_project.clone(),
+            gpu_preference: settings.gpu.clone(),
+            gpu_at_launch: std::env::var("CCE_VK_DEVICE")
+                .ok()
+                .filter(|v| !v.is_empty())
+                .map(|v| v.to_lowercase())
+                .unwrap_or_else(default_gpu),
+            viewport_dirty: true,
+            last_status_text: String::new(),
             doc: Document {
                 fs_root: fs_root.clone(),
                 node_templates,
@@ -5097,73 +5197,6 @@ impl State {
                 world_unit: cce_ui::units::Unit::parse(&settings.viewport.world_unit)
                     .unwrap_or(cce_ui::units::Unit::Mm),
             },
-            params: ParamsPane {
-                param_pane_source: None,
-                params_plate: settings.viewport.params_plate,
-                params_plate_shown: None,
-                params_hud_width: 300.0,
-                value_row_span: None,
-                float2_spans: None,
-                pick_cache: None,
-                vis_hud: None,
-                vis_hud_from: None,
-                copied_param: None,
-            },
-            shortcut_manager,
-            pending_command: None,
-            exit_requested: false,
-            event_sender: None,
-            slots,
-            positions,
-            splitter_layout,
-            menus: ContextMenus {
-                node_menu_slot: None,
-                node_menu_actions: Vec::new(),
-                viewport_menu_active: false,
-                viewport_menu_actions: Vec::new(),
-                viewport_menu_page: None,
-                network_menu_active: false,
-                network_menu_actions: Vec::new(),
-                network_menu_from: None,
-                network_menu_cell: None,
-                param_menu_active: false,
-                param_menu_actions: Vec::new(),
-                param_menu_target: None,
-                playbar_menu_active: false,
-                playbar_menu_actions: Vec::new(),
-                plate_menu_slot: None,
-                plate_menu_actions: Vec::new(),
-                plate_page_from: None,
-                dialog_from: None,
-                dialog_trail: Vec::new(),
-                rename_target: None,
-            },
-            scene: SceneData {
-                rt_sphere_verts: Vec::new(),
-                rt_geometry_version: 0,
-                scene_smooth_verts: Vec::new(),
-                scene_edge_verts: Vec::new(),
-                scene_base: None,
-                scene_attributes: Vec::new(),
-                scene_groups: Vec::new(),
-                environment: crate::environment::Environment::default(),
-                page_image: None,
-                page_shown: None,
-                page_composed: None,
-                page_dirty: false,
-                page_version: 0,
-                sim_cache: crate::geometry::SimCache::default(),
-                last_sim_frame: i32::MIN,
-                playbar_cache_key: None,
-            },
-            title_dirty: false,
-            settings_save_pending: false,
-            collapsed_panes: [false; WIDGET_COUNT],
-            drag_widget: None,
-            drag_press_cursor: None,
-            focused_widget: None,
-            cursor_x: 0.0,
-            cursor_y: 0.0,
             net: NetworkView {
                 grid_cursor_col: 0,
                 grid_cursor_row: 0,
@@ -5187,6 +5220,11 @@ impl State {
                 pan_start_x: 0.0,
                 pan_start_y: 0.0,
                 space_pressed: false,
+                // Config-owned; update_inertial_settings overwrites these from
+                // config.kdl's input.inertial right after construction. They
+                // shape the drag-release fling and the unrouted wheel fallback
+                // only — routed wheel/trackpad panning is tuned by cce-ui's
+                // smooth-scroll settings (input.kdl) inside the Graph widget.
                 graph_scroll_speed: 1.0,
                 graph_inertial_scroll: true,
                 graph_scroll_friction: 0.90,
@@ -5198,12 +5236,17 @@ impl State {
                 node_color: cce_ui::color::graph_node_color(),
                 drop_glow: None,
             },
-            modifiers: ModifiersState::default(),
-            width: lw,
-            height: lh,
-            physical_width: pw,
-            physical_height: ph,
-            scale,
+            camera: CameraView {
+                active_camera,
+                orbit_drag: None,
+                pan_drag: None,
+                pan_exact: None,
+                viewer_tool: None,
+                last_scene_mvp: None,
+                last_scene_eye: Vec3::ZERO,
+                last_scene_view_rect: (0.0, 0.0, 0.0, 0.0),
+                number_alpha_key: None,
+            },
             view: ViewDisplay {
                 square_viewport: settings.viewport.square,
                 grid_thickness: settings.viewport.grid_thickness,
@@ -5222,84 +5265,25 @@ impl State {
                 marked_groups: Self::marked_groups_of(&settings.viewport.marked_groups),
                 visualizers: crate::visualizer::decode(&settings.viewport.visualizers),
             },
-            camera: CameraView {
-                active_camera,
-                orbit_drag: None,
-                pan_drag: None,
-                pan_exact: None,
-                viewer_tool: None,
-                last_scene_mvp: None,
-                last_scene_eye: Vec3::ZERO,
-                last_scene_view_rect: (0.0, 0.0, 0.0, 0.0),
-                number_alpha_key: None,
+            render: settings.render.clone(),
+            scene: SceneData {
+                rt_sphere_verts: Vec::new(),
+                rt_geometry_version: 0,
+                scene_smooth_verts: Vec::new(),
+                scene_edge_verts: Vec::new(),
+                scene_base: None,
+                scene_attributes: Vec::new(),
+                scene_groups: Vec::new(),
+                environment: crate::environment::Environment::default(),
+                page_image: None,
+                page_shown: None,
+                page_composed: None,
+                page_dirty: false,
+                page_version: 0,
+                sim_cache: crate::geometry::SimCache::default(),
+                last_sim_frame: i32::MIN,
+                playbar_cache_key: None,
             },
-            show_network: true,
-            show_viewport: true,
-            show_parameters: true,
-            show_spreadsheet: false,
-            show_playbar: false,
-            sheet: SheetPane {
-                last_spreadsheet_node_name: None,
-                last_spreadsheet_node_params: None,
-                last_spreadsheet_read_at: (i32::MIN, 0),
-                spreadsheet_points: Vec::new(),
-                floating_spreadsheet_height: 250.0,
-            },
-            focused_pane: LEFT_MENUBAR_IDX,
-            // Config-owned; update_inertial_settings overwrites these from
-            // config.kdl's input.inertial right after construction. They
-            // shape the drag-release fling and the unrouted wheel fallback
-            // only — routed wheel/trackpad panning is tuned by cce-ui's
-            // smooth-scroll settings (input.kdl) inside the Graph widget.
-            last_config_read: Instant::now(),
-            circular_network_pane: is_detached_network || settings.viewport.circular_pane,
-            circular_network_layout: crate::panes::CircularPaneLayout::new(250.0, 300.0, 180.0),
-            detached: DetachedWindows {
-                is_detached_network,
-                detached_circular_network: false,
-                detached_pane: None,
-                detached_panes: [false; WIDGET_COUNT],
-                detached_children: std::collections::HashMap::new(),
-                last_project_mod_time: {
-                    let default_proj_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("default_project.json");
-                    std::fs::metadata(&default_proj_path).and_then(|m| m.modified()).ok()
-                },
-                last_project_check: std::time::Instant::now(),
-                needs_autosave: false,
-                last_autosave_time: std::time::Instant::now(),
-            },
-            last_design_mod_time: {
-                let design_path = DesignSettings::file_path();
-                std::fs::metadata(&design_path).and_then(|m| m.modified()).ok()
-            },
-            last_config_mod_time: {
-                let paths = [
-                    cce_ui::config::cce_config_dir().join("config.toml"),
-                    cce_ui::config::config_home().join("ccec").join("config.toml"),
-                ];
-                let mut mod_time = None;
-                for path in &paths {
-                    if let Ok(m) = std::fs::metadata(path) {
-                        if let Ok(t) = m.modified() {
-                            mod_time = Some(t);
-                            break;
-                        }
-                    }
-                }
-                mod_time
-            },
-            app_drag: None,
-            window_configured: false,
-            pending_plates: None,
-            default_project_setting: settings.default_project.clone(),
-            gpu_preference: settings.gpu.clone(),
-            gpu_at_launch: std::env::var("CCE_VK_DEVICE")
-                .ok()
-                .filter(|v| !v.is_empty())
-                .map(|v| v.to_lowercase())
-                .unwrap_or_else(default_gpu),
-            viewport_dirty: true,
-            last_status_text: String::new(),
             stage: SceneStage {
                 meshes: None,
                 pending_grid: None,
@@ -5313,7 +5297,6 @@ impl State {
                 last_rt_scene_key: None,
                 seen_renderer: false,
             },
-            render: settings.render.clone(),
             markers: SceneMarkers {
                 group_markers: StagedMesh::default(),
                 last_group_points_key: None,
@@ -5336,6 +5319,61 @@ impl State {
                 overlay_prim_alpha: Vec::new(),
                 overlay_vertex_labels: Vec::new(),
                 overlay_vertex_alpha: Vec::new(),
+            },
+            params: ParamsPane {
+                param_pane_source: None,
+                params_plate: settings.viewport.params_plate,
+                params_plate_shown: None,
+                params_hud_width: 300.0,
+                value_row_span: None,
+                float2_spans: None,
+                pick_cache: None,
+                vis_hud: None,
+                vis_hud_from: None,
+                copied_param: None,
+            },
+            sheet: SheetPane {
+                last_spreadsheet_node_name: None,
+                last_spreadsheet_node_params: None,
+                last_spreadsheet_read_at: (i32::MIN, 0),
+                spreadsheet_points: Vec::new(),
+                floating_spreadsheet_height: 250.0,
+            },
+            menus: ContextMenus {
+                node_menu_slot: None,
+                node_menu_actions: Vec::new(),
+                viewport_menu_active: false,
+                viewport_menu_actions: Vec::new(),
+                viewport_menu_page: None,
+                network_menu_active: false,
+                network_menu_actions: Vec::new(),
+                network_menu_from: None,
+                network_menu_cell: None,
+                param_menu_active: false,
+                param_menu_actions: Vec::new(),
+                param_menu_target: None,
+                playbar_menu_active: false,
+                playbar_menu_actions: Vec::new(),
+                plate_menu_slot: None,
+                plate_menu_actions: Vec::new(),
+                plate_page_from: None,
+                dialog_from: None,
+                dialog_trail: Vec::new(),
+                rename_target: None,
+            },
+            detached: DetachedWindows {
+                is_detached_network,
+                detached_circular_network: false,
+                detached_pane: None,
+                detached_panes: [false; WIDGET_COUNT],
+                detached_children: std::collections::HashMap::new(),
+                last_project_mod_time: {
+                    let default_proj_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("default_project.json");
+                    std::fs::metadata(&default_proj_path).and_then(|m| m.modified()).ok()
+                },
+                last_project_check: std::time::Instant::now(),
+                needs_autosave: false,
+                last_autosave_time: std::time::Instant::now(),
             },
             ui_context,
         };
