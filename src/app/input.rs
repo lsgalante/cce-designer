@@ -14,13 +14,13 @@ impl State {
         // A press, a release, or a key that ends an entry ends the gesture
         // an undo step is: what the params pane writes next is a new one.
         match event {
-            WindowEvent::MouseInput { .. } => self.edit_history.break_group(),
+            WindowEvent::MouseInput { .. } => self.doc.edit_history.break_group(),
             WindowEvent::KeyboardInput { event } if event.state == ElementState::Pressed => {
                 if matches!(
                     event.logical_key,
                     Key::Named(NamedKey::Enter | NamedKey::Tab | NamedKey::Escape)
                 ) {
-                    self.edit_history.break_group();
+                    self.doc.edit_history.break_group();
                 }
             }
             _ => {}
@@ -1315,7 +1315,7 @@ impl State {
             self.graph_mut().clear_double_clicked_node();
             let dir = self.current_dir();
             if dir_idx < dir.children.len() && dir.children[dir_idx].is_enterable() {
-                self.current_path.push(dir_idx);
+                self.doc.current_path.push(dir_idx);
                 self.on_path_changed();
                 changed = true;
             }
@@ -1492,7 +1492,7 @@ impl State {
         }
 
         if let Some((input_node_id, output_node_name, port)) = self.graph_mut().take_pending_connection_to_port() {
-            let path = self.current_path.clone();
+            let path = self.doc.current_path.clone();
             changed |= self.connect_port(&path, &input_node_id, output_node_name, port);
         }
 
@@ -1736,7 +1736,7 @@ impl State {
                             if let Some(slot_idx) = self.graph().selected_node() {
                                 let dir = self.current_dir();
                                  if slot_idx < dir.children.len() && dir.children[slot_idx].is_enterable() {
-                                     self.current_path.push(slot_idx);
+                                     self.doc.current_path.push(slot_idx);
                                      self.on_path_changed();
                                      changed = true;
                                  }

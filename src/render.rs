@@ -1320,7 +1320,7 @@ impl State {
     /// 2026-09-29 a pane of its own took the viewport's place.
     pub(crate) fn rebuild_page(&mut self) {
         let key = crate::page::displayed_page_node(self.viewport_editor_dir())
-            .map(|n| crate::page::chain_key(&self.fs_root, n));
+            .map(|n| crate::page::chain_key(&self.doc.fs_root, n));
         // Nothing the page reads has changed, and its picture is still up:
         // say what it is again (the geometry pass just said something else)
         // and leave the image alone.
@@ -1336,7 +1336,7 @@ impl State {
         self.page_composed = None;
         let level = self.viewport_editor_dir();
         let node_id = crate::page::displayed_page_node(level).map(|n| n.id.clone());
-        let page = crate::page::displayed_page(&self.fs_root, level);
+        let page = crate::page::displayed_page(&self.doc.fs_root, level);
         // The same picture with new contents keeps its image: a handle
         // being dragged recomposes the page on every motion, and freeing an
         // image waits for the device to go idle.
@@ -1396,7 +1396,7 @@ impl State {
             let mut sim = crate::geometry::EvalSim::new(frame, start, &mut sim_cache);
             // The viewport shows the network editor's level, while name
             // resolution stays rooted at fs_root. Navigation re-scopes this.
-            network_sphere_vertices_with_errors(&self.fs_root, self.viewport_editor_dir(), &mut ocl_error, &mut sim)
+            network_sphere_vertices_with_errors(&self.doc.fs_root, self.viewport_editor_dir(), &mut ocl_error, &mut sim)
         };
         self.sim_cache = sim_cache;
 
@@ -1436,7 +1436,7 @@ impl State {
     /// scene as last evaluated, which evaluates nothing. Run from the tick,
     /// so a sun driven by `$F`, or an edit that rebuilt nothing, is seen.
     pub(crate) fn sync_environment(&mut self) -> bool {
-        let env = crate::environment::Environment::of_scene(&self.fs_root, self.sim_frame());
+        let env = crate::environment::Environment::of_scene(&self.doc.fs_root, self.sim_frame());
         if env == self.environment {
             return false;
         }
@@ -1481,7 +1481,7 @@ impl State {
         // these colours. Same triangles in the same order, so the count
         // above serves both.
         // Lit by the environment's sun, which the flat shader is handed too.
-        self.environment = crate::environment::Environment::of_scene(&self.fs_root, self.sim_frame());
+        self.environment = crate::environment::Environment::of_scene(&self.doc.fs_root, self.sim_frame());
         self.scene_smooth_verts = if self.render.smooth_shading {
             crate::geometry::smooth_lit_vertices(&geom, self.environment.sun_direction)
         } else {

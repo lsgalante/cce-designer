@@ -12,7 +12,7 @@
 //! - **Structure** — nodes added, nodes removed, nodes moved, nodes
 //!   renamed, wires made and broken, the display and bypass flags. Recorded by NOTICING: the
 //!   tree is compared with how it stood at the last look
-//!   (`State::structure_base`) once an event or an action has been
+//!   (`State::doc.structure_base`) once an event or an action has been
 //!   applied, and what differs is the step. There are a dozen writers of
 //!   the graph — the widget's own drag read back a frame later, the
 //!   keyboard families, paste, the palette, MCP, the image commands,
@@ -380,7 +380,7 @@ impl State {
     /// After anything that replaces the tree or that has recorded its own
     /// step, so that it is not noticed as an edit.
     pub fn rebase_structure(&mut self) {
-        self.structure_base = Some(self.fs_root.clone());
+        self.doc.structure_base = Some(self.doc.fs_root.clone());
     }
 
     /// Whether a drag is held. The graph is not looked at until it is let
@@ -407,12 +407,12 @@ impl State {
     }
 
     fn note_structure_changes(&mut self) {
-        let Some(base) = &self.structure_base else {
+        let Some(base) = &self.doc.structure_base else {
             self.rebase_structure();
             return;
         };
         let mut diff = Difference::default();
-        difference(base, &self.fs_root, &mut diff);
+        difference(base, &self.doc.fs_root, &mut diff);
         if !diff.any {
             return;
         }
@@ -421,8 +421,8 @@ impl State {
             let step =
                 Step::Structure(StructureStep { what: diff.what(), levels: diff.levels, renames: diff.renames });
             match group {
-                Some(group) => self.edit_history.record_grouped(step, group),
-                None => self.edit_history.record(step),
+                Some(group) => self.doc.edit_history.record_grouped(step, group),
+                None => self.doc.edit_history.record(step),
             }
         }
         self.rebase_structure();
@@ -435,13 +435,13 @@ impl State {
         // A wire is structure too. The base is told of these parameters
         // as they are now, so that the look below does not take this edit
         // for one of its own and record it a second time.
-        let now: Vec<ParamDef> = crate::viewer_state::find_node_by_id(&self.fs_root, &before.node_id)
+        let now: Vec<ParamDef> = crate::viewer_state::find_node_by_id(&self.doc.fs_root, &before.node_id)
             .map(|n| {
                 n.params.iter().filter(|p| before.params.iter().any(|b| b.name == p.name)).cloned().collect()
             })
             .unwrap_or_default();
         if let Some(node) = self
-            .structure_base
+            .doc.structure_base
             .as_mut()
             .and_then(|base| crate::viewer_state::find_node_by_id_mut(base, &before.node_id))
         {
@@ -455,9 +455,9 @@ impl State {
         self.note_structure_changes();
         if grouped {
             let group = before.group();
-            self.edit_history.record_grouped(Step::Params(before), group);
+            self.doc.edit_history.record_grouped(Step::Params(before), group);
         } else {
-            self.edit_history.record(Step::Params(before));
+            self.doc.edit_history.record(Step::Params(before));
         }
     }
 
@@ -465,7 +465,7 @@ impl State {
     /// not still. For the writers that change one parameter in one go: the
     /// row menu and `set_param`.
     pub fn record_param_edit(&mut self, node_id: &str, before: ParamDef) {
-        let now = crate::viewer_state::find_node_by_id(&self.fs_root, node_id)
+        let now = crate::viewer_state::find_node_by_id(&self.doc.fs_root, node_id)
             .and_then(|n| n.params.iter().find(|p| p.name == before.name));
         if now.is_some_and(|p| !same(p, &before)) {
             self.record_params(
@@ -480,12 +480,12 @@ impl State {
     pub fn history_step(&mut self, undo: bool) -> bool {
         // What has been done and not yet looked at is the step to take.
         self.note_structure_changes();
-        let Some(step) = self.edit_history.take(undo) else { return false };
+        let Some(step) = self.doc.edit_history.take(undo) else { return false };
         let verb = if undo { "Undo" } else { "Redo" };
         let what = step.what().to_string();
         match step {
             Step::Params(step) => {
-                let Some(node) = crate::viewer_state::find_node_by_id_mut(&mut self.fs_root, &step.node_id) else {
+                let Some(node) = crate::viewer_state::find_node_by_id_mut(&mut self.doc.fs_root, &step.node_id) else {
                     // Deleted since. The step names nothing, and is dropped.
                     self.update_status_text(&format!("{verb} {what}: the node is gone"));
                     return false;
@@ -499,7 +499,7 @@ impl State {
                     }
                 }
                 let name = node.name.clone();
-                self.edit_history.file(
+                self.doc.edit_history.file(
                     undo,
                     Step::Params(ParamSnapshot { node_id: step.node_id, params: replaced, what: step.what }),
                 );
@@ -512,7 +512,7 @@ impl State {
             Step::Structure(step) => {
                 // Where the editor is and what is selected are slots, which
                 // a node coming or going moves: held by id across it.
-                let path = self.ids_along(&self.current_path.clone());
+                let path = self.ids_along(&self.doc.current_path.clone());
                 let selected = self
                     .graph()
                     .selected_node()
@@ -525,11 +525,11 @@ impl State {
                     .iter()
                     .find(|c| c.node_type == "camera" && c.name == self.active_camera)
                     .map(|c| c.id.clone());
-                let inverse = restore(&mut self.fs_root, step);
-                self.edit_history.file(undo, Step::Structure(inverse));
-                self.current_path = self.slots_along(&path);
+                let inverse = restore(&mut self.doc.fs_root, step);
+                self.doc.edit_history.file(undo, Step::Structure(inverse));
+                self.doc.current_path = self.slots_along(&path);
                 let camera = camera
-                    .and_then(|id| crate::viewer_state::find_node_by_id(&self.fs_root, &id))
+                    .and_then(|id| crate::viewer_state::find_node_by_id(&self.doc.fs_root, &id))
                     .map(|n| n.name.clone());
                 if let Some(name) = camera {
                     self.set_active_camera(name);
@@ -561,7 +561,7 @@ impl State {
 
     /// The ids of the nodes a path of slots goes down through.
     fn ids_along(&self, path: &[usize]) -> Vec<String> {
-        let mut node = &self.fs_root;
+        let mut node = &self.doc.fs_root;
         let mut ids = Vec::new();
         for &slot in path {
             let Some(child) = node.children.get(slot) else { break };
@@ -574,7 +574,7 @@ impl State {
     /// The path of slots that goes down through those nodes now, as far as
     /// they are still there.
     fn slots_along(&self, ids: &[String]) -> Vec<usize> {
-        let mut node = &self.fs_root;
+        let mut node = &self.doc.fs_root;
         let mut path = Vec::new();
         for id in ids {
             let Some(slot) = node.children.iter().position(|n| n.id == *id) else { break };

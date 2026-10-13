@@ -132,7 +132,7 @@ that stored nothing and read nothing of the node's own values.
 
 **Edits to the node tree are undoable** (`src/edit_history.rs`, the same
 day), the first thing outside a text box or a viewer state that is.
-`State::edit_history` is ONE stack of two kinds of step, so that undo takes
+`State::doc.edit_history` is ONE stack of two kinds of step, so that undo takes
 them back in the order they were made:
 
 - **Parameters**: the parameters of one node that CHANGED, as they stood.
@@ -143,7 +143,7 @@ them back in the order they were made:
 - **Structure**: nodes added, removed, moved and renamed, wires made and
   broken, the display and bypass flags. Recorded by NOTICING:
   `record_structure_changes` compares the tree with how it stood at the
-  last look (`State::structure_base`) and what differs is the step. It
+  last look (`State::doc.structure_base`) and what differs is the step. It
   runs at the end of `process_window_event` and of `apply_action`, and
   ahead of every undo and every parameter record, so nothing done is left
   unlooked at. There are a dozen writers of the graph — the widget's drag
@@ -245,6 +245,15 @@ gone from cce-ui with the wgpu path).
   so it reaches `State`'s private fields and methods as `app.rs` does; the
   source scans that list files by name (`nothing_shells_out_to_cce_cloud_any_more`,
   `the_dialog_plate_is_the_menu_plate`) list it beside `app.rs`.
+- `src/app/document.rs` — `Document`, held as `State::doc`: the open project as
+  a document, with no widget in it — the node tree (`fs_root`), the network
+  editor's path into it (`current_path`), the node templates, undo
+  (`edit_history`, `structure_base`), the save baseline the title's dirty mark
+  compares with, the recent files and the World Unit. The tree walks
+  (`current_dir`, `dir_at`, `camera_level`, `path_names_at`) are `Document`'s,
+  and `State` keeps one-line forwarders, so `self.current_dir()` still reads;
+  `self.doc.current_dir_mut()` borrows the document alone and leaves the panes
+  free. Also a child module, and in the same two source scans.
 - `src/model.rs` (~1.6k lines) — the node tree and the project file, with no window or
   GPU: `FsNode`, `Project` (load, migrations, template merge), node ids, the wire and
   splice operations, parameter rows, `load_fs_tree` (node-template loading).
@@ -621,7 +630,7 @@ and its two wrappers, `refresh_main_node_live_toggles`,
 the undeletable-node gate in `delete_node`, and `layout.rs`'s pinning (whose
 only pinned nodes were these).
 
-**"World Unit"** (mm / cm / m / in, `State::world_unit`) survives as a
+**"World Unit"** (mm / cm / m / in, `State::doc.world_unit`) survives as a
 Settings row — what one world unit IS. Geometry never converts; the
 declaration feeds the viewport context menu's **View 1:1**
 (`view_one_to_one`) through the display metric (`cce_ui::units`), which moves

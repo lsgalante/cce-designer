@@ -143,6 +143,9 @@ pub use crate::settings::*;
 
 // `State::handle_event`, split by the kind of event (`src/app/input.rs`).
 mod input;
+// `State::doc`: the node tree, the path into it, undo, the save baseline.
+mod document;
+pub use document::Document;
 
 /// Which node the params pane is showing: the editor's level, the slot
 /// there, and the node's id. All three, because no one of them is an
@@ -890,9 +893,9 @@ pub struct State {
     pub origin_size: f32,
     pub camera_pivot_size: f32,
 
-    pub fs_root: FsNode,
-    pub node_templates: Vec<NodeTemplate>,
-    pub current_path: Vec<usize>,
+    /// The open project: the node tree, the editor's path into it, undo
+    /// and what it was last saved as (`src/app/document.rs`).
+    pub doc: Document,
     /// The node the params pane's rows were loaded FROM — set by
     /// `sync_parameters_pane`, checked by `sync_parameters_to_project`, which
     /// writes nothing when the selection has moved on since. See
@@ -955,13 +958,6 @@ pub struct State {
     pub copied_param: Option<(String, String)>,
     /// The node the rename dialog is open on, by id.
     pub rename_target: Option<String>,
-    /// Undo for edits to the node tree, parameters and structure — see
-    /// `src/edit_history.rs`. Consulted after a code row and a viewer
-    /// state have had their turn.
-    pub edit_history: crate::edit_history::EditHistory,
-    /// The tree as it stood when its structure was last looked at, which
-    /// the next look is compared with. None until the first.
-    pub structure_base: Option<FsNode>,
     /// The network editor's right-click menu — the same thread-local again,
     /// with the flag saying the open menu is this one.
     pub network_menu_active: bool,
@@ -1216,7 +1212,6 @@ pub struct State {
     /// window other than 1280x800 opened with the plates scaled by
     /// 1280/width — and a save then stored the scaled fractions.
     pub pending_plates: Option<PlateGeometry>,
-    pub loaded_project_path: Option<std::path::PathBuf>,
     /// The configured startup project (`DesignSettings::default_project`),
     /// mirrored live so "Set As Default" can rewrite it and `save_settings` —
     /// which reconstructs DesignSettings from live state — can carry it.
@@ -1228,13 +1223,6 @@ pub struct State {
     /// `CCE_VK_DEVICE` as the renderer read it — "integrated" when unset —
     /// so the setting row can say whether a change is still pending.
     pub gpu_at_launch: String,
-    pub last_saved_root_json: String,
-    /// The pane layout as of the last save — [`State::pane_layout_json`] —
-    /// so a dragged plate edge or a collapse dirties the title
-    /// like an edit to the tree: the save file carries them, so unsaved
-    /// they are unsaved changes.
-    pub last_saved_layout_json: String,
-    pub recent_files: Vec<std::path::PathBuf>,
     pub viewport_dirty: bool,
     pub last_status_text: String,
     /// What the raster scene was last staged from (`stage_frame`): a
@@ -1399,12 +1387,6 @@ pub struct State {
     pub point_marker_size: f32,
     /// sRGB color of the Show Point Markers overlay.
     pub point_marker_color: [f32; 3],
-    /// What one world unit IS — the Guides subnet's "World Unit" choice
-    /// (mm / cm / m / in), persisted with the project. Geometry never
-    /// converts; this is the declaration that lets the viewport state its
-    /// scale against the display metric (`cce_ui::units`) and `View 1:1`
-    /// put the pivot plane at true size.
-    pub world_unit: cce_ui::units::Unit,
     /// The param pane's completion lists — (input node name, geometry
     /// version) → (group names, attribute names) read off that input's
     /// evaluated geometry, feeding the textpick rows on group/attribute
@@ -1500,11 +1482,11 @@ impl State {
     pub fn path_mut(&mut self) -> &mut dyn cce_ui::widget::PathController { self.slots.path_mut(&mut self.ui_context) }
 
     pub fn has_unsaved_changes(&self) -> bool {
-        let tree_changed = match serde_json::to_string(&self.fs_root) {
-            Ok(current_json) => current_json != self.last_saved_root_json,
+        let tree_changed = match serde_json::to_string(&self.doc.fs_root) {
+            Ok(current_json) => current_json != self.doc.last_saved_root_json,
             Err(_) => false,
         };
-        tree_changed || self.pane_layout_json() != self.last_saved_layout_json
+        tree_changed || self.pane_layout_json() != self.doc.last_saved_layout_json
     }
 
     /// The pane layout the save file carries, keyed for the unsaved-changes
@@ -1533,8 +1515,8 @@ impl State {
     /// Record the live tree and pane layout as the saved baseline — every
     /// save and load path calls this, so the title's asterisk clears.
     pub fn mark_saved(&mut self) {
-        self.last_saved_root_json = serde_json::to_string(&self.fs_root).unwrap_or_default();
-        self.last_saved_layout_json = self.pane_layout_json();
+        self.doc.last_saved_root_json = serde_json::to_string(&self.doc.fs_root).unwrap_or_default();
+        self.doc.last_saved_layout_json = self.pane_layout_json();
     }
 
 
@@ -1577,7 +1559,7 @@ impl State {
                 visualizers: crate::visualizer::encode(&self.visualizers),
                 point_marker_size: self.point_marker_size,
                 point_marker_color: self.point_marker_color,
-                world_unit: self.world_unit.suffix().to_string(),
+                world_unit: self.doc.world_unit.suffix().to_string(),
                 rt_mode: self.viewport().rt_mode,
                 circular_pane: self.circular_network_pane,
             },
@@ -1648,7 +1630,7 @@ impl State {
         self.point_marker_size = v.point_marker_size;
         self.point_marker_color = v.point_marker_color;
         if let Some(u) = cce_ui::units::Unit::parse(&v.world_unit) {
-            self.world_unit = u;
+            self.doc.world_unit = u;
         }
         self.render = r.clone();
         self.rebuild_pull_arrow_verts();
@@ -1755,7 +1737,7 @@ impl State {
                     walk(c, solved, out);
                 }
             }
-            walk(&self.fs_root, &solved, &mut chains);
+            walk(&self.doc.fs_root, &solved, &mut chains);
         }
         let runs = playbar_cache_runs(&solved, &chains, start, end);
         let pb = self.ui_context[self.slots.playbar].inner_mut();
@@ -2295,17 +2277,14 @@ impl State {
         self.active_camera = name;
     }
 
-    /// The level camera nodes stand on: the root, the object level
-    /// (`context`). One level for every view, since 2026-10-02 — a camera
-    /// was looked up on the CURRENT level until then, so diving into a
-    /// subnet lost it, and with the geometry inside a Geometry node that
-    /// would be every working view.
+    /// [`Document::camera_level`]: the level camera nodes stand on, the
+    /// root, from every view.
     pub fn camera_level(&self) -> &FsNode {
-        &self.fs_root
+        self.doc.camera_level()
     }
 
     pub fn camera_level_mut(&mut self) -> &mut FsNode {
-        &mut self.fs_root
+        self.doc.camera_level_mut()
     }
 
     /// The cameras the scene offers, the Default Camera first: what the
@@ -2573,48 +2552,22 @@ impl State {
         self.splitter_layout.clamp(self.width, self.detached_circular_network);
     }
 
+    /// [`Document::current_dir`]: the level the network editor shows.
     pub fn current_dir(&self) -> &FsNode {
-        let mut node = &self.fs_root;
-        for &i in &self.current_path {
-            node = &node.children[i];
-        }
-        node
+        self.doc.current_dir()
     }
 
     pub fn current_dir_mut(&mut self) -> &mut FsNode {
-        let mut node = &mut self.fs_root;
-        for &i in &self.current_path {
-            node = &mut node.children[i];
-        }
-        node
+        self.doc.current_dir_mut()
     }
 
-    /// The node a path addresses, CLAMPED: each step that no longer exists
-    /// ends the walk, so a stale second-editor path degrades to the deepest
-    /// still-valid ancestor instead of indexing out of bounds after a
-    /// structural edit made in the other view.
+    /// [`Document::dir_at`]: the node a path addresses, clamped.
     pub fn dir_at(&self, path: &[usize]) -> &FsNode {
-        let mut node = &self.fs_root;
-        for &i in path {
-            match node.children.get(i) {
-                Some(child) => node = child,
-                None => break,
-            }
-        }
-        node
+        self.doc.dir_at(path)
     }
 
-    /// [`Self::dir_at`], mutable — same clamping walk.
     pub fn dir_at_mut(&mut self, path: &[usize]) -> &mut FsNode {
-        let mut node = &mut self.fs_root;
-        for &i in path {
-            if i < node.children.len() {
-                node = &mut node.children[i];
-            } else {
-                break;
-            }
-        }
-        node
+        self.doc.dir_at_mut(path)
     }
 
     /// The network editor's selected slot: what the parameters pane, the
@@ -2663,7 +2616,7 @@ impl State {
     pub(crate) fn param_pane_target(&self) -> Option<ParamPaneTarget> {
         let slot = self.param_editor_selected()?;
         let node = self.param_editor_dir().children.get(slot)?;
-        Some(ParamPaneTarget { path: self.current_path.clone(), slot, id: node.id.clone() })
+        Some(ParamPaneTarget { path: self.doc.current_path.clone(), slot, id: node.id.clone() })
     }
 
     /// Write the params pane's rows back into the node they were loaded from.
@@ -2888,7 +2841,7 @@ impl State {
         // does not need to be told which it is holding: what reaches its input
         // decides. A page writes a PNG that carries its own physical size; the
         // Format parameter names a MESH format and has nothing to say here.
-        if let Some(page) = crate::page::resolve_page(&self.fs_root, &node, &mut Vec::new()) {
+        if let Some(page) = crate::page::resolve_page(&self.doc.fs_root, &node, &mut Vec::new()) {
             let (w, h) = (page.width, page.height);
             match page.write_png(&path) {
                 Ok(()) => self.update_status_text(&format!(
@@ -2911,7 +2864,7 @@ impl State {
             let mut visited = Vec::new();
             let mut err = None;
             crate::geometry::generate_single_node_geometry_with_errors(
-                &self.fs_root,
+                &self.doc.fs_root,
                 &node,
                 &mut visited,
                 &mut err,
@@ -2973,15 +2926,15 @@ impl State {
         let (frame, start) = (self.sim_frame(), self.sim_start_frame());
         let mut err = None;
         // Name and Group may be expressions; read them as they evaluate.
-        let resolved = crate::geometry::resolve_param_refs(&self.fs_root, &node, frame, &mut err).unwrap_or_else(|| node.clone());
-        let Some(input) = crate::geometry::param_node(&self.fs_root, &node, "input") else {
+        let resolved = crate::geometry::resolve_param_refs(&self.doc.fs_root, &node, frame, &mut err).unwrap_or_else(|| node.clone());
+        let Some(input) = crate::geometry::param_node(&self.doc.fs_root, &node, "input") else {
             self.update_status_text(&format!("{}: Detect Range needs an input", node.name));
             return;
         };
         let mut sim_cache = std::mem::take(&mut self.sim_cache);
         let geom = {
             let mut sim = crate::geometry::EvalSim::new(frame, start, &mut sim_cache);
-            crate::geometry::node_geometry_as_shown(&self.fs_root, input, &mut err, &mut sim)
+            crate::geometry::node_geometry_as_shown(&self.doc.fs_root, input, &mut err, &mut sim)
         };
         self.sim_cache = sim_cache;
         let Some(geom) = geom else {
@@ -3051,7 +3004,7 @@ impl State {
                 self.open_file_chooser();
             }
             "Save" => {
-                let path_opt = self.loaded_project_path.clone();
+                let path_opt = self.doc.loaded_project_path.clone();
                 if let Some(path) = path_opt {
                     if let Err(e) = self.save_to_file(&path) {
                         eprintln!("Failed to save project: {:?}", e);
@@ -3186,9 +3139,9 @@ impl State {
             }
             "Close Pane" => {
                 let mut parent_name = "";
-                if self.current_path.len() >= 1 {
-                    let root_idx = self.current_path[0];
-                    if let Some(r_node) = self.fs_root.children.get(root_idx) {
+                if self.doc.current_path.len() >= 1 {
+                    let root_idx = self.doc.current_path[0];
+                    if let Some(r_node) = self.doc.fs_root.children.get(root_idx) {
                         parent_name = r_node.name.as_str();
                     }
                 }
@@ -3511,8 +3464,8 @@ impl State {
     /// Beside the names, each point attribute's WIDTH in components, which
     /// is what decides the control the Attribute node's Value row gets.
     fn input_pick_lists(&mut self, node_id: &str) -> PickLists {
-        let input_id = crate::viewer_state::find_node_by_id(&self.fs_root, node_id)
-            .and_then(|n| crate::geometry::param_node(&self.fs_root, n, "input"))
+        let input_id = crate::viewer_state::find_node_by_id(&self.doc.fs_root, node_id)
+            .and_then(|n| crate::geometry::param_node(&self.doc.fs_root, n, "input"))
             .map(|n| n.id.clone());
         let Some(input_id) = input_id else { return PickLists::default() };
         let key = (input_id.clone(), self.rt_geometry_version);
@@ -3528,11 +3481,11 @@ impl State {
         let mut sim_cache = std::mem::take(&mut self.sim_cache);
         {
             let mut sim = crate::geometry::EvalSim::new(frame, start, &mut sim_cache);
-            if let Some(input_node) = crate::viewer_state::find_node_by_id(&self.fs_root, &input_id) {
+            if let Some(input_node) = crate::viewer_state::find_node_by_id(&self.doc.fs_root, &input_id) {
                 let mut visited = Vec::new();
                 let mut err = None;
                 if let Some(geom) = generate_single_node_geometry_with_errors(
-                    &self.fs_root,
+                    &self.doc.fs_root,
                     input_node,
                     &mut visited,
                     &mut err,
@@ -3571,21 +3524,12 @@ impl State {
     }
 
     pub fn current_path_names(&self) -> Vec<String> {
-        self.path_names_at(&self.current_path)
+        self.path_names_at(&self.doc.current_path)
     }
 
-    /// Segment names along `path` (skipping steps that no longer resolve —
-    /// the same clamping `dir_at` walks with).
+    /// [`Document::path_names_at`]: segment names along `path`.
     pub fn path_names_at(&self, path: &[usize]) -> Vec<String> {
-        let mut node = &self.fs_root;
-        let mut names = Vec::new();
-        for &i in path {
-            if let Some(child) = node.children.get(i) {
-                names.push(child.name.clone());
-                node = child;
-            }
-        }
-        names
+        self.doc.path_names_at(path)
     }
 
     /// Where a file chooser should open: the loaded project's parent directory
@@ -3593,7 +3537,7 @@ impl State {
     /// let cce-files use its remembered location. Passing it also skips the
     /// chooser's remembered-dir restore outright.
     pub(crate) fn chooser_start_dir(&self) -> Option<std::path::PathBuf> {
-        self.loaded_project_path
+        self.doc.loaded_project_path
             .as_ref()
             .and_then(|p| p.parent())
             .filter(|d| d.is_dir())
@@ -3951,7 +3895,7 @@ impl State {
     /// One world unit in millimetres, per the Guides "World Unit".
     pub fn world_unit_mm(&self) -> f32 {
         let m = cce_ui::units::metric();
-        cce_ui::units::Len::new(1.0, self.world_unit).convert(cce_ui::units::Unit::Mm, &m).value
+        cce_ui::units::Len::new(1.0, self.doc.world_unit).convert(cce_ui::units::Unit::Mm, &m).value
     }
 
     /// Camera distance to the pivot plane at which the view is 1:1 — one
@@ -4075,11 +4019,11 @@ impl State {
     /// its own template's. `None` for a parameter no template names, such
     /// as one added over MCP.
     pub fn template_default(&self, dir: &FsNode, node: &FsNode, pname: &str) -> Option<&ParamDef> {
-        let from_subnet = template_for(dir, &self.node_templates)
+        let from_subnet = template_for(dir, &self.doc.node_templates)
             .and_then(|t| t.children.iter().find(|c| c.name.eq_ignore_ascii_case(&node.name)))
             .and_then(|c| c.params.iter().find(|p| p.name == pname));
         from_subnet.or_else(|| {
-            template_for(node, &self.node_templates).and_then(|t| t.params.iter().find(|p| p.name == pname))
+            template_for(node, &self.doc.node_templates).and_then(|t| t.params.iter().find(|p| p.name == pname))
         })
     }
 
@@ -4436,7 +4380,7 @@ impl State {
     /// One row-menu action on one parameter, by node id and name — the
     /// entry the menu, a test and any future command share.
     pub fn run_param_action(&mut self, node_id: &str, pname: &str, action: ParamMenuAction) {
-        let before = crate::viewer_state::find_node_by_id(&self.fs_root, node_id)
+        let before = crate::viewer_state::find_node_by_id(&self.doc.fs_root, node_id)
             .and_then(|n| n.params.iter().find(|p| p.name == pname))
             .cloned();
         self.run_param_action_unrecorded(node_id, pname, action);
@@ -4446,7 +4390,7 @@ impl State {
     }
 
     fn run_param_action_unrecorded(&mut self, node_id: &str, pname: &str, action: ParamMenuAction) {
-        let node_label = crate::geometry::node_path_names(&self.fs_root, node_id)
+        let node_label = crate::geometry::node_path_names(&self.doc.fs_root, node_id)
             .map(|n| format!("/{}", n.join("/")))
             .unwrap_or_else(|| node_id.to_string());
         match action {
@@ -4462,9 +4406,9 @@ impl State {
                     return;
                 };
                 let path = if action == ParamMenuAction::PasteRelative {
-                    crate::geometry::relative_ref_path(&self.fs_root, node_id, &src_id)
+                    crate::geometry::relative_ref_path(&self.doc.fs_root, node_id, &src_id)
                 } else {
-                    crate::geometry::absolute_ref_path(&self.fs_root, &src_id)
+                    crate::geometry::absolute_ref_path(&self.doc.fs_root, &src_id)
                 };
                 let Some(path) = path else {
                     self.update_status_text("The copied parameter's node is gone.");
@@ -4474,7 +4418,7 @@ impl State {
                 // number — by the TARGET, since that is what the value has
                 // to fit: a choice pasted onto a switch's Index wants the
                 // option's index, pasted onto a text row its name.
-                let target_kind = crate::viewer_state::find_node_by_id(&self.fs_root, node_id)
+                let target_kind = crate::viewer_state::find_node_by_id(&self.doc.fs_root, node_id)
                     .and_then(|n| n.params.iter().find(|p| p.name == pname))
                     .map(|p| p.kind())
                     .unwrap_or(ParamKind::Text);
@@ -4484,7 +4428,7 @@ impl State {
                 };
                 let full = if path.is_empty() { src_p.clone() } else { format!("{path}/{src_p}") };
                 let value = format!("{func}(\"{full}\")");
-                if let Some(p) = crate::viewer_state::find_node_by_id_mut(&mut self.fs_root, node_id)
+                if let Some(p) = crate::viewer_state::find_node_by_id_mut(&mut self.doc.fs_root, node_id)
                     .and_then(|n| n.params.iter_mut().find(|p| p.name == pname))
                 {
                     p.set_text(value.clone());
@@ -4494,7 +4438,7 @@ impl State {
             }
             ParamMenuAction::ShowTrackball | ParamMenuAction::HideTrackball => {
                 let show = action == ParamMenuAction::ShowTrackball;
-                if let Some(p) = crate::viewer_state::find_node_by_id_mut(&mut self.fs_root, node_id)
+                if let Some(p) = crate::viewer_state::find_node_by_id_mut(&mut self.doc.fs_root, node_id)
                     .and_then(|n| n.params.iter_mut().find(|p| p.name == pname))
                 {
                     p.view = if show { "trackball" } else { "sliders" }.to_string();
@@ -4506,7 +4450,7 @@ impl State {
                 });
             }
             ParamMenuAction::EditExpression => {
-                if let Some(p) = crate::viewer_state::find_node_by_id_mut(&mut self.fs_root, node_id)
+                if let Some(p) = crate::viewer_state::find_node_by_id_mut(&mut self.doc.fs_root, node_id)
                     .and_then(|n| n.params.iter_mut().find(|p| p.name == pname))
                 {
                     p.set_expr(true);
@@ -4518,13 +4462,13 @@ impl State {
                 // Delete Channels keeps what the channel was showing. One that
                 // does not evaluate keeps its text, no longer as an expression.
                 let frame = self.sim_frame();
-                let evaluated = crate::viewer_state::find_node_by_id(&self.fs_root, node_id).and_then(|node| {
+                let evaluated = crate::viewer_state::find_node_by_id(&self.doc.fs_root, node_id).and_then(|node| {
                     let mut err = None;
-                    let resolved = crate::geometry::resolve_param_refs(&self.fs_root, node, frame, &mut err)?;
+                    let resolved = crate::geometry::resolve_param_refs(&self.doc.fs_root, node, frame, &mut err)?;
                     resolved.params.into_iter().find(|p| p.name == pname).map(|p| (p.text().to_string(), err))
                 });
                 let mut note = None;
-                if let Some(p) = crate::viewer_state::find_node_by_id_mut(&mut self.fs_root, node_id)
+                if let Some(p) = crate::viewer_state::find_node_by_id_mut(&mut self.doc.fs_root, node_id)
                     .and_then(|n| n.params.iter_mut().find(|p| p.name == pname))
                 {
                     p.set_expr(false);
@@ -5125,7 +5069,7 @@ impl State {
         match action {
             NodeMenuAction::Enter => {
                 if slot < self.current_dir().children.len() {
-                    self.current_path.push(slot);
+                    self.doc.current_path.push(slot);
                     self.on_path_changed();
                 }
             }
@@ -5153,7 +5097,7 @@ impl State {
     /// name is, and a sibling's is refused, since wires are by name and
     /// two nodes of one name leave every wire to either naming both.
     pub fn rename_check(&self, id: &str, typed: &str) -> Result<String, String> {
-        let node = crate::viewer_state::find_node_by_id(&self.fs_root, id).ok_or("The node is gone")?;
+        let node = crate::viewer_state::find_node_by_id(&self.doc.fs_root, id).ok_or("The node is gone")?;
         if typed.trim().is_empty() {
             return Err("A node needs a name".to_string());
         }
@@ -5161,7 +5105,7 @@ impl State {
         if new == node.name {
             return Err(format!("{new} is its name already"));
         }
-        let taken = crate::geometry::find_parent_node(&self.fs_root, id)
+        let taken = crate::geometry::find_parent_node(&self.doc.fs_root, id)
             .is_some_and(|p| p.children.iter().any(|c| c.id != id && c.name == new));
         if taken {
             return Err(format!("{new} is another node's name"));
@@ -5174,7 +5118,7 @@ impl State {
     /// camera. The one entry the node menu, the command and MCP share.
     pub fn rename_node(&mut self, id: &str, typed: &str) -> Result<String, String> {
         let new = self.rename_check(id, typed)?;
-        let old = crate::viewer_state::find_node_by_id(&self.fs_root, id).map(|n| n.name.clone()).unwrap_or_default();
+        let old = crate::viewer_state::find_node_by_id(&self.doc.fs_root, id).map(|n| n.name.clone()).unwrap_or_default();
         // The active camera is looked up where it stands, the root, and is
         // this node only if this node is there.
         let is_camera = self
@@ -5182,7 +5126,7 @@ impl State {
             .children
             .iter()
             .any(|c| c.id == id && c.node_type == "camera" && c.name == self.active_camera);
-        crate::geometry::rename_node_in_tree(&mut self.fs_root, id, &new);
+        crate::geometry::rename_node_in_tree(&mut self.doc.fs_root, id, &new);
         if is_camera {
             // Both copies of the name: the viewport routes the wheel by
             // its own.
@@ -5440,8 +5384,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     }
 
     pub fn move_up(&mut self) -> bool {
-        if !self.current_path.is_empty() {
-            let exited_idx = self.current_path.pop();
+        if !self.doc.current_path.is_empty() {
+            let exited_idx = self.doc.current_path.pop();
             self.on_path_changed();
             if let Some(idx) = exited_idx {
                 let pos = {
@@ -5585,7 +5529,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
 
     pub fn sync_nodes(&mut self) {
         let frame = self.sim_frame();
-        let graph_nodes = Self::graph_nodes_of(&self.fs_root, self.current_dir(), frame);
+        let graph_nodes = Self::graph_nodes_of(&self.doc.fs_root, self.current_dir(), frame);
         self.graph_mut().set_nodes(&graph_nodes);
 
         let camera_nodes: Vec<String> = self.camera_level().children.iter()
@@ -5685,7 +5629,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             if let Some(node) = selected_node {
                 let mut ocl_error = None;
                 let mut sim = crate::geometry::EvalSim::new(sim_frame, sim_start, &mut sim_cache);
-                if let Some(geom) = crate::geometry::node_geometry_as_shown(&self.fs_root, node, &mut ocl_error, &mut sim) {
+                if let Some(geom) = crate::geometry::node_geometry_as_shown(&self.doc.fs_root, node, &mut ocl_error, &mut sim) {
                     (headers, columns) = Self::geometry_to_spreadsheet_columns(&geom);
                     points = geom.positions().to_vec();
                 }
@@ -5715,7 +5659,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 let group_name = node_param_str(node, "group_name", "group1");
                 let mut ocl_error = None;
                 let mut sim = crate::geometry::EvalSim::new(sim_frame, sim_start, &mut sim_cache);
-                if let Some(geom) = crate::geometry::node_geometry_as_shown(&self.fs_root, node, &mut ocl_error, &mut sim) {
+                if let Some(geom) = crate::geometry::node_geometry_as_shown(&self.doc.fs_root, node, &mut ocl_error, &mut sim) {
                     member_verts = crate::geometry::group_member_positions(&geom, &group_name);
                 }
             }
@@ -5800,7 +5744,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 let mut cache = std::mem::take(&mut self.sim_cache);
                 let moved = {
                     let mut sim = crate::geometry::EvalSim::new(frame, start, &mut cache);
-                    crate::geometry::point_displacements(&self.fs_root, &node, &mut sim)
+                    crate::geometry::point_displacements(&self.doc.fs_root, &node, &mut sim)
                 };
                 self.sim_cache = cache;
                 let bases: Vec<glam::Vec3> = moved.iter().map(|(a, _)| *a).collect();
@@ -6209,9 +6153,19 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             node_color: cce_ui::color::graph_node_color(),
             origin_size: settings.viewport.origin_size,
             camera_pivot_size: settings.viewport.camera_pivot_size,
-            fs_root: fs_root.clone(),
-            node_templates,
-            current_path,
+            doc: Document {
+                fs_root: fs_root.clone(),
+                node_templates,
+                current_path,
+                edit_history: Default::default(),
+                structure_base: None,
+                loaded_project_path: None,
+                last_saved_root_json: serde_json::to_string(&fs_root).unwrap_or_default(),
+                last_saved_layout_json: String::new(),
+                recent_files,
+                world_unit: cce_ui::units::Unit::parse(&settings.viewport.world_unit)
+                    .unwrap_or(cce_ui::units::Unit::Mm),
+            },
             param_pane_source: None,
             node_clipboard: Vec::new(),
             shortcut_manager,
@@ -6236,8 +6190,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             param_menu_target: None,
             copied_param: None,
             rename_target: None,
-            edit_history: Default::default(),
-            structure_base: None,
             network_menu_active: false,
             network_menu_actions: Vec::new(),
             network_menu_from: None,
@@ -6361,7 +6313,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             floating_spreadsheet_height: 250.0,
             window_configured: false,
             pending_plates: None,
-            loaded_project_path: None,
             default_project_setting: settings.default_project.clone(),
             gpu_preference: settings.gpu.clone(),
             gpu_at_launch: std::env::var("CCE_VK_DEVICE")
@@ -6369,9 +6320,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 .filter(|v| !v.is_empty())
                 .map(|v| v.to_lowercase())
                 .unwrap_or_else(default_gpu),
-            last_saved_root_json: serde_json::to_string(&fs_root).unwrap_or_default(),
-            last_saved_layout_json: String::new(),
-            recent_files,
             viewport_dirty: true,
             last_status_text: String::new(),
             last_viewport: StageKey::default(),
@@ -6421,8 +6369,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             scene_edge_verts: Vec::new(),
             point_marker_size: settings.viewport.point_marker_size,
             point_marker_color: settings.viewport.point_marker_color,
-            world_unit: cce_ui::units::Unit::parse(&settings.viewport.world_unit)
-                .unwrap_or(cce_ui::units::Unit::Mm),
             pick_cache: None,
             last_scene_mvp: None,
             number_alpha_key: None,
@@ -6474,7 +6420,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         // The layout baseline waits for the layout pass above (it clamps the
         // plate fields), and the title computed earlier must be re-read
         // against it or a fresh window opens starred.
-        state.last_saved_layout_json = state.pane_layout_json();
+        state.doc.last_saved_layout_json = state.pane_layout_json();
         state.update_window_title();
         state
     }
@@ -7360,7 +7306,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                     .find(|p| p.name.eq_ignore_ascii_case("input"))
                     .map(|p| p.text().to_string()),
                 // The rest of the wires the network draws.
-                reads: node_wires_at(&self.fs_root, c, frame).into_iter().filter(|(name, _)| !name.eq_ignore_ascii_case("input")).map(|(_, src)| src).collect(),
+                reads: node_wires_at(&self.doc.fs_root, c, frame).into_iter().filter(|(name, _)| !name.eq_ignore_ascii_case("input")).map(|(_, src)| src).collect(),
                 position: c.position,
                 // Utility trees stay where they were put; see the module doc.
                 pinned: false,
@@ -7599,7 +7545,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         }
         // Whole or not at all: a set that half belongs here is pasted
         // nowhere, rather than as the part that does with its wires cut.
-        let here = crate::context::context_at(&self.current_path);
+        let here = crate::context::context_at(&self.doc.current_path);
         if let Some(why) = self
             .node_clipboard
             .iter()
@@ -8139,7 +8085,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 self.save_file_chooser();
             }
             Action::Save => {
-                let path_opt = self.loaded_project_path.clone();
+                let path_opt = self.doc.loaded_project_path.clone();
                 if let Some(path) = path_opt {
                     if let Err(e) = self.save_to_file(&path) {
                         eprintln!("Failed to save project: {:?}", e);
@@ -8331,7 +8277,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 let clean = !self.has_unsaved_changes();
                 self.apply_plate_geometry(pg);
                 if clean {
-                    self.last_saved_layout_json = self.pane_layout_json();
+                    self.doc.last_saved_layout_json = self.pane_layout_json();
                     self.update_window_title();
                 }
             }
@@ -8518,7 +8464,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         let frame_moved = frame_now != self.last_sim_frame;
         if frame_moved {
             self.last_sim_frame = frame_now;
-            if crate::geometry::contains_simnet(&self.fs_root) {
+            if crate::geometry::contains_simnet(&self.doc.fs_root) {
                 self.rebuild_scene_geometry();
                 self.viewport_dirty = true;
             } else {

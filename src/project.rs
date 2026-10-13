@@ -42,7 +42,7 @@ impl State {
         
         let mut title = base_title.to_string();
         
-        if let Some(path) = &self.loaded_project_path {
+        if let Some(path) = &self.doc.loaded_project_path {
             if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
                 title.push_str(" - ");
                 title.push_str(filename);
@@ -86,10 +86,10 @@ impl State {
 
     pub(crate) fn add_recent_file(&mut self, path: std::path::PathBuf) {
         let abs_path = std::fs::canonicalize(&path).unwrap_or(path);
-        self.recent_files.retain(|p| p != &abs_path);
-        self.recent_files.insert(0, abs_path);
-        self.recent_files.truncate(10);
-        Self::save_recent_files(&self.recent_files);
+        self.doc.recent_files.retain(|p| p != &abs_path);
+        self.doc.recent_files.insert(0, abs_path);
+        self.doc.recent_files.truncate(10);
+        Self::save_recent_files(&self.doc.recent_files);
         self.migrate_meta_settings_node();
     }
 
@@ -129,7 +129,7 @@ impl State {
         ProjectViewState {
             active_camera: self.active_camera.clone(),
             pan: (self.pan_x, self.pan_y),
-            current_path: self.current_path.clone(),
+            current_path: self.doc.current_path.clone(),
             selected_node: self.graph().selected_node(),
             visible_panes: Some(
                 Self::PANE_FLAGS
@@ -227,7 +227,7 @@ impl State {
             };
             let proj = Project {
                 name: "Default Project".to_string(),
-                root: self.fs_root.clone(),
+                root: self.doc.fs_root.clone(),
                 format: crate::app::PROJECT_FORMAT,
                 view_state,
             };
@@ -249,7 +249,7 @@ impl State {
 
         let proj = Project {
             name: project_name,
-            root: self.fs_root.clone(),
+            root: self.doc.fs_root.clone(),
             format: crate::app::PROJECT_FORMAT,
             view_state: self.project_view_state(),
         };
@@ -351,10 +351,10 @@ impl State {
         let mut proj: Project = serde_json::from_str(&content)?;
         proj.sanitize_node_names();
         proj.migrate_format();
-        crate::app::merge_template_defs(&mut proj.root, &self.node_templates);
-        self.fs_root = proj.root;
+        crate::app::merge_template_defs(&mut proj.root, &self.doc.node_templates);
+        self.doc.fs_root = proj.root;
         // Another window's edits, or the bundled file: not this one's to undo.
-        self.structure_base = None;
+        self.doc.structure_base = None;
         self.migrate_meta_settings_node();
         if !keep_own_view {
             // Before the default view, whose camera-node rule has the last
@@ -371,7 +371,7 @@ impl State {
         self.pan_velocity_y = 0.0;
         self.last_frame_pan_x = self.pan_x;
         self.last_frame_pan_y = self.pan_y;
-        self.current_path = proj.view_state.current_path;
+        self.doc.current_path = proj.view_state.current_path;
         if !keep_own_view {
             self.apply_default_view_from_project(proj.view_state.default_view);
         }
@@ -407,7 +407,7 @@ impl State {
         self.rebuild_positions();
         self.apply_layout();
         self.update_panel_bounds();
-        self.loaded_project_path = None;
+        self.doc.loaded_project_path = None;
         self.mark_saved();
         self.update_window_title();
         Ok(())
@@ -432,10 +432,10 @@ impl State {
         let mut proj: Project = serde_json::from_str(&content)?;
         proj.sanitize_node_names();
         proj.migrate_format();
-        crate::app::merge_template_defs(&mut proj.root, &self.node_templates);
-        self.fs_root = proj.root;
-        self.edit_history.clear();
-        self.structure_base = None;
+        crate::app::merge_template_defs(&mut proj.root, &self.doc.node_templates);
+        self.doc.fs_root = proj.root;
+        self.doc.edit_history.clear();
+        self.doc.structure_base = None;
         self.migrate_meta_settings_node();
         // As in the default-project branch.
         if let Some(d) = &proj.view_state.display {
@@ -449,7 +449,7 @@ impl State {
         self.pan_velocity_y = 0.0;
         self.last_frame_pan_x = self.pan_x;
         self.last_frame_pan_y = self.pan_y;
-        self.current_path = proj.view_state.current_path;
+        self.doc.current_path = proj.view_state.current_path;
         self.apply_default_view_from_project(proj.view_state.default_view);
 
         // The graph is given the loaded nodes BEFORE the selection: it
@@ -481,7 +481,7 @@ impl State {
         self.rebuild_positions();
         self.apply_layout();
         self.update_panel_bounds();
-        self.loaded_project_path = Some(project_dir);
+        self.doc.loaded_project_path = Some(project_dir);
         self.mark_saved();
         self.update_window_title();
         Ok(())
@@ -492,7 +492,7 @@ impl State {
     /// but worth knowing about (`ParamSlot::Invalid`). Only over the plain
     /// success message: a node error is the more urgent line.
     pub(crate) fn report_invalid_params(&mut self) {
-        let bad = crate::app::invalid_params(&self.fs_root);
+        let bad = crate::app::invalid_params(&self.doc.fs_root);
         let Some((at, name, why)) = bad.first() else { return };
         if !self.last_status_text.starts_with("Geometry updated") {
             return;
@@ -507,7 +507,7 @@ impl State {
     /// the detached-window sync channel. A scratch (never-saved) project has no
     /// path to point at, so the click is a no-op with a note.
     pub(crate) fn set_current_as_default(&mut self) {
-        match &self.loaded_project_path {
+        match &self.doc.loaded_project_path {
             Some(path) => {
                 self.default_project_setting = Some(path.to_string_lossy().into_owned());
                 self.save_settings();
@@ -548,7 +548,7 @@ impl State {
     }
 
     pub(crate) fn new_project(&mut self) {
-        self.fs_root = FsNode {
+        self.doc.fs_root = FsNode {
             id: "root".to_string(),
             name: "root".to_string(),
             node_type: "node".to_string(),
@@ -560,8 +560,8 @@ impl State {
             inputs: 0,
             outputs: 0,
         };
-        self.edit_history.clear();
-        self.structure_base = None;
+        self.doc.edit_history.clear();
+        self.doc.structure_base = None;
         self.migrate_meta_settings_node();
         self.set_active_camera("Default Camera");
         self.pan_x = 0.0;
@@ -570,7 +570,7 @@ impl State {
         self.pan_velocity_y = 0.0;
         self.last_frame_pan_x = 0.0;
         self.last_frame_pan_y = 0.0;
-        self.current_path.clear();
+        self.doc.current_path.clear();
         self.grid_cursor_col = 0;
         self.grid_cursor_row = 0;
 
@@ -586,7 +586,7 @@ impl State {
         self.rebuild_positions();
         self.apply_layout();
         self.update_panel_bounds();
-        self.loaded_project_path = None;
+        self.doc.loaded_project_path = None;
         self.mark_saved();
         self.update_window_title();
     }
@@ -616,7 +616,7 @@ impl State {
     /// applies. An old save's `view` subnet is read for it, though, or every
     /// project saved before the move would open with the default layout.
     pub(crate) fn migrate_meta_settings_node(&mut self) {
-        let meta_idx = self.fs_root.children.iter().position(|c| {
+        let meta_idx = self.doc.fs_root.children.iter().position(|c| {
             matches!(c.node_type.as_str(), "session" | "meta") || c.name == "Session"
         });
         // Pre-Session saves parked the four subnets FLAT at the root, with no
@@ -624,16 +624,16 @@ impl State {
         // node was found — an early return on the container alone left that
         // whole generation of file carrying four dead nodes forever.
         let mut subnets: Vec<FsNode> = match meta_idx {
-            Some(i) => self.fs_root.children.remove(i).children,
+            Some(i) => self.doc.fs_root.children.remove(i).children,
             None => Vec::new(),
         };
         let mut i = 0;
-        while i < self.fs_root.children.len() {
-            let c = &self.fs_root.children[i];
+        while i < self.doc.fs_root.children.len() {
+            let c = &self.doc.fs_root.children[i];
             if c.node_type == "utility"
                 && matches!(c.name.as_str(), "main" | "view" | "guides" | "render")
             {
-                subnets.push(self.fs_root.children.remove(i));
+                subnets.push(self.doc.fs_root.children.remove(i));
             } else {
                 i += 1;
             }
@@ -650,15 +650,15 @@ impl State {
                 i += 1;
             } else if crate::context::placement(&subnets[i].node_type) == crate::context::Placement::Geometry {
                 let mut node = subnets.remove(i);
-                let home = crate::context::geometry_home(&mut self.fs_root);
-                let level = &mut self.fs_root.children[home];
+                let home = crate::context::geometry_home(&mut self.doc.fs_root);
+                let level = &mut self.doc.fs_root.children[home];
                 node.position = crate::context::free_cell(level, node.position);
                 level.children.push(node);
             } else {
                 let mut node = subnets.remove(i);
                 let (nx, ny) = self.find_empty_cell(node.position.0, node.position.1, None);
                 node.position = (nx, ny);
-                self.fs_root.children.push(node);
+                self.doc.fs_root.children.push(node);
             }
         }
         if subnets.is_empty() {
@@ -692,7 +692,7 @@ impl State {
                 "Background Color" => if let Some(c) = hex_to_color(p.text()) { self.viewport_mut().bg_color = c; },
                 "Point Marker Size" => if let Some(v) = as_f32(p) { self.point_marker_size = v / 1000.0; },
                 "Point Marker Color" => if let Some(c) = hex_to_color(p.text()) { self.point_marker_color = c; },
-                "World Unit" => if let Some(u) = cce_ui::units::Unit::parse(p.text()) { self.world_unit = u; },
+                "World Unit" => if let Some(u) = cce_ui::units::Unit::parse(p.text()) { self.doc.world_unit = u; },
                 "Circular Pane" => if let Some(v) = as_bool(p) { self.circular_network_pane = v; },
                 "Ray Traced Preview" => if let Some(v) = as_bool(p) { self.viewport_mut().rt_mode = v; },
                 _ => {}

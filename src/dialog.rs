@@ -1541,7 +1541,7 @@ pub const PATH_ROW_ID: &str = "project_path";
 /// Prefix of a recent-project row's id; the rest is the path.
 ///
 /// The recent list was the Main utility node's "Open" dropdown, and it went
-/// with that node — leaving `State::recent_files` written on every save and
+/// with that node — leaving `State::doc.recent_files` written on every save and
 /// read by nothing. It is a list of documents, so it belongs where the open
 /// document's own path already is: rows under the path row, each opening its
 /// project. Ranked against the path text like everything else.
@@ -1823,7 +1823,7 @@ impl State {
     /// gone.
     pub fn rename_outcome(&self, typed: &str) -> Option<Result<(String, String), String>> {
         let id = self.rename_target.as_ref()?;
-        let node = crate::viewer_state::find_node_by_id(&self.fs_root, id)?;
+        let node = crate::viewer_state::find_node_by_id(&self.doc.fs_root, id)?;
         Some(self.rename_check(id, typed).map(|new| (node.name.clone(), new)))
     }
 
@@ -1990,9 +1990,9 @@ impl State {
                 // The recent projects, under the path row — the open
                 // document, then the ones before it. The project already
                 // open is not offered again.
-                let open_now = self.loaded_project_path.clone();
+                let open_now = self.doc.loaded_project_path.clone();
                 let recent: Vec<std::path::PathBuf> = self
-                    .recent_files
+                    .doc.recent_files
                     .iter()
                     .filter(|p| Some(*p) != open_now.as_ref())
                     .take(RECENT_ROW_LIMIT)
@@ -2062,9 +2062,9 @@ impl State {
                 // node everything but the first two (`context::placement`).
                 // The settings directories that refused geometry once were
                 // the root meta node's utility subnets, and they are gone.
-                let here = crate::context::context_at(&self.current_path);
+                let here = crate::context::context_at(&self.doc.current_path);
                 let offered: Vec<&str> = self
-                    .node_templates
+                    .doc.node_templates
                     .iter()
                     .filter(|t| crate::context::fits(crate::context::placement(&t.node.node_type), here))
                     .map(|t| t.label.as_str())
@@ -2101,7 +2101,7 @@ impl State {
     /// `loaded_project_path` None — the app's own position is that nothing is
     /// loaded, and Set As Default says the same.
     pub fn project_path_readout(&self) -> Option<(String, String)> {
-        let path = self.loaded_project_path.as_ref()?;
+        let path = self.doc.loaded_project_path.as_ref()?;
         let name = path.file_name()?.to_string_lossy().into_owned();
         Some((path.to_string_lossy().into_owned(), name))
     }
@@ -2360,7 +2360,7 @@ impl State {
 
     fn settings_field_text(&self, key: &str) -> String {
         match key {
-            "world_unit" => self.world_unit.suffix().to_string(),
+            "world_unit" => self.doc.world_unit.suffix().to_string(),
             "gpu" => self.gpu_preference.clone(),
             "node_wire_style" => self.ui_context[self.slots.content].inner().wire_style().label().to_string(),
             _ => String::new(),
@@ -2430,7 +2430,7 @@ impl State {
             Ctl::Choice(options) => match key {
                 "world_unit" => {
                     if let Some(u) = cce_ui::units::Unit::parse(value) {
-                        self.world_unit = u;
+                        self.doc.world_unit = u;
                         self.viewport_dirty = true;
                     }
                 }

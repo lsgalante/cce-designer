@@ -416,7 +416,7 @@ fn frame_all_frames_the_root_camera_from_inside_a_subnet() {
     let mut state = State::new(false);
     state.set_active_camera("camera1");
     let sub = state.current_dir().children.iter().position(|c| c.name == "sphere1").expect("sphere1 in geometry1");
-    state.current_path.push(sub);
+    state.doc.current_path.push(sub);
     state.on_path_changed();
     assert!(!state.current_dir().children.iter().any(|c| c.node_type == "camera"), "no camera in the subnet");
     assert!(state.camera_names().contains(&"camera1".to_string()), "the root's camera is offered here");
@@ -505,7 +505,7 @@ fn display_settings_round_trip_through_state_kdl() {
     a.show_point_numbers = true;
     a.point_marker_size = 0.05;
     a.point_marker_color = [1.0, 0.5, 0.0];
-    a.world_unit = cce_ui::units::Unit::Cm;
+    a.doc.world_unit = cce_ui::units::Unit::Cm;
     a.render.wireframe = true;
     a.render.wire_single_color = true;
     a.render.wire_color = [0.2, 0.4, 0.6];
@@ -694,12 +694,12 @@ fn a_menubar_click_is_dispatched_or_refused() {
         .expect("the Camera menu is dispatched");
     assert_eq!(state.active_camera, "Default Camera");
 
-    let nodes = state.fs_root.children.len();
+    let nodes = state.doc.fs_root.children.len();
     for (widget_idx, menu_idx) in [(crate::slots::HEADER_IDX, 0), (LEFT_MENUBAR_IDX, 0), (RIGHT_MENUBAR_IDX, 2)] {
         let res = state.apply_action(McpAction::MenuClick { widget_idx, menu_idx, item_idx: 0 }, &mut redraw);
         assert!(res.is_err(), "menubar {widget_idx} menu {menu_idx} was accepted: {res:?}");
     }
-    assert_eq!(state.fs_root.children.len(), nodes, "a refused click ran New Project");
+    assert_eq!(state.doc.fs_root.children.len(), nodes, "a refused click ran New Project");
 }
 
 /// The cameras and the parameter reset are commands. They were menus
@@ -807,7 +807,7 @@ fn reset_parameters_is_undone_and_redone() {
     // is reached under the rename, which is a step of its own.
     state.run_command("reset_parameters");
     let id = state.current_dir().children[slot].id.clone();
-    crate::geometry::rename_node_in_tree(&mut state.fs_root, &id, "ball");
+    crate::geometry::rename_node_in_tree(&mut state.doc.fs_root, &id, "ball");
     assert!(state.history_step(true));
     assert_ne!(state.current_dir().children[slot].name, "ball");
     assert!(state.history_step(true));
@@ -878,7 +878,7 @@ fn the_remap_from_range_is_detected_from_the_input() {
     assert!(state.last_status_text.contains("From set to"), "{}", state.last_status_text);
 
     // Undone, From is the row it was.
-    state.edit_history.break_group();
+    state.doc.edit_history.break_group();
     assert!(state.history_step(true));
     assert_eq!(from(&state), "0.00:1.00");
 
@@ -927,19 +927,19 @@ fn a_parameter_edit_is_undone_a_gesture_at_a_time() {
     for v in ["1.10", "1.20", "1.30"] {
         pane(&mut state, "Radius", v);
     }
-    assert_eq!(state.edit_history.undo_len(), 1, "a drag is one step");
+    assert_eq!(state.doc.edit_history.undo_len(), 1, "a drag is one step");
     // A write-back that changes nothing records nothing.
     state.sync_parameters_to_project();
-    assert_eq!(state.edit_history.undo_len(), 1);
+    assert_eq!(state.doc.edit_history.undo_len(), 1);
     // A release and a press, then a second drag of the same row.
-    state.edit_history.break_group();
+    state.doc.edit_history.break_group();
     for v in ["1.40", "1.50"] {
         pane(&mut state, "Radius", v);
     }
-    assert_eq!(state.edit_history.undo_len(), 2, "a second drag is a second step");
+    assert_eq!(state.doc.edit_history.undo_len(), 2, "a second drag is a second step");
     // Another row, with no press between: its own step all the same.
     pane(&mut state, "Rows", "9");
-    assert_eq!(state.edit_history.undo_len(), 3);
+    assert_eq!(state.doc.edit_history.undo_len(), 3);
 
     assert!(state.run_command("undo"));
     assert_eq!(param(&state, "rows"), rows);
@@ -957,7 +957,7 @@ fn a_parameter_edit_is_undone_a_gesture_at_a_time() {
     }
     // An edit after an undo forks: what was undone is not redone over it.
     assert!(state.run_command("undo"));
-    state.edit_history.break_group();
+    state.doc.edit_history.break_group();
     pane(&mut state, "Radius", "2.00");
     assert!(!state.history_step(false), "a new edit left the redo branch standing");
     assert!(state.run_command("undo"));
@@ -971,10 +971,10 @@ fn a_parameter_edit_is_undone_a_gesture_at_a_time() {
     assert_eq!(param(&state, "rows").0, "21", "undoing Radius took back an edit to Rows");
 
     // set_param, and one that is refused.
-    let before = state.edit_history.undo_len();
+    let before = state.doc.edit_history.undo_len();
     state.apply_action(McpAction::SetParam { slot, name: "radius".into(), value: "3.00".into() }, &mut redraw).unwrap();
     assert!(state.apply_action(McpAction::SetParam { slot, name: "radius".into(), value: "abc".into() }, &mut redraw).is_err());
-    assert_eq!(state.edit_history.undo_len(), before + 1, "a refused value recorded a step");
+    assert_eq!(state.doc.edit_history.undo_len(), before + 1, "a refused value recorded a step");
     assert!(state.run_command("undo"));
     assert_eq!(param(&state, "radius").0, "1.30");
 
@@ -995,7 +995,7 @@ fn the_graph_is_undone_a_step_at_a_time() {
     let mut redraw = false;
     // The first look takes the tree as it stands and records nothing.
     state.record_structure_changes();
-    assert_eq!(state.edit_history.undo_len(), 0);
+    assert_eq!(state.doc.edit_history.undo_len(), 0);
     let shape = |state: &State| -> Vec<(String, (f32, f32), String, bool, bool)> {
         state
             .current_dir()
@@ -1015,26 +1015,26 @@ fn the_graph_is_undone_a_step_at_a_time() {
         .unwrap();
     let added = shape(&state);
     assert_eq!(added.len(), start.len() + 1);
-    assert_eq!(state.edit_history.undo_len(), 1);
+    assert_eq!(state.doc.edit_history.undo_len(), 1);
     let slot = added.len() - 1;
     let name = added[slot].0.clone();
 
     // Wire it to the sphere, by the parameter, and move it.
     state.apply_action(McpAction::SetParam { slot, name: "radius".into(), value: "1".into() }, &mut redraw).ok();
-    let steps = state.edit_history.undo_len();
+    let steps = state.doc.edit_history.undo_len();
     state.current_dir_mut().children[slot].position = (12.0, 9.0);
     state.record_structure_changes();
-    assert_eq!(state.edit_history.undo_len(), steps + 1, "a move is a step");
+    assert_eq!(state.doc.edit_history.undo_len(), steps + 1, "a move is a step");
     let moved = shape(&state);
     // A second move of the same node straight after is the same step.
     state.current_dir_mut().children[slot].position = (13.0, 9.0);
     state.record_structure_changes();
-    assert_eq!(state.edit_history.undo_len(), steps + 1, "a run of moves is one step");
+    assert_eq!(state.doc.edit_history.undo_len(), steps + 1, "a run of moves is one step");
     // A press between them, and it is another.
-    state.edit_history.break_group();
+    state.doc.edit_history.break_group();
     state.current_dir_mut().children[slot].position = (14.0, 9.0);
     state.record_structure_changes();
-    assert_eq!(state.edit_history.undo_len(), steps + 2);
+    assert_eq!(state.doc.edit_history.undo_len(), steps + 2);
     let moved_again = shape(&state);
 
     // Flags: bypass, through its command's writer.
@@ -1063,7 +1063,7 @@ fn the_graph_is_undone_a_step_at_a_time() {
     assert!(state.run_command("undo"));
     assert_eq!(shape(&state)[slot].1, (9.0, 9.0));
     let _ = moved;
-    while state.edit_history.undo_len() > 1 {
+    while state.doc.edit_history.undo_len() > 1 {
         assert!(state.run_command("undo"));
     }
     assert_eq!(shape(&state), added);
@@ -1084,11 +1084,11 @@ fn the_graph_is_undone_a_step_at_a_time() {
         .apply_action(McpAction::AddNode { template_name: "Embryo".into(), name: None, x: 9.0, y: 9.0 }, &mut redraw)
         .unwrap();
     let slot = state.current_dir().children.len() - 1;
-    let level = state.current_path.clone();
-    state.current_path.push(slot);
+    let level = state.doc.current_path.clone();
+    state.doc.current_path.push(slot);
     state.sync_nodes();
     assert!(state.history_step(true));
-    assert_eq!(state.current_path, level, "the editor is inside a node that is gone");
+    assert_eq!(state.doc.current_path, level, "the editor is inside a node that is gone");
 
     // A wire, made as the graph makes one and as the pane does: each is
     // one step, and the second is not noticed a second time.
@@ -1096,7 +1096,7 @@ fn the_graph_is_undone_a_step_at_a_time() {
     state
         .apply_action(McpAction::AddNode { template_name: "Normal".into(), name: None, x: 9.0, y: 9.0 }, &mut redraw)
         .unwrap();
-    state.edit_history.clear();
+    state.doc.edit_history.clear();
     let wired = state
         .current_dir()
         .children
@@ -1109,11 +1109,11 @@ fn the_graph_is_undone_a_step_at_a_time() {
     let was = input(&state);
     state.current_dir_mut().children[wired].params.iter_mut().find(|p| p.name == "input").unwrap().set_text("camera1".to_string());
     state.record_structure_changes();
-    assert_eq!(state.edit_history.undo_len(), 1);
+    assert_eq!(state.doc.edit_history.undo_len(), 1);
     state
         .apply_action(McpAction::SetParam { slot: wired, name: "input".into(), value: String::new() }, &mut redraw)
         .unwrap();
-    assert_eq!(state.edit_history.undo_len(), 2, "a wire set as a parameter is one step, not two");
+    assert_eq!(state.doc.edit_history.undo_len(), 2, "a wire set as a parameter is one step, not two");
     assert!(state.run_command("undo"));
     assert_eq!(input(&state), "camera1");
     assert!(state.run_command("undo"));
@@ -1126,7 +1126,7 @@ fn the_graph_is_undone_a_step_at_a_time() {
         .unwrap();
     state.new_project();
     state.record_structure_changes();
-    assert_eq!(state.edit_history.undo_len(), 0, "New Project was recorded as an edit");
+    assert_eq!(state.doc.edit_history.undo_len(), 0, "New Project was recorded as an edit");
 }
 
 /// A rename is taken back with everything that named the node: the
@@ -1166,7 +1166,7 @@ fn a_rename_is_undone_with_what_names_the_node() {
     let (camera_id, camera_name) = (camera.id.clone(), camera.name.clone());
     state.set_active_camera(camera_name.clone());
     state.record_structure_changes();
-    state.edit_history.clear();
+    state.doc.edit_history.clear();
 
     let names = |state: &State| -> (String, String, String, String, String) {
         let dir = state.current_dir();
@@ -1189,7 +1189,7 @@ fn a_rename_is_undone_with_what_names_the_node() {
     assert_eq!(after.1, "ball", "the wire followed the rename");
     assert!(after.2.contains("../../ball/radius"), "{}", after.2);
     assert_eq!((after.3.as_str(), after.4.as_str()), ("lens", "lens"), "both copies of the camera's name");
-    assert_eq!(state.edit_history.undo_len(), 2, "each rename is one step, its wires with it");
+    assert_eq!(state.doc.edit_history.undo_len(), 2, "each rename is one step, its wires with it");
 
     assert!(state.run_command("undo"));
     assert!(state.last_status_text.contains(&format!("Undo Rename {camera_name}")), "{}", state.last_status_text);
@@ -1206,7 +1206,7 @@ fn a_rename_is_undone_with_what_names_the_node() {
     assert!(state.run_command("undo"));
     state.apply_action(McpAction::RenameNode { slot: sphere, new_name: "ball".into() }, &mut redraw).unwrap();
     state.apply_action(McpAction::RenameNode { slot: normal, new_name: old.clone() }, &mut redraw).unwrap();
-    state.edit_history.take(true);
+    state.doc.edit_history.take(true);
     assert!(state.history_step(true), "the step is taken");
     let dir = state.current_dir();
     assert_eq!(dir.children[sphere].name, "ball", "the sphere took a name its sibling has");
@@ -1236,7 +1236,7 @@ fn attribute_visualizers_are_edited_in_the_params_hud() {
     assert!(state.scene_attributes.iter().any(|a| a.name == "N"), "{:?}", state.scene_attributes);
     let colours = |state: &State| state.rt_sphere_verts.iter().map(|v| v.color).collect::<Vec<_>>();
     let plain = colours(&state);
-    let nodes_before = serde_json::to_string(&state.fs_root).unwrap();
+    let nodes_before = serde_json::to_string(&state.doc.fs_root).unwrap();
     let keys = |state: &State| state.param().node_params().into_iter().map(|r| r.0).filter(|k| !k.is_empty()).collect::<Vec<_>>();
     // The pane reporting a row at a value, as a press or a drag does.
     let pane = |state: &mut State, key: &str, value: &str| {
@@ -1267,7 +1267,7 @@ fn attribute_visualizers_are_edited_in_the_params_hud() {
     pane(&mut state, "Attribute", "N");
     assert_eq!(state.visualizers[0].attribute, "N");
     assert_ne!(colours(&state), plain, "the ramp is on the scene");
-    assert_eq!(serde_json::to_string(&state.fs_root).unwrap(), nodes_before, "no node in the graph");
+    assert_eq!(serde_json::to_string(&state.doc.fs_root).unwrap(), nodes_before, "no node in the graph");
 
     // Manual range: its float2 row appears, and takes two ends.
     pane(&mut state, "Range", "Manual");
@@ -1305,7 +1305,7 @@ fn attribute_visualizers_are_edited_in_the_params_hud() {
     // Picking a node also hands the HUD back.
     assert!(state.run_command("attribute_visualizers"));
     let mut redraw = false;
-    let slot = geo(&state.fs_root).children.iter().position(|c| c.node_type == "sphere").unwrap();
+    let slot = geo(&state.doc.fs_root).children.iter().position(|c| c.node_type == "sphere").unwrap();
     state.apply_action(McpAction::Select { slot }, &mut redraw).unwrap();
     state.sync_parameters_pane();
     assert_eq!(state.vis_hud, None);
@@ -1483,10 +1483,10 @@ fn a_node_is_renamed_from_its_menu() {
 #[test]
 fn the_new_project_command_starts_an_empty_project() {
     let mut state = State::new(false);
-    assert!(!state.fs_root.children.is_empty(), "the bundled project has nodes");
+    assert!(!state.doc.fs_root.children.is_empty(), "the bundled project has nodes");
     assert!(state.run_command("new_project"));
-    assert!(state.fs_root.children.is_empty(), "New Project left the old nodes in place");
-    assert_eq!(state.loaded_project_path, None);
+    assert!(state.doc.fs_root.children.is_empty(), "New Project left the old nodes in place");
+    assert_eq!(state.doc.loaded_project_path, None);
 }
 
 /// Two commands on one chord is silent at the keyboard — the second never
@@ -2038,7 +2038,7 @@ fn every_wire_is_drawn_into_its_own_port() {
     assert!(!level.iter().any(|g| g.name == "elsewhere"), "…which is not on this level, so no line is drawn");
 
     // Dropped on the switch's third port: Input 3.
-    let path = state.current_path.clone();
+    let path = state.doc.current_path.clone();
     let id = switch.id.clone();
     assert!(state.connect_port(&path, &id, "input1".into(), 2));
     let sw = state.current_dir().children.iter().find(|c| c.id == id).unwrap();

@@ -198,10 +198,10 @@ impl State {
     /// cell to `at`, and return its slot. The display flag is left as the
     /// template has it cleared, for the caller to decide.
     fn add_template_node(&mut self, template: &str, at: (f32, f32)) -> Option<usize> {
-        let idx = self.node_templates.iter().position(|t| {
+        let idx = self.doc.node_templates.iter().position(|t| {
             t.label.eq_ignore_ascii_case(template) || t.node.name.eq_ignore_ascii_case(template)
         })?;
-        let mut node = self.node_templates[idx].node.clone();
+        let mut node = self.doc.node_templates[idx].node.clone();
         crate::app::regenerate_node_ids(&mut node);
         node.position = self.find_empty_cell(at.0, at.1, None);
         node.name = self.get_lowest_unused_name(&node.name);
@@ -270,7 +270,7 @@ impl State {
             (n.name.clone(), n.position)
         };
         let Some(page) = crate::page::resolve_page(
-            &self.fs_root,
+            &self.doc.fs_root,
             &self.current_dir().children[target],
             &mut Vec::new(),
         ) else {

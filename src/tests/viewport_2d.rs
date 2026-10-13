@@ -522,7 +522,7 @@ fn adding_to_an_image_wires_a_node_after_it() {
 
     // The whole chain still composes, from its end.
     let end = state.current_dir().children.iter().find(|c| c.name == "page_shape1").unwrap();
-    let page = crate::page::resolve_page(&state.fs_root, end, &mut Vec::new()).expect("the chain is broken");
+    let page = crate::page::resolve_page(&state.doc.fs_root, end, &mut Vec::new()).expect("the chain is broken");
     assert_eq!((page.width, page.height), (300, 200));
 
     // A rectangle, a line and a polygon are the same node under another

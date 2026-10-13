@@ -201,7 +201,7 @@ fn playback_builds_the_scene_for_the_frame_the_playbar_shows() {
     state.apply_layout();
     let mut redraw = false;
     state.apply_action(McpAction::AddNode { template_name: "Simnet".into(), name: Some("sim".into()), x: 6.0, y: 8.0 }, &mut redraw).unwrap();
-    assert!(crate::geometry::contains_simnet(&state.fs_root));
+    assert!(crate::geometry::contains_simnet(&state.doc.fs_root));
     state.tick_frame(1.0 / 60.0);
     assert_eq!(state.last_sim_frame, state.sim_frame());
     state.ui_context[state.slots.playbar].inner_mut().playing = true;
@@ -334,7 +334,7 @@ fn a_copy_shares_the_topology_until_it_is_edited() {
     let mut cache = crate::geometry::SimCache::default();
     for frame in [4, 4, 2] {
         let mut sim = crate::geometry::EvalSim::new(frame, 1, &mut cache);
-        let solved = crate::geometry::resolve_simnet_geometry_with_errors(&state.fs_root, &simnet, &mut Vec::new(), &mut None, &mut sim).unwrap();
+        let solved = crate::geometry::resolve_simnet_geometry_with_errors(&state.doc.fs_root, &simnet, &mut Vec::new(), &mut None, &mut sim).unwrap();
         assert!(solved.has_topology(), "frame {frame} comes with its topology");
     }
 }
@@ -692,10 +692,10 @@ fn an_attribute_value_row_is_a_control_as_wide_as_its_target() {
         assert_eq!(value_text(&mut state), shown, "one number spread over a {ty}");
     }
     // Read back unchanged, the spread number is not an edit.
-    let steps = state.edit_history.undo_len();
+    let steps = state.doc.edit_history.undo_len();
     state.sync_parameters_to_project();
     assert_eq!(state.current_dir().children[1].params.iter().find(|p| p.name == "value").unwrap().text(), "1.00");
-    assert_eq!(state.edit_history.undo_len(), steps);
+    assert_eq!(state.doc.edit_history.undo_len(), steps);
 
     set(&mut state, "type", "Float3");
     set(&mut state, "value", "1.00:2.00:3.00");
@@ -1167,7 +1167,7 @@ fn rows_selected_inside_a_simnet_follow_the_simulation() {
         output.params.iter_mut().find(|p| p.name == "input").unwrap().set_text("pull1".to_string());
     }
     // Dive in and select the pull.
-    state.current_path.push(sim);
+    state.doc.current_path.push(sim);
     state.sync_nodes();
     let pull = state.current_dir().children.iter().position(|c| c.name == "pull1").unwrap();
     state.apply_action(McpAction::Select { slot: pull }, &mut redraw).unwrap();
@@ -1279,7 +1279,7 @@ fn the_spreadsheet_and_markers_follow_the_frame_and_upstream_edits() {
 
     // No simulation in the graph. The frame moves; nothing rebuilds the
     // scene; what is selected is still read again.
-    assert!(!crate::geometry::contains_simnet(&state.fs_root));
+    assert!(!crate::geometry::contains_simnet(&state.doc.fs_root));
     state.apply_action(McpAction::Select { slot: sphere }, &mut redraw).unwrap();
     state.sync_nodes();
     state.tick_frame(1.0 / 60.0);

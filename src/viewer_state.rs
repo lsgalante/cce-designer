@@ -290,7 +290,7 @@ impl State {
     /// here, once, ahead of every read and write.
     fn viewer_handle_ctx(&self, node: &FsNode) -> HandleCtx {
         let page = crate::page::is_page_node(&node.node_type)
-            .then(|| crate::page::resolve_frame(&self.fs_root, node))
+            .then(|| crate::page::resolve_frame(&self.doc.fs_root, node))
             .flatten();
         HandleCtx { page, world_unit_mm: self.world_unit_mm() }
     }
@@ -299,7 +299,7 @@ impl State {
     /// a type this source accepts.
     fn viewer_handles_of(&self, node_id: &str) -> Option<Vec<Vec3>> {
         let tool = self.viewer_tool.as_ref()?;
-        let node = find_node_by_id(&self.fs_root, node_id)?;
+        let node = find_node_by_id(&self.doc.fs_root, node_id)?;
         if !tool.source.accepts(&node.node_type) {
             return None;
         }
@@ -311,7 +311,7 @@ impl State {
     pub(crate) fn viewer_tool_outline(&self) -> Vec<(f32, f32)> {
         let Some(tool) = &self.viewer_tool else { return Vec::new() };
         let Some(mvp) = self.last_scene_mvp else { return Vec::new() };
-        let Some(node) = find_node_by_id(&self.fs_root, &tool.node_id) else { return Vec::new() };
+        let Some(node) = find_node_by_id(&self.doc.fs_root, &tool.node_id) else { return Vec::new() };
         if !tool.source.accepts(&node.node_type) {
             return Vec::new();
         }
@@ -334,7 +334,7 @@ impl State {
         let view = self.last_scene_view_rect;
         let (cx, cy) = (self.cursor_x, self.cursor_y);
         let plane = self.viewer_tool.as_ref().and_then(|tool| {
-            let node = find_node_by_id(&self.fs_root, node_id)?;
+            let node = find_node_by_id(&self.doc.fs_root, node_id)?;
             tool.source.plane(&self.viewer_handle_ctx(node))
         });
         if let Some((point, normal)) = plane {
@@ -353,12 +353,12 @@ impl State {
 
     /// Write handles back and run the same resync sequence as SetParam.
     fn set_viewer_handles(&mut self, node_id: &str, handles: &[Vec3]) {
-        let ctx = match find_node_by_id(&self.fs_root, node_id) {
+        let ctx = match find_node_by_id(&self.doc.fs_root, node_id) {
             Some(node) => self.viewer_handle_ctx(node),
             None => return,
         };
         let Some(tool) = self.viewer_tool.take() else { return };
-        if let Some(node) = find_node_by_id_mut(&mut self.fs_root, node_id) {
+        if let Some(node) = find_node_by_id_mut(&mut self.doc.fs_root, node_id) {
             tool.source.write(node, handles, &ctx);
         }
         self.viewer_tool = Some(tool);
@@ -464,7 +464,7 @@ impl State {
             return false;
         };
         let snap = self.viewer_tool.as_ref().and_then(|t| t.snap);
-        let ctx = match find_node_by_id(&self.fs_root, &node_id) {
+        let ctx = match find_node_by_id(&self.doc.fs_root, &node_id) {
             Some(node) => self.viewer_handle_ctx(node),
             None => return false,
         };

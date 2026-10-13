@@ -401,7 +401,7 @@ fn test_legacy_style_params_are_dropped_from_main() {
     // A pre-removal save: the four utility subnets flat at the root,
     // Main carrying its retired Style section.
     let style = |name: &str, ty: &str, val: &str| crate::app::ParamDef::new(name.to_string(), ty.to_string(), val.to_string());
-    state.fs_root.children.push(crate::app::FsNode {
+    state.doc.fs_root.children.push(crate::app::FsNode {
         id: "legacy-main".to_string(),
         name: "main".to_string(),
         node_type: "utility".to_string(),
@@ -422,11 +422,11 @@ fn test_legacy_style_params_are_dropped_from_main() {
     state.migrate_meta_settings_node();
 
     assert!(
-        !state.fs_root.children.iter().any(|c| c.node_type == "utility"),
+        !state.doc.fs_root.children.iter().any(|c| c.node_type == "utility"),
         "a utility subnet survived the migration"
     );
     let names: Vec<&str> = state
-        .fs_root
+        .doc.fs_root
         .children
         .iter()
         .flat_map(|c| c.params.iter())
@@ -465,7 +465,7 @@ fn test_widget_roster_indices_are_dense() {
 #[test]
 fn view_one_to_one_reaches_true_scale() {
     let mut state = State::new(false);
-    state.world_unit = cce_ui::units::Unit::Cm;
+    state.doc.world_unit = cce_ui::units::Unit::Cm;
     // The default camera's eye ray is fixed, so 1:1 is a zoom — the one
     // number the readout's cached state can follow here without a
     // render pass (a camera node's Position rewrite is cached by one).
@@ -483,7 +483,7 @@ fn view_one_to_one_reaches_true_scale() {
     assert!((after - 1.0).abs() < 1e-3, "ratio {after} (was {before})");
     assert!((state.world_unit_mm() - 10.0).abs() < 1e-4);
     // A millimetre unit needs the camera ~10× farther; still reachable.
-    state.world_unit = cce_ui::units::Unit::Mm;
+    state.doc.world_unit = cce_ui::units::Unit::Mm;
     state.view_one_to_one();
     state.last_viewport.zoom = state.viewport().zoom;
     let mm = state.view_scale_ratio();
@@ -504,7 +504,7 @@ fn view_one_to_one_reaches_true_scale() {
 fn test_session_node_exists_and_cannot_be_deleted() {
     let mut state = State::new(false);
     assert!(
-        !state.fs_root.children.iter().any(|c| c.node_type == "meta"),
+        !state.doc.fs_root.children.iter().any(|c| c.node_type == "meta"),
         "a fresh tree grew a meta node"
     );
 
@@ -523,7 +523,7 @@ fn test_session_node_exists_and_cannot_be_deleted() {
         inputs: 1,
         outputs: 1,
     };
-    state.fs_root.children.push(crate::app::FsNode {
+    state.doc.fs_root.children.push(crate::app::FsNode {
         id: "legacy-session".to_string(),
         name: "Session".to_string(),
         node_type: "session".to_string(),
@@ -552,13 +552,13 @@ fn test_session_node_exists_and_cannot_be_deleted() {
     state.migrate_meta_settings_node();
 
     // The node is gone, along with every utility subnet it held.
-    assert!(!state.fs_root.children.iter().any(|c| {
+    assert!(!state.doc.fs_root.children.iter().any(|c| {
         matches!(c.node_type.as_str(), "meta" | "session" | "utility")
     }), "the meta node survived the migration");
 
     // And its values are the live settings — the point of migrating at
     // all rather than simply dropping the node.
-    assert_eq!(state.world_unit, cce_ui::units::Unit::Cm);
+    assert_eq!(state.doc.world_unit, cce_ui::units::Unit::Cm);
     assert!((state.world_unit_mm() - 10.0).abs() < 1e-4);
     assert!((state.point_marker_size - 0.05).abs() < 1e-6);
     assert!((state.point_marker_color[0] - 1.0).abs() < 0.01);
@@ -570,9 +570,9 @@ fn test_session_node_exists_and_cannot_be_deleted() {
     assert!(state.circular_network_pane);
 
     // Idempotent: a second pass has nothing to find and changes nothing.
-    let before = serde_json::to_string(&state.fs_root).unwrap();
+    let before = serde_json::to_string(&state.doc.fs_root).unwrap();
     state.migrate_meta_settings_node();
-    assert_eq!(before, serde_json::to_string(&state.fs_root).unwrap());
+    assert_eq!(before, serde_json::to_string(&state.doc.fs_root).unwrap());
 }
 
 /// A node the user put INSIDE the meta subnet is re-homed, not eaten.
@@ -596,7 +596,7 @@ fn the_migration_rehomes_a_node_the_user_left_in_the_meta_subnet() {
         inputs: 1,
         outputs: 1,
     };
-    state.fs_root.children.push(crate::app::FsNode {
+    state.doc.fs_root.children.push(crate::app::FsNode {
         id: "legacy-meta".to_string(),
         name: "meta".to_string(),
         node_type: "meta".to_string(),
@@ -625,10 +625,10 @@ fn the_migration_rehomes_a_node_the_user_left_in_the_meta_subnet() {
 
     state.migrate_meta_settings_node();
 
-    assert!(!state.fs_root.children.iter().any(|c| c.node_type == "meta"));
+    assert!(!state.doc.fs_root.children.iter().any(|c| c.node_type == "meta"));
     // A subnet is a geometry node, so it is re-homed in the root's
     // Geometry node rather than at the root itself.
-    let level = geo(&state.fs_root);
+    let level = geo(&state.doc.fs_root);
     let kept = level
         .children
         .iter()
@@ -651,7 +651,7 @@ fn the_migration_rehomes_a_node_the_user_left_in_the_meta_subnet() {
 fn test_old_saves_migrate_settings_nodes_into_session() {
     let mut state = State::new(false);
     state.viewport_mut().show_grid = true;
-    state.fs_root.children.push(crate::app::FsNode {
+    state.doc.fs_root.children.push(crate::app::FsNode {
         id: "flat-guides".to_string(),
         name: "guides".to_string(),
         node_type: "utility".to_string(),
@@ -667,7 +667,7 @@ fn test_old_saves_migrate_settings_nodes_into_session() {
     state.migrate_meta_settings_node();
 
     assert!(
-        !state.fs_root.children.iter().any(|c| c.node_type == "utility"),
+        !state.doc.fs_root.children.iter().any(|c| c.node_type == "utility"),
         "a root-level settings node survived"
     );
     assert!(!state.viewport().show_grid, "its value did not reach the live state");
@@ -985,13 +985,13 @@ fn a_detached_windows_save_does_not_reset_the_main_layout() {
     child.detached_pane = Some(crate::slots::PARAM_IDX);
     child.resize(400.0, 300.0, 1.0);
     child.rebuild_positions();
-    child.fs_root.children[0].name = "synced_edit".to_string();
+    child.doc.fs_root.children[0].name = "synced_edit".to_string();
     child.save_to_file(&channel).expect("child writes the channel");
 
     main.app_drag = Some(crate::app::AppDrag::HudResize { start_w: 650.0, start_mouse_x: 0.0 });
     main.load_sync_channel(&channel, true).expect("main reloads");
 
-    assert!(main.fs_root.children.iter().any(|c| c.name == "synced_edit"), "the tree edit must sync");
+    assert!(main.doc.fs_root.children.iter().any(|c| c.name == "synced_edit"), "the tree edit must sync");
     assert!((main.params_hud_width - 650.0).abs() < 0.5, "HUD width: {}", main.params_hud_width);
     assert!((main.floating_spreadsheet_height - 420.0).abs() < 0.5, "spreadsheet height: {}", main.floating_spreadsheet_height);
     assert!((main.viewport().rotation_x - 0.7).abs() < 1e-6, "camera: {}", main.viewport().rotation_x);
@@ -1022,7 +1022,7 @@ fn a_detached_window_leaves_the_channels_layout_alone() {
     child.detached_pane = Some(crate::slots::PARAM_IDX);
     child.resize(400.0, 300.0, 1.0);
     child.rebuild_positions();
-    child.fs_root.children[0].name = "synced_edit".to_string();
+    child.doc.fs_root.children[0].name = "synced_edit".to_string();
     child.graph_mut().set_selected_node(Some(0));
     child.save_to_file(&channel).expect("child writes the channel");
 
@@ -1120,7 +1120,7 @@ fn a_project_keeps_its_display_settings() {
     state.render.wireframe = true;
     state.render.geo_opacity = 0.5;
     state.grid_thickness = 0.07;
-    state.world_unit = cce_ui::units::Unit::Cm;
+    state.doc.world_unit = cce_ui::units::Unit::Cm;
     state.point_marker_color = [0.1, 0.9, 0.2];
     state.save_to_file(&dir).expect("save");
     assert!(!state.has_unsaved_changes());
@@ -1134,7 +1134,7 @@ fn a_project_keeps_its_display_settings() {
     state.render.wireframe = false;
     state.render.geo_opacity = 1.0;
     state.grid_thickness = 0.03;
-    state.world_unit = cce_ui::units::Unit::Mm;
+    state.doc.world_unit = cce_ui::units::Unit::Mm;
     state.point_marker_color = [1.0, 1.0, 1.0];
 
     state.load_from_file(&dir).expect("load");
@@ -1143,7 +1143,7 @@ fn a_project_keeps_its_display_settings() {
     assert!(state.render.smooth_shading && state.render.wireframe);
     assert!((state.render.geo_opacity - 0.5).abs() < 1e-6);
     assert!((state.grid_thickness - 0.07).abs() < 1e-6);
-    assert_eq!(state.world_unit, cce_ui::units::Unit::Cm);
+    assert_eq!(state.doc.world_unit, cce_ui::units::Unit::Cm);
     assert_eq!(state.point_marker_color, [0.1, 0.9, 0.2]);
     assert!(!state.scene_smooth_verts.is_empty(), "the scene was rebuilt smooth");
     assert!(!state.has_unsaved_changes(), "a fresh load is clean");
@@ -1224,7 +1224,7 @@ fn a_point_number_under_a_plate_is_not_drawn() {
     // Put the HUD, with a node's rows on its plate, over the middle of
     // the scene: the numbers under the plate go, the rest stay.
     let mut redraw = false;
-    let slot = geo(&state.fs_root).children.iter().position(|c| c.node_type == "sphere").unwrap();
+    let slot = geo(&state.doc.fs_root).children.iter().position(|c| c.node_type == "sphere").unwrap();
     state.apply_action(McpAction::Select { slot }, &mut redraw).unwrap();
     state.params_plate = true;
     state.positions[crate::slots::PARAM_IDX] = (800.0, 200.0, 200.0, 690.0);
@@ -1349,7 +1349,7 @@ fn the_params_hud_is_under_the_plates_and_stops_above_the_bottom_ones() {
     // of the HUD and the HUD runs down to the playbar.)
     state.resize(1600.0, 360.0, 1.0);
     let mut redraw = false;
-    let slot = geo(&state.fs_root).children.iter().position(|c| c.node_type == "sphere").unwrap();
+    let slot = geo(&state.doc.fs_root).children.iter().position(|c| c.node_type == "sphere").unwrap();
     state.apply_action(McpAction::Select { slot }, &mut redraw).unwrap();
     state.params_plate = true;
     state.rebuild_positions();
@@ -1427,7 +1427,7 @@ fn the_params_plate_fits_its_rows() {
     state.rebuild_positions();
     state.apply_layout();
     let mut redraw = false;
-    let slot = geo(&state.fs_root).children.iter().position(|c| c.node_type == "sphere").unwrap();
+    let slot = geo(&state.doc.fs_root).children.iter().position(|c| c.node_type == "sphere").unwrap();
     state.apply_action(McpAction::Select { slot }, &mut redraw).unwrap();
     state.apply_layout();
 
@@ -2679,7 +2679,7 @@ fn the_dialog_plate_is_the_menu_plate() {
     let r = cce_ui::layout::menu_corner_radius();
     let rect = cce_ui::scene::layout::Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 };
     assert_eq!(dialog.corner_style(rect).map(|(r, _)| r), (r > 0.0).then_some(r));
-    for file in ["src/dialog.rs", "src/render.rs", "src/app.rs", "src/app/input.rs"] {
+    for file in ["src/dialog.rs", "src/render.rs", "src/app.rs", "src/app/input.rs", "src/app/document.rs"] {
         let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(file)).unwrap();
         assert!(!src.contains("dialog/compression") && !src.contains("DIALOG_COMPRESSION"), "{file} overrides the menu material");
     }
@@ -6147,7 +6147,7 @@ fn test_popover_draws_over_widget_labels() {
     // "Open" dropdown was this test's subject until that node was
     // retired. Scatter's Mode is a choice.
     let scatter = state
-        .node_templates
+        .doc.node_templates
         .iter()
         .find(|t| t.label == "Scatter")
         .expect("a Scatter template")

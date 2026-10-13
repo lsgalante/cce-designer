@@ -68,7 +68,7 @@ fn drag_handle_to(state: &mut State, i: usize, to: (f32, f32)) {
 /// A row of the node the viewer state is editing, as a number.
 fn edited_row(state: &State, row: &str) -> f32 {
     let id = state.viewer_tool.as_ref().expect("no viewer state").node_id.clone();
-    let node = crate::viewer_state::find_node_by_id(&state.fs_root, &id).expect("the edited node is gone");
+    let node = crate::viewer_state::find_node_by_id(&state.doc.fs_root, &id).expect("the edited node is gone");
     crate::geometry::node_param_f32(node, row, f32::NAN)
 }
 
@@ -131,8 +131,8 @@ fn an_image_shape_is_moved_sized_and_turned_by_its_handles() {
     cache_scene_camera(&mut state);
     let ctx_frame = {
         let id = state.viewer_tool.as_ref().unwrap().node_id.clone();
-        let node = crate::viewer_state::find_node_by_id(&state.fs_root, &id).unwrap();
-        crate::page::resolve_frame(&state.fs_root, node).unwrap()
+        let node = crate::viewer_state::find_node_by_id(&state.doc.fs_root, &id).unwrap();
+        crate::page::resolve_frame(&state.doc.fs_root, node).unwrap()
     };
     let target = ctx_frame.to_world([120.0, 60.0], state.world_unit_mm());
     let (sx, sy, _) = crate::viewer_state::project_point(&state.last_scene_mvp.unwrap(), state.last_scene_view_rect, target).expect("the place is behind the camera");
@@ -194,7 +194,7 @@ fn image_text_is_moved_and_sized_by_its_handles() {
 
     // A node that draws on no image has no handles to grab.
     let id = state.viewer_tool.as_ref().unwrap().node_id.clone();
-    crate::viewer_state::find_node_by_id_mut(&mut state.fs_root, &id)
+    crate::viewer_state::find_node_by_id_mut(&mut state.doc.fs_root, &id)
         .unwrap()
         .params
         .iter_mut()

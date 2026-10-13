@@ -665,7 +665,7 @@ fn the_row_menu_says_what_a_parameter_does() {
     // sphere1 comes from the bundled project, whose file has no
     // descriptions: the merge hands it the template's.
     let sphere = slot_of(&state, "sphere1");
-    let templates = state.node_templates.clone();
+    let templates = state.doc.node_templates.clone();
     let template = |name: &str, pname: &str| -> String {
         templates.iter().find(|t| t.node.name == name).unwrap().node.params.iter()
             .find(|p| p.name == pname).unwrap().description.clone()
@@ -853,7 +853,7 @@ fn the_row_menu_copies_and_pastes_references() {
     // The reference is live: ball follows sphere1's Radius.
     state.apply_action(McpAction::SetParam { slot: sphere, name: "radius".into(), value: "0.9".into() }, &mut redraw).unwrap();
     let mut err = None;
-    let r = crate::geometry::resolve_param_refs(&state.fs_root, &state.current_dir().children[ball], 0, &mut err).unwrap();
+    let r = crate::geometry::resolve_param_refs(&state.doc.fs_root, &state.current_dir().children[ball], 0, &mut err).unwrap();
     assert!(err.is_none(), "{err:?}");
     assert_eq!(r.params.iter().find(|p| p.name == "radius").unwrap().text(), "0.9");
 

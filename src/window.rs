@@ -48,9 +48,9 @@ impl State {
             let mut changed = state.handle_event(&ev);
 
             if let Some(seg) = state.path_mut().path_click() {
-                if seg < state.current_path.len() {
-                    let exited_idx = state.current_path.get(seg).copied();
-                    state.current_path.truncate(seg);
+                if seg < state.doc.current_path.len() {
+                    let exited_idx = state.doc.current_path.get(seg).copied();
+                    state.doc.current_path.truncate(seg);
                     state.on_path_changed();
                     if let Some(idx) = exited_idx {
                         let pos = {
@@ -223,7 +223,7 @@ impl State {
     fn project_snapshot(&self) -> Project {
         Project {
             name: "Project".to_string(),
-            root: self.fs_root.clone(),
+            root: self.doc.fs_root.clone(),
             view_state: self.project_view_state(),
             format: crate::app::PROJECT_FORMAT,
         }
@@ -309,7 +309,7 @@ impl State {
             McpAction::Enter { slot } => {
                 let dir = state.current_dir();
                 if slot < dir.children.len() && dir.children[slot].is_enterable() {
-                    state.current_path.push(slot);
+                    state.doc.current_path.push(slot);
                     state.on_path_changed();
                     state.sync_parameters_pane();
                     needs_redraw = true;
@@ -412,7 +412,7 @@ impl State {
                     Err(format!("Save failed: {:?}", e))
                 } else {
                     let path_buf = Path::new(&path).to_path_buf();
-                    state.loaded_project_path = Some(path_buf.clone());
+                    state.doc.loaded_project_path = Some(path_buf.clone());
                     state.add_recent_file(path_buf);
                     needs_redraw = true;
                     Ok("Project saved".to_string())
@@ -444,20 +444,20 @@ impl State {
                 }
             }
             McpAction::AddNode { template_name, name, x, y } => {
-                let template_idx = state.node_templates.iter().position(|t| {
+                let template_idx = state.doc.node_templates.iter().position(|t| {
                     t.label.to_lowercase() == template_name.to_lowercase()
                         || t.node.name.to_lowercase() == template_name.to_lowercase()
                 });
-                let here = crate::context::context_at(&state.current_path);
+                let here = crate::context::context_at(&state.doc.current_path);
                 let refused = template_idx.and_then(|idx| {
-                    let t = &state.node_templates[idx];
+                    let t = &state.doc.node_templates[idx];
                     crate::context::refusal(&t.label, &t.node.node_type, here)
                 });
                 if let Some(why) = refused {
                     state.update_status_text(&why);
                     Err(why)
                 } else if let Some(idx) = template_idx {
-                    let mut node = state.node_templates[idx].node.clone();
+                    let mut node = state.doc.node_templates[idx].node.clone();
                     // Fresh ids, like paste: a verbatim clone shares the
                     // template's ids across every instance.
                     crate::app::regenerate_node_ids(&mut node);

@@ -26,7 +26,7 @@ fn test_chooser_opens_at_the_loaded_projects_parent() {
         .join(format!("cce-designer-test-projects-{}", std::process::id()))
         .join("gears");
     std::fs::create_dir_all(&dir).unwrap();
-    state.loaded_project_path = Some(dir.clone());
+    state.doc.loaded_project_path = Some(dir.clone());
     assert_eq!(state.chooser_start_dir().as_deref(), dir.parent(),
         "chooser must start where the current project lives");
 }
@@ -45,7 +45,7 @@ fn a_default_project_that_is_missing_is_not_forgotten() {
     assert!(!gone.exists());
 
     let mut state = State::new(false);
-    let before = state.fs_root.children.len();
+    let before = state.doc.fs_root.children.len();
     state.default_project_setting = Some(gone.to_string_lossy().into_owned());
     state.load_default_project_setting();
 
@@ -54,7 +54,7 @@ fn a_default_project_that_is_missing_is_not_forgotten() {
         Some(gone.to_string_lossy().as_ref()),
         "the pointer survives a launch that could not see it"
     );
-    assert_eq!(state.fs_root.children.len(), before, "and the bundled project still stands");
+    assert_eq!(state.doc.fs_root.children.len(), before, "and the bundled project still stands");
     assert!(
         state.last_status_text.contains("not found"),
         "the status line says so: {}",
@@ -106,10 +106,10 @@ fn test_view_toggle_is_project_data() {
     assert!(legacy.geometry_visible);
 
     let mut state = State::new(false);
-    state.fs_root.children.push(back);
-    state.last_saved_root_json = serde_json::to_string(&state.fs_root).unwrap();
+    state.doc.fs_root.children.push(back);
+    state.doc.last_saved_root_json = serde_json::to_string(&state.doc.fs_root).unwrap();
     assert!(!state.has_unsaved_changes());
-    state.fs_root.children.last_mut().unwrap().geometry_visible = true;
+    state.doc.fs_root.children.last_mut().unwrap().geometry_visible = true;
     assert!(state.has_unsaved_changes(), "the toggle must dirty the title");
 }
 
@@ -232,7 +232,7 @@ fn test_main_node_offers_set_as_default() {
 #[test]
 fn test_set_as_default_without_a_loaded_file_is_a_noop() {
     let mut state = State::new(false);
-    assert_eq!(state.loaded_project_path, None);
+    assert_eq!(state.doc.loaded_project_path, None);
     let before = state.default_project_setting.clone();
     // Deliberately NOT via set_current_as_default's saving path: with a
     // loaded path it would write the real ~/.config state.kdl. The no-path
@@ -278,7 +278,7 @@ fn a_plates_rows_are_in_its_right_click_menu() {
     // covers it: its menu alone, which detaches and does not collapse.
     // A node selected, so the HUD has rows and a plate fitted to them.
     let mut redraw = false;
-    let slot = geo(&state.fs_root).children.iter().position(|c| c.node_type == "sphere").unwrap();
+    let slot = geo(&state.doc.fs_root).children.iter().position(|c| c.node_type == "sphere").unwrap();
     state.apply_action(crate::app::McpAction::Select { slot }, &mut redraw).unwrap();
     state.apply_layout();
     state.params_plate = true;

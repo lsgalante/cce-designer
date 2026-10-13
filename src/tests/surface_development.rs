@@ -1444,18 +1444,18 @@ fn mcp_enter_agrees_with_the_keyboard_about_what_is_enterable() {
         inputs: 1,
         outputs: 1,
     };
-    state.current_path.clear();
-    state.fs_root.children.push(node("sim_empty", "simnet"));
-    state.fs_root.children.push(node("remesh_leaf", "remesh"));
+    state.doc.current_path.clear();
+    state.doc.fs_root.children.push(node("sim_empty", "simnet"));
+    state.doc.fs_root.children.push(node("remesh_leaf", "remesh"));
     let mut redraw = false;
-    for (i, child) in state.fs_root.children.clone().iter().enumerate() {
+    for (i, child) in state.doc.fs_root.children.clone().iter().enumerate() {
         let entered = state.apply_action(McpAction::Enter { slot: i }, &mut redraw).is_ok();
         assert_eq!(entered, child.is_enterable(), "{} ({})", child.name, child.node_type);
         if entered {
             state.apply_action(McpAction::Up, &mut redraw).unwrap();
         }
     }
-    let names: Vec<_> = state.fs_root.children.iter().map(|c| c.name.as_str()).collect();
+    let names: Vec<_> = state.doc.fs_root.children.iter().map(|c| c.name.as_str()).collect();
     assert!(names.contains(&"sim_empty") && names.contains(&"remesh_leaf"));
 }
 
@@ -1653,7 +1653,7 @@ fn bypass_is_one_flag_however_it_is_asked_for() {
     // An empty Geometry node: the bundled project's, emptied.
     let mut state = State::new(false);
     let mut redraw = false;
-    assert_eq!(state.current_path.len(), 1, "the bundled project opens in its Geometry node");
+    assert_eq!(state.doc.current_path.len(), 1, "the bundled project opens in its Geometry node");
     state.current_dir_mut().children.clear();
     state.sync_nodes();
     state.apply_action(McpAction::AddNode { template_name: "Sphere".into(), name: Some("ball".into()), x: 3.0, y: 3.0 }, &mut redraw).unwrap();

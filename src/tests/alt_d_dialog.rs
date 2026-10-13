@@ -680,7 +680,7 @@ fn a_choice_row_is_a_dropdown() {
     // Down, Enter: the next unit, the dialog still up.
     state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowDown)));
     state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
-    assert_eq!(state.world_unit.suffix(), units[1]);
+    assert_eq!(state.doc.world_unit.suffix(), units[1]);
     assert!(!state.dialog_dropdown_open() && state.dialog_visible());
 
     // A press on a row of the list picks that row.
@@ -688,7 +688,7 @@ fn a_choice_row_is_a_dropdown() {
     let k = units.iter().position(|u| u == "in").expect("inches");
     let (rx, ry, _, _) = state.ui_context[state.dialog_dd()].popover_geom(cce_ui::scene::layout::Rect { x: tx, y: ty, width: tw, height: th });
     press(&mut state, rx + 10.0, ry + k as f32 * 24.0 + 12.0);
-    assert_eq!(state.world_unit.suffix(), "in");
+    assert_eq!(state.doc.world_unit.suffix(), "in");
     assert!(state.dialog_visible());
 
     // Escape closes the dropdown alone; a press off it does too.
@@ -698,7 +698,7 @@ fn a_choice_row_is_a_dropdown() {
     state.open_dialog_dropdown(&setting_row_id("World Unit"));
     press(&mut state, dx + 20.0, dy + dh - 20.0);
     assert!(!state.dialog_dropdown_open() && state.dialog_visible(), "a press off the list closes it alone");
-    assert_eq!(state.world_unit.suffix(), "in", "and picks nothing");
+    assert_eq!(state.doc.world_unit.suffix(), "in", "and picks nothing");
     state.close_dialog();
     assert!(!state.ui_context[state.dialog_dd()].open, "a closed dialog leaves no plate behind");
 }
@@ -838,16 +838,16 @@ fn dialog_settings_write_reaches_the_owning_subnet() {
     // steps, a slider nudges, each landing on the live state.
     let unit_row = state.ui_context[state.slots.dialog].rows.iter().position(|r| r.id == setting_row_id("World Unit")).unwrap();
     state.ui_context[state.slots.dialog].selected = unit_row;
-    let before = state.world_unit;
+    let before = state.doc.world_unit;
     state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowRight)));
-    assert_ne!(state.world_unit, before, "right arrow steps the unit");
+    assert_ne!(state.doc.world_unit, before, "right arrow steps the unit");
     state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowLeft)));
-    assert_eq!(state.world_unit, before, "left arrow steps it back");
+    assert_eq!(state.doc.world_unit, before, "left arrow steps it back");
     state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
     assert!(state.dialog_dropdown_open(), "Enter opens a choice's dropdown");
     state.dialog_key_input(&key_press(Key::Named(NamedKey::ArrowDown)));
     state.dialog_key_input(&key_press(Key::Named(NamedKey::Enter)));
-    assert_ne!(state.world_unit, before, "Down and Enter pick the next option");
+    assert_ne!(state.doc.world_unit, before, "Down and Enter pick the next option");
     assert!(!state.dialog_dropdown_open());
     assert!(state.dialog_visible(), "and keeps the dialog up");
 
@@ -901,7 +901,7 @@ fn the_palette_offers_the_recent_projects() {
     let mut state = State::new(false);
     let a = std::path::PathBuf::from("/srv/designs/cce-recent-alpha");
     let b = std::path::PathBuf::from("/srv/designs/cce-recent-beta");
-    state.recent_files = vec![a.clone(), b.clone()];
+    state.doc.recent_files = vec![a.clone(), b.clone()];
 
     state.open_dialog();
     let rows: Vec<String> = state.ui_context[state.slots.dialog].rows.iter().map(|r| r.id.clone()).collect();
@@ -924,7 +924,7 @@ fn the_palette_offers_the_recent_projects() {
     state.close_dialog();
 
     // The project already open is not offered a second time.
-    state.loaded_project_path = Some(a.clone());
+    state.doc.loaded_project_path = Some(a.clone());
     state.open_dialog();
     let rows: Vec<String> = state.ui_context[state.slots.dialog].rows.iter().map(|r| r.id.clone()).collect();
     assert!(!rows.contains(&id_a), "the open project is listed as a recent one");
@@ -1100,7 +1100,7 @@ fn the_params_plate_collapses_to_a_circle_with_no_rows() {
     state.rebuild_positions();
     state.apply_layout();
     let mut redraw = false;
-    let slot = geo(&state.fs_root).children.iter().position(|c| c.node_type == "sphere").unwrap();
+    let slot = geo(&state.doc.fs_root).children.iter().position(|c| c.node_type == "sphere").unwrap();
     state.apply_action(McpAction::Select { slot }, &mut redraw).unwrap();
     state.apply_layout();
     assert!(state.params_have_rows());
@@ -1190,7 +1190,7 @@ fn dropping_a_node_on_a_node_swaps_their_places() {
         let slot = slot(&state, name);
         state.apply_action(McpAction::SetParam { slot, name: "input".into(), value: from.into() }, &mut redraw).unwrap();
     }
-    state.edit_history.break_group();
+    state.doc.edit_history.break_group();
     state.rebuild_positions();
     state.apply_layout();
     let input = |state: &State, name: &str| {
@@ -1225,7 +1225,7 @@ fn dropping_a_node_on_a_node_swaps_their_places() {
     );
 
     // One step back.
-    state.edit_history.break_group();
+    state.doc.edit_history.break_group();
     assert!(state.history_step(true));
     assert_eq!((at(&state, "a"), at(&state, "b")), ((1.0, 5.0), (1.0, 6.0)));
     assert_eq!(
@@ -1841,7 +1841,7 @@ fn the_palette_heads_with_the_open_projects_path() {
 
     state.save_to_file(&dir).expect("save");
     state.load_from_file(&dir).expect("load");
-    assert_eq!(state.loaded_project_path.as_deref(), Some(dir.as_path()));
+    assert_eq!(state.doc.loaded_project_path.as_deref(), Some(dir.as_path()));
 
     state.run_command("command_palette");
     let row = state.ui_context[state.slots.dialog].rows.first().expect("rows").clone();
@@ -1887,7 +1887,7 @@ fn dialog_add_node_mode_lists_the_templates() {
     assert_eq!(state.ui_context[state.slots.dialog].mode, Mode::AddNode);
     // Inside the bundled project's Geometry node: every template but the
     // three that stand at the root.
-    assert_eq!(state.ui_context[state.slots.dialog].rows.len(), state.node_templates.len() - 3);
+    assert_eq!(state.ui_context[state.slots.dialog].rows.len(), state.doc.node_templates.len() - 3);
     assert!(
         state.ui_context[state.slots.dialog].rows.iter().all(|r| r.chord.is_empty()),
         "a template has no chord to teach"
@@ -1990,7 +1990,7 @@ fn the_environment_node_lights_both_views() {
 
     // At the root, through MCP.
     let mut state = State::new(false);
-    state.current_path.clear();
+    state.doc.current_path.clear();
     state.on_path_changed();
     state.render.smooth_shading = true;
     state.rebuild_scene_geometry();
@@ -2020,7 +2020,7 @@ fn the_environment_node_lights_both_views() {
     let az = node.params.iter_mut().find(|p| p.name == "sun_azimuth").unwrap();
     az.set_text("$F * 10".to_string());
     az.set_expr(true);
-    let at = |frame| Environment::of_scene(&state.fs_root, frame).sun_direction;
+    let at = |frame| Environment::of_scene(&state.doc.fs_root, frame).sun_direction;
     assert!((at(9) - sun_direction(90.0, -40.0)).length() < 1e-4, "{:?}", at(9));
     assert!((at(0) - sun_direction(0.0, -40.0)).length() < 1e-4);
 }
@@ -2039,7 +2039,7 @@ fn the_environment_node_lights_both_views() {
 fn the_add_node_list_offers_what_belongs_at_the_level() {
     let mut state = State::new(false);
     let labels = |state: &State| state.ui_context[state.slots.dialog].rows.iter().map(|r| r.label.clone()).collect::<Vec<_>>();
-    let inside = state.current_path.clone();
+    let inside = state.doc.current_path.clone();
     assert_eq!(state.path_names_at(&inside), ["geometry1"]);
 
     // Inside the Geometry node.
@@ -2052,7 +2052,7 @@ fn the_add_node_list_offers_what_belongs_at_the_level() {
     state.close_dialog();
 
     // At the root.
-    state.current_path.clear();
+    state.doc.current_path.clear();
     state.on_path_changed();
     state.open_node_palette();
     let mut root = labels(&state);
@@ -2062,18 +2062,18 @@ fn the_add_node_list_offers_what_belongs_at_the_level() {
 
     // MCP: an operator at the root is refused, with why.
     let mut redraw = false;
-    let count = state.fs_root.children.len();
+    let count = state.doc.fs_root.children.len();
     let said = state
         .apply_action(McpAction::AddNode { template_name: "Sphere".into(), name: None, x: 9.0, y: 9.0 }, &mut redraw)
         .unwrap_err();
     assert!(said.contains("inside a Geometry node"), "{said}");
-    assert_eq!(state.fs_root.children.len(), count);
+    assert_eq!(state.doc.fs_root.children.len(), count);
     // A Geometry node there is fine, and is entered as a subnet is.
     state
         .apply_action(McpAction::AddNode { template_name: "Geometry".into(), name: None, x: 9.0, y: 9.0 }, &mut redraw)
         .unwrap();
-    let geo2 = state.fs_root.children.iter().position(|c| c.name == "geometry2").expect("geometry2");
-    assert!(state.fs_root.children[geo2].is_enterable());
+    let geo2 = state.doc.fs_root.children.iter().position(|c| c.name == "geometry2").expect("geometry2");
+    assert!(state.doc.fs_root.children[geo2].is_enterable());
     state.apply_action(McpAction::Enter { slot: geo2 }, &mut redraw).unwrap();
     state
         .apply_action(McpAction::AddNode { template_name: "Box".into(), name: None, x: 1.0, y: 1.0 }, &mut redraw)
@@ -2086,14 +2086,14 @@ fn the_add_node_list_offers_what_belongs_at_the_level() {
     // A paste: the box copied into the root is refused whole.
     let boxed = state.current_dir().children.iter().position(|c| c.node_type == "box").unwrap();
     state.node_clipboard = vec![state.current_dir().children[boxed].clone()];
-    state.current_path.clear();
+    state.doc.current_path.clear();
     state.on_path_changed();
-    let count = state.fs_root.children.len();
+    let count = state.doc.fs_root.children.len();
     assert!(!state.paste_nodes());
-    assert_eq!(state.fs_root.children.len(), count);
+    assert_eq!(state.doc.fs_root.children.len(), count);
     assert!(state.last_status_text.contains("Not pasted"), "{}", state.last_status_text);
     // And into the other Geometry node it goes.
-    state.current_path = inside;
+    state.doc.current_path = inside;
     state.on_path_changed();
     assert!(state.paste_nodes());
 }
@@ -2124,7 +2124,7 @@ fn command_palette_opens_the_dialog_on_commands() {
 /// start, which is indistinguishable from one that failed to.
 #[test]
 fn nothing_shells_out_to_cce_cloud_any_more() {
-    for name in ["app.rs", "app/input.rs", "window.rs", "dialog.rs", "render.rs", "api.rs", "slots.rs"] {
+    for name in ["app.rs", "app/input.rs", "app/document.rs", "window.rs", "dialog.rs", "render.rs", "api.rs", "slots.rs"] {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(name);
         let src = std::fs::read_to_string(&path).expect("read source");
         for needle in ["CloudPopup", "run_dmenu", "CloudPopupTracker"] {
