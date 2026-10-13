@@ -1664,7 +1664,7 @@ fn bypass_is_one_flag_however_it_is_asked_for() {
         state.apply_action(McpAction::SetParam { slot: pull, name: name.into(), value: value.into() }, &mut redraw).unwrap();
     }
     state.apply_action(McpAction::ToggleGeometry { slot: pull }, &mut redraw).unwrap();
-    let min_x = |state: &State| state.rt_sphere_verts.iter().map(|v| v.position[0]).fold(f32::INFINITY, f32::min);
+    let min_x = |state: &State| state.scene.rt_sphere_verts.iter().map(|v| v.position[0]).fold(f32::INFINITY, f32::min);
     let shown = min_x(&state);
 
     // MCP.
@@ -1690,7 +1690,7 @@ fn bypass_is_one_flag_however_it_is_asked_for() {
     // The node's menu, which says which way it will go.
     assert_eq!(state.set_bypassed(&[ball, pull], true), 2);
     assert_eq!(state.set_bypassed(&[ball, pull], true), 0, "already");
-    assert!(state.rt_sphere_verts.is_empty(), "a bypassed sphere behind a bypassed pull is nothing");
+    assert!(state.scene.rt_sphere_verts.is_empty(), "a bypassed sphere behind a bypassed pull is nothing");
     assert_eq!(state.set_bypassed(&[ball], false), 1);
 
     // It is saved with the project and comes back with it.

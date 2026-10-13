@@ -151,7 +151,7 @@ impl State {
 
     /// The image the viewport shows, or a status line saying there is none.
     fn image_to_frame(&mut self) -> Option<PageShown> {
-        let shown = self.page_shown.clone();
+        let shown = self.scene.page_shown.clone();
         if shown.is_none() {
             self.update_status_text("No image is shown: turn on an image node's display flag.");
         }
@@ -191,7 +191,7 @@ impl State {
     /// The scene's image in world space, for a bound that has to hold it.
     pub(crate) fn image_world_corners(&self) -> Option<[[f32; 3]; 4]> {
         let unit = self.world_unit_mm();
-        self.page_shown.as_ref().map(|s| s.world_corners(unit))
+        self.scene.page_shown.as_ref().map(|s| s.world_corners(unit))
     }
 
     /// Add a node from a template to the current level, at the nearest free

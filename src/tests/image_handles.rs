@@ -209,17 +209,17 @@ fn image_text_is_moved_and_sized_by_its_handles() {
 #[test]
 fn a_recomposed_image_keeps_its_gpu_image() {
     let mut state = state_showing_image(64, 32, 100);
-    let first = state.page_image.expect("nothing uploaded");
+    let first = state.scene.page_image.expect("nothing uploaded");
     state.rebuild_scene_geometry();
-    assert_eq!(state.page_image, Some(first), "the same picture took a new image");
+    assert_eq!(state.scene.page_image, Some(first), "the same picture took a new image");
     // New contents at the same size: recomposed into the same image.
     let page = state.current_dir().children.iter().position(|n| n.node_type == "page").unwrap();
     state.current_dir_mut().children[page].params.iter_mut().find(|p| p.name == "color").unwrap().set_text("0.50:0.20:0.10");
-    let version = state.page_version;
+    let version = state.scene.page_version;
     state.rebuild_scene_geometry();
-    assert!(state.page_version > version, "the colour edit was not recomposed");
-    assert_eq!(state.page_image, Some(first), "the same size took a new image");
+    assert!(state.scene.page_version > version, "the colour edit was not recomposed");
+    assert_eq!(state.scene.page_image, Some(first), "the same size took a new image");
     state.current_dir_mut().children[page].params.iter_mut().find(|p| p.name == "width").unwrap().set_text("80");
     state.rebuild_scene_geometry();
-    assert!(state.page_image.is_some_and(|id| id != first), "a picture of another size kept the old image");
+    assert!(state.scene.page_image.is_some_and(|id| id != first), "a picture of another size kept the old image");
 }

@@ -342,7 +342,7 @@ gone from cce-ui with the wgpu path).
   `Input` (like a subnet), each later step eats the previous state, which the
   `input` node reads off the feedback stack instead of jumping to the outer
   graph. Solves run up to the playbar frame and cache per node id on `State::
-  sim_cache` (playing forward = one step per frame); the cache key hashes the
+  scene.sim_cache` (playing forward = one step per frame); the cache key hashes the
   simnet subtree + seed; an edit goes on from the frame in hand under the
   new key (since 2026-09-30 — see "An edit is in from the next frame"
   below), and backward scrubs resume
@@ -556,7 +556,7 @@ bake (`shade_factor(n, toward)`), and all of it to the tracer's sky
   only light, and with the Background Color behind the scene (above) it is
   seen only in what it lights.
 - **Rows evaluate at the current frame** (`Environment::of_scene`, through
-  `resolve_param_refs`), so a sun can move with `$F`. `State::environment`
+  `resolve_param_refs`), so a sun can move with `$F`. `State::scene.environment`
   is the value in use: `present_scene` reads it for the bake, and
   `sync_environment` runs from the tick, re-baking a smooth fill from
   `scene_base` (no evaluation) when it moved, so an animated sun or an edit
@@ -2324,7 +2324,7 @@ What a resume arrives at is what a solve from the seed arrives at, state
 and feedback both: `a_scrub_resumes_from_a_checkpoint_and_arrives_at_the_same_state`
 compares them frame by frame and counts the steps each cost
 (`SimCache::steps_run`). **Every evaluation goes through the one cache**
-(`State::sim_cache`): the scene rebuild, the pull arrows, the params
+(`State::scene.sim_cache`): the scene rebuild, the pull arrows, the params
 pane's pickers, and since 2026-09-29 the spreadsheet and the
 selected-group markers, which `sync_nodes` evaluates against a node
 borrowed off `State` and which each used a throwaway cache for that
@@ -2572,7 +2572,7 @@ not hide what is behind it. The image is uploaded MIPMAPPED
 (`cce_ui::vk::upload_rgba_mipmapped`, since 2026-09-29) and sampled with
 anisotropy where the device has it: a Letter sheet at 300 DPI is drawn at
 about a fifth of its size in an ordinary pane, and without a mip chain a
-ruled page was moiré head-on and worse at a slant. `State::page_shown` is what the stage pass
+ruled page was moiré head-on and worse at a slant. `State::scene.page_shown` is what the stage pass
 places it by. Until then a pane of its own (`PAGE_IDX`, an `ImageView`)
 took the viewport's rect whenever the level held a page, so a picture and
 a model could not be seen together.
@@ -2590,7 +2590,7 @@ image is a light of its own colour, which is what a bounce off the
 geometry finds there. (For its first hour it was a lit surface, albedo
 under the sky, and a white page traced grey; the user's call.) Where it is
 clear a ray goes through, by chance in proportion to the alpha. The traced scene's key is the geometry's version,
-the image's (`State::page_version`, moved by every recomposition) and the
+the image's (`State::scene.page_version`, moved by every recomposition) and the
 world unit, which sizes the image. The thumbnail has no 2D pass to share
 an upload with and hands over the pixels (`RtImagePixels`); an image alone
 is taken square on and fitted edge to edge (`thumbnail::view_of`), since
@@ -2668,7 +2668,7 @@ the cell size lands exactly on the first's, which is the only reason to draw
 two. Text shapes and rasterizes through cosmic-text, the toolkit's own font
 stack, with system fonts loaded because a page names its font by family.
 
-The GPU image is owned by `State::page_image` and freed when replaced.
+The GPU image is owned by `State::scene.page_image` and freed when replaced.
 **A replacement renderer invalidates that id.** There is no reconnect
 callback: the runner calls `renderer_init` once per renderer, so the first call
 is this process's own and every later one is a replacement — remembering is the
@@ -3842,7 +3842,7 @@ modes give identical brightness
 date both dotted the INWARD normal with a constant `(-0.55, 0.45, 0.7)` —
 a light from below, read the right way round. See "The Environment
 node". The
-lit copy is `State::scene_smooth_verts`, kept only while smooth is on; the
+lit copy is `State::scene.scene_smooth_verts`, kept only while smooth is on; the
 path tracer keeps reading the unlit `rt_sphere_verts`, whose colours are
 its materials. Smoothing follows topology, so a welded mesh rounds off and
 a soup of unshared triangles stays faceted. Persisted as
@@ -3964,8 +3964,8 @@ the later over the earlier, as a chain of Visualize nodes composites.
   reads plainly there. A key the reader does not know is skipped.
 - **They are applied to the scene, not evaluated with it.**
   `rebuild_scene_geometry` evaluates the graph, keeps the result as
-  `State::scene_base` with its attributes and ranges
-  (`State::scene_attributes`), and hands a copy to `present_scene`, which
+  `State::scene.scene_base` with its attributes and ranges
+  (`State::scene.scene_attributes`), and hands a copy to `present_scene`, which
   applies the visualizers and does everything the viewport draws of a
   scene — the fill, the traced copy, the groups, the overlays, the edges.
   An edit to a visualizer runs `revisualize`, which presents `scene_base`
@@ -4351,7 +4351,7 @@ rather than two:
   in the viewport block (one comma-joined string — a KDL list of one
   reads back as a bare string, which a `Vec` refuses, and a settings file
   that fails to parse reads as the defaults), so it rides the project
-  file too. `State::scene_groups` is every point group of the scene as
+  file too. `State::scene.scene_groups` is every point group of the scene as
   last built with its members' positions, kept by `rebuild_scene_geometry`
   so the list and the markers (`rebuild_marked_group_markers`,
   `meshes.marked_points`) come from what is on screen and a switch

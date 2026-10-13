@@ -1145,7 +1145,7 @@ fn a_project_keeps_its_display_settings() {
     assert!((state.view.grid_thickness - 0.07).abs() < 1e-6);
     assert_eq!(state.doc.world_unit, cce_ui::units::Unit::Cm);
     assert_eq!(state.view.point_marker_color, [0.1, 0.9, 0.2]);
-    assert!(!state.scene_smooth_verts.is_empty(), "the scene was rebuilt smooth");
+    assert!(!state.scene.scene_smooth_verts.is_empty(), "the scene was rebuilt smooth");
     assert!(!state.has_unsaved_changes(), "a fresh load is clean");
     assert_eq!(state.command_toggle_state("toggle_grid"), Some(false), "the palette's switch agrees");
 
@@ -1673,8 +1673,8 @@ fn the_viewport_menu_sets_the_display_mode() {
     // path tracer reads, triangle for triangle.
     state.run_viewport_menu_action(A::Shading(true));
     assert!(state.render.smooth_shading);
-    assert_eq!(state.scene_smooth_verts.len(), state.rt_sphere_verts.len());
-    assert!(!state.scene_smooth_verts.is_empty(), "the bundled scene draws something");
+    assert_eq!(state.scene.scene_smooth_verts.len(), state.scene.rt_sphere_verts.len());
+    assert!(!state.scene.scene_smooth_verts.is_empty(), "the bundled scene draws something");
     // Picking the mode already on is not a flip.
     state.run_viewport_menu_action(A::Shading(true));
     assert!(state.render.smooth_shading);
@@ -1682,7 +1682,7 @@ fn the_viewport_menu_sets_the_display_mode() {
     assert_eq!(state.command_toggle_state("toggle_smooth_shading"), Some(true));
     state.run_viewport_menu_action(A::Shading(false));
     assert!(!state.render.smooth_shading);
-    assert!(state.scene_smooth_verts.is_empty(), "flat keeps no lit copy");
+    assert!(state.scene.scene_smooth_verts.is_empty(), "flat keeps no lit copy");
 
 }
 
@@ -2377,7 +2377,7 @@ fn the_viewport_menu_sets_the_camera_pivot_size() {
     let mut state = State::new(false);
     state.view.camera_pivot_size = 0.5;
     state.pending_pivot = None;
-    let version = state.rt_geometry_version;
+    let version = state.scene.rt_geometry_version;
     state.cursor_x = 300.0;
     state.cursor_y = 200.0;
     state.open_viewport_context_menu();
@@ -2393,7 +2393,7 @@ fn the_viewport_menu_sets_the_camera_pivot_size() {
     state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 5.0) });
     assert!((state.view.camera_pivot_size - 0.75).abs() < 1e-5, "{}", state.view.camera_pivot_size);
     assert!(state.pending_pivot.is_some(), "the marker re-bakes");
-    assert_eq!(state.rt_geometry_version, version, "and the graph is not evaluated");
+    assert_eq!(state.scene.rt_geometry_version, version, "and the graph is not evaluated");
     assert!(context_menu::is_visible(), "a slider row keeps the menu up");
     let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
     let saved = crate::app::DesignSettings::from_kdl_str(&kdl).viewport.camera_pivot_size;
@@ -2528,7 +2528,7 @@ fn the_viewport_menu_sets_the_point_marker_size_without_a_rebuild() {
     state.view.point_marker_size = 0.02;
     state.rebuild_scene_geometry();
     assert!(!state.overlay_marker_points.is_empty(), "the bundled scene has points");
-    let version = state.rt_geometry_version;
+    let version = state.scene.rt_geometry_version;
 
     state.cursor_x = 300.0;
     state.cursor_y = 200.0;
@@ -2544,7 +2544,7 @@ fn the_viewport_menu_sets_the_point_marker_size_without_a_rebuild() {
     state.cursor_y = context_menu::row_y(i) + context_menu::ROW_H * 0.5;
     state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 4.0) });
     assert!((state.view.point_marker_size - 0.04).abs() < 1e-5, "{}", state.view.point_marker_size);
-    assert_eq!(state.rt_geometry_version, version, "no rebuild ran");
+    assert_eq!(state.scene.rt_geometry_version, version, "no rebuild ran");
     assert!(state.point_markers.dirty);
     let resized: Vec<[f32; 3]> = state.drawn_markers(crate::app::MarkerKind::Overlay).iter().map(|v| v.position).collect();
     context_menu::hide();
@@ -2679,7 +2679,7 @@ fn the_dialog_plate_is_the_menu_plate() {
     let r = cce_ui::layout::menu_corner_radius();
     let rect = cce_ui::scene::layout::Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 };
     assert_eq!(dialog.corner_style(rect).map(|(r, _)| r), (r > 0.0).then_some(r));
-    for file in ["src/dialog.rs", "src/render.rs", "src/app.rs", "src/app/input.rs", "src/app/document.rs", "src/app/network.rs", "src/app/camera.rs", "src/app/view.rs"] {
+    for file in ["src/dialog.rs", "src/render.rs", "src/app.rs", "src/app/input.rs", "src/app/document.rs", "src/app/network.rs", "src/app/camera.rs", "src/app/view.rs", "src/app/scene.rs"] {
         let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(file)).unwrap();
         assert!(!src.contains("dialog/compression") && !src.contains("DIALOG_COMPRESSION"), "{file} overrides the menu material");
     }

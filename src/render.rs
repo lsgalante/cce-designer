@@ -1325,7 +1325,7 @@ impl State {
         // say what it is again (the geometry pass just said something else)
         // and leave the image alone.
         if let (Some(key), Some((was, status)), Some(_), Some(_)) =
-            (key, self.page_composed.as_ref(), self.page_image, self.page_shown.as_ref())
+            (key, self.scene.page_composed.as_ref(), self.scene.page_image, self.scene.page_shown.as_ref())
         {
             if key == *was {
                 let status = status.clone();
@@ -1333,26 +1333,26 @@ impl State {
                 return;
             }
         }
-        self.page_composed = None;
+        self.scene.page_composed = None;
         let level = self.viewport_editor_dir();
         let node_id = crate::page::displayed_page_node(level).map(|n| n.id.clone());
         let page = crate::page::displayed_page(&self.doc.fs_root, level);
         // The same picture with new contents keeps its image: a handle
         // being dragged recomposes the page on every motion, and freeing an
         // image waits for the device to go idle.
-        let before = self.page_shown.take();
+        let before = self.scene.page_shown.take();
         let had_page = before.is_some();
         let same_size = |page: &crate::page::Page| {
             before.as_ref().is_some_and(|b| b.pixels == (page.width, page.height))
         };
-        let old = self.page_image.take();
+        let old = self.scene.page_image.take();
         let kept = old.filter(|_| page.as_ref().is_some_and(same_size));
         if let (Some(old), None) = (old, kept) {
             cce_ui::vk::free_image(old);
         }
         if let (Some(page), Some(node_id)) = (page, node_id) {
             let (w, h) = (page.width, page.height);
-            self.page_image = Some(match kept {
+            self.scene.page_image = Some(match kept {
                 Some(id) => {
                     cce_ui::vk::update_pixels(id, page.to_rgba8(), w, h, cce_ui::vk::PixelFormat::Rgba);
                     id
@@ -1371,18 +1371,18 @@ impl State {
                 h
             );
             self.update_status_text(&status);
-            self.page_composed = key.map(|k| (k, status));
-            self.page_shown = Some(crate::page::PageShown {
+            self.scene.page_composed = key.map(|k| (k, status));
+            self.scene.page_shown = Some(crate::page::PageShown {
                 node_id,
                 size: page.size,
                 pixels: (w, h),
                 origin: page.origin,
             });
         }
-        if had_page || self.page_shown.is_some() {
+        if had_page || self.scene.page_shown.is_some() {
             self.viewport_dirty = true;
             // The path tracer's scene holds the image too.
-            self.page_version += 1;
+            self.scene.page_version += 1;
         }
     }
 
@@ -1391,14 +1391,14 @@ impl State {
         // The sim cache lives on State so playing forward steps each simnet once
         // per frame instead of re-solving its whole history every rebuild.
         let (frame, start) = (self.sim_frame(), self.sim_start_frame());
-        let mut sim_cache = std::mem::take(&mut self.sim_cache);
+        let mut sim_cache = std::mem::take(&mut self.scene.sim_cache);
         let geom = {
             let mut sim = crate::geometry::EvalSim::new(frame, start, &mut sim_cache);
             // The viewport shows the network editor's level, while name
             // resolution stays rooted at fs_root. Navigation re-scopes this.
             network_sphere_vertices_with_errors(&self.doc.fs_root, self.viewport_editor_dir(), &mut ocl_error, &mut sim)
         };
-        self.sim_cache = sim_cache;
+        self.scene.sim_cache = sim_cache;
 
         // A script error names its line; if the node it names is the one the
         // params pane shows, the pane flags that line in its code row. Cleared
@@ -1413,9 +1413,9 @@ impl State {
 
         // What the visualizers are applied to, kept so an edit to one
         // re-presents this scene rather than running the graph again.
-        self.scene_attributes = crate::visualizer::scene_attributes(&geom);
+        self.scene.scene_attributes = crate::visualizer::scene_attributes(&geom);
         self.present_scene(&geom);
-        self.scene_base = Some(geom);
+        self.scene.scene_base = Some(geom);
 
         // The pull arrows measure the selected node against this new
         // geometry version; a playing simnet reaches here every frame.
@@ -1437,10 +1437,10 @@ impl State {
     /// so a sun driven by `$F`, or an edit that rebuilt nothing, is seen.
     pub(crate) fn sync_environment(&mut self) -> bool {
         let env = crate::environment::Environment::of_scene(&self.doc.fs_root, self.sim_frame());
-        if env == self.environment {
+        if env == self.scene.environment {
             return false;
         }
-        self.environment = env;
+        self.scene.environment = env;
         if self.render.smooth_shading {
             self.revisualize();
         }
@@ -1450,9 +1450,9 @@ impl State {
 
     pub(crate) fn revisualize(&mut self) {
         // Taken and put back, not cloned: `present_scene` only reads it.
-        if let Some(base) = self.scene_base.take() {
+        if let Some(base) = self.scene.scene_base.take() {
             self.present_scene(&base);
-            self.scene_base = Some(base);
+            self.scene.scene_base = Some(base);
         }
     }
 
@@ -1481,9 +1481,9 @@ impl State {
         // these colours. Same triangles in the same order, so the count
         // above serves both.
         // Lit by the environment's sun, which the flat shader is handed too.
-        self.environment = crate::environment::Environment::of_scene(&self.doc.fs_root, self.sim_frame());
-        self.scene_smooth_verts = if self.render.smooth_shading {
-            crate::geometry::smooth_lit_vertices(&geom, self.environment.sun_direction)
+        self.scene.environment = crate::environment::Environment::of_scene(&self.doc.fs_root, self.sim_frame());
+        self.scene.scene_smooth_verts = if self.render.smooth_shading {
+            crate::geometry::smooth_lit_vertices(&geom, self.scene.environment.sun_direction)
         } else {
             Vec::new()
         };
@@ -1491,15 +1491,15 @@ impl State {
         // graph; the version bump invalidates its scene.
         // The raster mesh uploads from this same cache on the next
         // `stage_renderer` flush.
-        self.rt_sphere_verts = verts;
+        self.scene.rt_sphere_verts = verts;
         self.spheres_dirty = true;
-        self.rt_geometry_version += 1;
+        self.scene.rt_geometry_version += 1;
         self.viewport_dirty = true;
 
         // The scene's point groups, with where their members are: what the
         // Group Markers dialog lists, and what the marked ones' markers are
         // built from.
-        self.scene_groups = geom
+        self.scene.scene_groups = geom
             .points()
             .group_names()
             .iter()
@@ -1555,7 +1555,7 @@ impl State {
         );
         // The wire pass's edges, likewise — topological, and only while the
         // wireframe is actually on.
-        self.scene_edge_verts =
+        self.scene.scene_edge_verts =
             if self.render.wireframe { scene_edge_verts(&geom) } else { Vec::new() };
 
         // Visualize's vector markers — a node's or a visualizer's — ride the
@@ -1582,7 +1582,7 @@ impl State {
     pub(crate) fn collect_rt_scene(
         &self,
     ) -> (Vec<cce_ui::vk::RtTriangle>, Vec<cce_ui::vk::RtMaterial>) {
-        crate::geometry::rt_scene_from_verts(&self.rt_sphere_verts)
+        crate::geometry::rt_scene_from_verts(&self.scene.rt_sphere_verts)
     }
 
     /// The 0-based line a node error points at in the params pane's selected

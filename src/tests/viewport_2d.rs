@@ -337,8 +337,8 @@ fn image_corners_in_view(state: &State) -> [[f32; 2]; 4] {
 #[test]
 fn a_shown_image_stands_in_the_scene_at_its_size() {
     let mut state = state_showing_image(400, 200, 100);
-    let shown = state.page_shown.clone().expect("the image did not reach the viewport");
-    assert!(state.page_image.is_some(), "nothing was uploaded");
+    let shown = state.scene.page_shown.clone().expect("the image did not reach the viewport");
+    assert!(state.scene.page_image.is_some(), "nothing was uploaded");
     assert_eq!(shown.pixels, (400, 200));
     assert!(state.viewport_dirty, "nothing asks the scene to stage the image");
 
@@ -357,7 +357,7 @@ fn a_shown_image_stands_in_the_scene_at_its_size() {
     state.current_dir_mut().set_child_geometry_visible(slot, false);
     state.viewport_dirty = false;
     state.rebuild_scene_geometry();
-    assert!(state.page_shown.is_none() && state.page_image.is_none());
+    assert!(state.scene.page_shown.is_none() && state.scene.page_image.is_none());
     assert!(state.viewport_dirty, "the scene keeps drawing an image that is gone");
 }
 
@@ -437,7 +437,7 @@ fn view_image_pixels_is_one_pixel_to_one() {
 #[test]
 fn frame_all_holds_the_image() {
     let mut state = state_showing_image(400, 400, 100);
-    state.rt_sphere_verts.clear();
+    state.scene.rt_sphere_verts.clear();
     let slot = state.current_dir().children.iter().position(|n| n.node_type == "page").unwrap();
     state.current_dir_mut().children[slot]
         .params
@@ -446,7 +446,7 @@ fn frame_all_holds_the_image() {
         .unwrap()
         .set_text("5.00:0.00:0.00");
     state.rebuild_scene_geometry();
-    state.rt_sphere_verts.clear();
+    state.scene.rt_sphere_verts.clear();
     state.frame_all();
     let (_, _, pivot) = state.active_camera_pose();
     assert!((pivot.x - 5.0).abs() < 1e-2, "Frame All did not go to the image: pivot {pivot:?}");
@@ -500,7 +500,7 @@ fn adding_to_an_image_wires_a_node_after_it() {
     assert!(flag(&state, "page_shape1") && !flag(&state, "page1"), "the new node is not what shows");
     let shape_slot = state.current_dir().children.iter().position(|c| c.name == "page_shape1").unwrap();
     assert_eq!(state.selected_slots(), [shape_slot], "the new node is not selected");
-    let shown = state.page_shown.clone().expect("nothing is shown");
+    let shown = state.scene.page_shown.clone().expect("nothing is shown");
     assert_eq!(shown.node_id, state.current_dir().children[shape_slot].id);
 
     // Make the sheet small and in pixels, then add text to the PAGE: it

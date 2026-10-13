@@ -424,7 +424,7 @@ fn frame_all_frames_the_root_camera_from_inside_a_subnet() {
     let before = camera(&state);
     // Displayed geometry: a small cluster centred well off the origin.
     let c = [3.0f32, 0.5, -2.0];
-    state.rt_sphere_verts = (0..12)
+    state.scene.rt_sphere_verts = (0..12)
         .map(|i| {
             let a = i as f32 * 0.5236;
             Vertex3D { position: [c[0] + 0.25 * a.cos(), c[1] + 0.25 * a.sin(), c[2] + 0.1 * (i % 3) as f32], color: [1.0; 3] }
@@ -1233,8 +1233,8 @@ fn attribute_visualizers_are_edited_in_the_params_hud() {
     state.rebuild_positions();
     state.apply_layout();
     state.rebuild_scene_geometry();
-    assert!(state.scene_attributes.iter().any(|a| a.name == "N"), "{:?}", state.scene_attributes);
-    let colours = |state: &State| state.rt_sphere_verts.iter().map(|v| v.color).collect::<Vec<_>>();
+    assert!(state.scene.scene_attributes.iter().any(|a| a.name == "N"), "{:?}", state.scene.scene_attributes);
+    let colours = |state: &State| state.scene.rt_sphere_verts.iter().map(|v| v.color).collect::<Vec<_>>();
     let plain = colours(&state);
     let nodes_before = serde_json::to_string(&state.doc.fs_root).unwrap();
     let keys = |state: &State| state.param().node_params().into_iter().map(|r| r.0).filter(|k| !k.is_empty()).collect::<Vec<_>>();
@@ -1319,7 +1319,7 @@ fn attribute_visualizers_are_edited_in_the_params_hud() {
 fn a_visualizer_reads_as_the_visualize_node_does() {
     let mut state = State::new(false);
     state.rebuild_scene_geometry();
-    let base = state.scene_base.clone().expect("a scene");
+    let base = state.scene.scene_base.clone().expect("a scene");
     let mut v = crate::visualizer::Visualizer::new("N");
     v.ramp = "Heat".into();
     let mut by_vis = base.clone();
@@ -1358,7 +1358,7 @@ fn the_group_markers_dialog_marks_a_groups_points() {
     }
     state.current_dir_mut().set_child_geometry_visible(tagged, true);
     state.rebuild_scene_geometry();
-    assert!(state.scene_groups.iter().any(|(n, m)| n == "five" && m.len() == 5), "{:?}", state.scene_groups.iter().map(|(n, m)| (n.clone(), m.len())).collect::<Vec<_>>());
+    assert!(state.scene.scene_groups.iter().any(|(n, m)| n == "five" && m.len() == 5), "{:?}", state.scene.scene_groups.iter().map(|(n, m)| (n.clone(), m.len())).collect::<Vec<_>>());
     assert!(state.marked_group_markers.verts.is_empty(), "nothing is marked yet");
 
     // From the palette: the command turns it into the groups list.
@@ -1380,7 +1380,7 @@ fn the_group_markers_dialog_marks_a_groups_points() {
     assert!(!state.marked_group_markers.verts.is_empty() && state.marked_group_markers.dirty, "the markers are staged");
     let one = state.marked_group_markers.verts.len();
     // On the group's points, at Group Marker Size.
-    let members: Vec<[f32; 3]> = state.scene_groups.iter().find(|(n, _)| n == "five").unwrap().1.clone();
+    let members: Vec<[f32; 3]> = state.scene.scene_groups.iter().find(|(n, _)| n == "five").unwrap().1.clone();
     for m in &members {
         assert!(state.marked_group_markers.verts.iter().any(|v| (0..3).all(|k| (v.position[k] - m[k]).abs() <= state.render.group_marker_size + 1e-4)), "a marker at {m:?}");
     }
@@ -2346,23 +2346,23 @@ fn guide_toggles_survive_the_settings_apply_pass() {
 fn test_a_replacement_renderer_drops_the_page_image() {
     let mut state = State::new(false);
     assert!(!state.seen_renderer, "a fresh State has not been given a renderer");
-    assert!(!state.page_dirty);
+    assert!(!state.scene.page_dirty);
 
     // Stand in for a composed page: an id owned by State.
-    state.page_image = Some(7);
+    state.scene.page_image = Some(7);
 
     // The FIRST renderer is this process's own — nothing to invalidate,
     // and dropping the image here would throw away a page that is fine.
     assert!(!state.renderer_handed_over(), "the first renderer is not a replacement");
-    assert_eq!(state.page_image, Some(7), "the first renderer must not drop the image");
-    assert!(!state.page_dirty);
+    assert_eq!(state.scene.page_image, Some(7), "the first renderer must not drop the image");
+    assert!(!state.scene.page_dirty);
 
     // A LATER one is a replacement: the id names nothing in it, so it is
     // dropped and the next tick re-uploads rather than leaving the pane
     // blank forever.
     assert!(state.renderer_handed_over(), "the second renderer must read as a replacement");
-    assert_eq!(state.page_image, None, "the dead id was kept");
-    assert!(state.page_dirty, "nothing would re-upload the page");
+    assert_eq!(state.scene.page_image, None, "the dead id was kept");
+    assert!(state.scene.page_dirty, "nothing would re-upload the page");
 }
 
 /// Dragging empty scene turns the camera, at the same rate the trackpad's

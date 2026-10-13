@@ -155,6 +155,9 @@ pub use camera::CameraView;
 // `State::view`: the guides' sizes, the overlays, the visualizers.
 mod view;
 pub use view::ViewDisplay;
+// `State::scene`: the scene as last built, its page image, the sim cache.
+mod scene;
+pub use scene::SceneData;
 
 /// Which node the params pane is showing: the editor's level, the slot
 /// there, and the node's id. All three, because no one of them is an
@@ -927,40 +930,15 @@ pub struct State {
     /// grid cursor goes if the menu is turned to the network's, so Add Node
     /// places at the cell pointed at, as the plated network's press does.
     pub network_menu_cell: Option<(i32, i32)>,
-    /// The plate corner menu — same `context_menu` thread-local again; the slot
-    /// says which plate's control opened it (and doubles as the pressed state
-    /// the corner control paints with).
-    /// Solved simulation states, kept across frames so playing forward costs one
-    /// step per frame instead of re-solving from the start frame every redraw.
-    pub sim_cache: crate::geometry::SimCache,
-    /// What the playbar's cache strip was last worked out from: the sim
-    /// cache's revision, the geometry version (an edit moves it, and may
-    /// make what is cached stale without solving anything) and the frame
-    /// range. See [`State::sync_playbar_cache`].
-    pub playbar_cache_key: Option<(u64, u64, i32, i32)>,
-    /// The GPU image of the page the viewport shows. Owned here, so
-    /// replacing a page frees the one it replaces.
-    pub page_image: Option<u32>,
-    /// The page that image is of: what the scene pass places it by and the
-    /// framing commands fit the camera to. None when the level shows none.
-    pub page_shown: Option<crate::page::PageShown>,
-    /// What the page on show was composed from ([`crate::page::chain_key`])
-    /// and the status line that announced it. A geometry rebuild — any edit
-    /// at the level, every frame of a playing sim — recomposes the page, and
-    /// a Letter sheet at 300 DPI is ~90 ms of compose and conversion plus a
-    /// 34 MB upload; with this the ones that change nothing it reads cost a
-    /// hash of its chain.
-    pub page_composed: Option<(u64, String)>,
+    /// The displayed scene as last built: the evaluated geometry, its
+    /// attributes and groups, the fill and edges, the light, the page
+    /// image, the sim cache (`src/app/scene.rs`).
+    pub scene: SceneData,
     /// Whether `renderer_init` has run before. There is no separate reconnect
     /// callback: the runner calls `renderer_init` once per renderer, so the
     /// first call is this process's own and every later one is a REPLACEMENT
     /// after a reconnect. Remembering is the only way to tell them apart.
     pub seen_renderer: bool,
-    /// Set when the page raster must be re-uploaded — after a replacement
-    /// renderer drops the old id. Consumed on the next tick rather than acted
-    /// on in `renderer_init`, which runs before the frame has settled and
-    /// where relaying the panes would be premature.
-    pub page_dirty: bool,
     /// The window title wants re-deriving (`update_window_title`), at most
     /// once a frame: deriving it serializes the whole tree to compare with
     /// the save, and the event path asked on every changed pointer event.
@@ -968,8 +946,8 @@ pub struct State {
     /// A dialog setting changed during a slider drag and is saved when the
     /// drag ends (`apply_setting`), not on every motion of it.
     pub settings_save_pending: bool,
-    /// Frame the scene was last built at, so the timeline moving can invalidate it.
-    pub last_sim_frame: i32,
+    /// The plate menu — the same `context_menu` thread-local again; the
+    /// slot says which plate's menu is open.
     pub plate_menu_slot: Option<usize>,
     pub plate_menu_actions: Vec<crate::plate_menu::PlateMenuAction>,
     /// Panes shrunk to their title stub, indexed by slot. Only the
@@ -1093,16 +1071,6 @@ pub struct State {
     /// display block, field for field (`settings::RenderSettings`, where
     /// each is described).
     pub render: RenderSettings,
-    /// The scene fill with smooth shading baked into its colours
-    /// (`geometry::smooth_lit_vertices`), built by `rebuild_scene_geometry`
-    /// while `smooth_shading` is on and empty otherwise. The raster pass
-    /// uploads this in place of `rt_sphere_verts`, which the path tracer
-    /// keeps reading unlit.
-    pub scene_smooth_verts: Vec<Vertex3D>,
-    /// The scene's light, as the Environment node at the root says (or its
-    /// defaults) — read by `present_scene` and `sync_environment`, handed
-    /// to both views by the stage pass. See `crate::environment`.
-    pub environment: crate::environment::Environment,
     /// What the fill mesh was last SORTED for: (geometry version, smooth,
     /// eye in mesh space). The stage pass re-sorts and re-uploads when any
     /// of the three moves while see-through is in effect — which during an
@@ -1204,42 +1172,18 @@ pub struct State {
     /// The same for the shown node's `float2` rows, by parameter name, with
     /// the node they are for (`present_float2_rows`).
     pub float2_spans: Option<(String, Vec<(String, f32)>)>,
-    /// The displayed scene's point attributes as last built, with their
-    /// ranges: what the visualizer editor offers.
-    pub scene_attributes: Vec<crate::visualizer::SceneAttribute>,
-    /// The displayed scene as last EVALUATED, before the visualizers: what a
-    /// visualizer edit re-presents (`State::revisualize`) without running
-    /// the graph again.
-    pub scene_base: Option<crate::detail::Detail>,
-    /// Every point group of the scene as last built, with its members'
-    /// positions: what the dialog lists and what the markers are built
-    /// from, so a switch flipped evaluates nothing.
-    pub scene_groups: Vec<(String, Vec<[f32; 3]>)>,
     /// The marked groups' markers, staged by `rebuild_marked_group_markers`,
     /// flushed to `meshes.marked_points`.
     pub marked_group_markers: StagedMesh,
-    /// The visible scene's own edges for the wire pass (LINE_LIST pairs),
-    /// rebuilt with the scene while Show Wireframe is on and empty while it
-    /// is off. Topological — see `render::scene_edge_verts`.
-    pub scene_edge_verts: Vec<Vertex3D>,
     /// The param pane's completion lists — (input node name, geometry
     /// version) → (group names, attribute names) read off that input's
     /// evaluated geometry, feeding the textpick rows on group/attribute
     /// params. One entry: the selected node's input.
     pub pick_cache: Option<((String, u64), PickLists)>,
-    /// Sphere-geometry cache for the path tracer (a copy of the last
-    /// `rebuild_scene_geometry` output, so entering RT mode never re-runs
-    /// the node graph / OpenCL kernels).
-    pub rt_sphere_verts: Vec<Vertex3D>,
-    /// Bumped by `rebuild_scene_geometry`; part of the RT-scene cache key.
-    pub rt_geometry_version: u64,
     /// The `rt_geometry_version` the RT scene was last built from.
     /// The traced scene as it was last handed over: the geometry's version,
     /// the image's, and the world unit's bits, which size the image.
     pub last_rt_scene_key: Option<(u64, u64, u32)>,
-    /// Counts the recompositions of the shown image, as
-    /// `rt_geometry_version` counts the geometry's.
-    pub page_version: u64,
     pub ui_context: cce_ui::context::UiContext,
 }
 
@@ -1543,12 +1487,12 @@ impl State {
             let pb = self.ui_context[self.slots.playbar].inner();
             (pb.start_frame.round() as i32, pb.end_frame.round() as i32)
         };
-        let key = (self.sim_cache.revision(), self.rt_geometry_version, start, end);
-        if self.playbar_cache_key == Some(key) {
+        let key = (self.scene.sim_cache.revision(), self.scene.rt_geometry_version, start, end);
+        if self.scene.playbar_cache_key == Some(key) {
             return false;
         }
-        self.playbar_cache_key = Some(key);
-        let solved = self.sim_cache.solved();
+        self.scene.playbar_cache_key = Some(key);
+        let solved = self.scene.sim_cache.solved();
         let mut chains = std::collections::HashMap::new();
         if !solved.is_empty() {
             fn walk(n: &FsNode, solved: &[crate::geometry::SolvedRange], out: &mut std::collections::HashMap<String, u64>) {
@@ -2680,7 +2624,7 @@ impl State {
         }
 
         let (frame, start) = (self.sim_frame(), self.sim_start_frame());
-        let mut sim_cache = std::mem::take(&mut self.sim_cache);
+        let mut sim_cache = std::mem::take(&mut self.scene.sim_cache);
         let geom = {
             let mut sim = crate::geometry::EvalSim::new(frame, start, &mut sim_cache);
             let mut visited = Vec::new();
@@ -2693,7 +2637,7 @@ impl State {
                 &mut sim,
             )
         };
-        self.sim_cache = sim_cache;
+        self.scene.sim_cache = sim_cache;
         let Some(geom) = geom else {
             self.update_status_text("Export: the node has no input geometry.");
             return;
@@ -2753,12 +2697,12 @@ impl State {
             self.update_status_text(&format!("{}: Detect Range needs an input", node.name));
             return;
         };
-        let mut sim_cache = std::mem::take(&mut self.sim_cache);
+        let mut sim_cache = std::mem::take(&mut self.scene.sim_cache);
         let geom = {
             let mut sim = crate::geometry::EvalSim::new(frame, start, &mut sim_cache);
             crate::geometry::node_geometry_as_shown(&self.doc.fs_root, input, &mut err, &mut sim)
         };
-        self.sim_cache = sim_cache;
+        self.scene.sim_cache = sim_cache;
         let Some(geom) = geom else {
             self.update_status_text(&format!("{}: Detect Range: the input has no geometry", node.name));
             return;
@@ -3290,7 +3234,7 @@ impl State {
             .and_then(|n| crate::geometry::param_node(&self.doc.fs_root, n, "input"))
             .map(|n| n.id.clone());
         let Some(input_id) = input_id else { return PickLists::default() };
-        let key = (input_id.clone(), self.rt_geometry_version);
+        let key = (input_id.clone(), self.scene.rt_geometry_version);
         if let Some((k, lists)) = &self.pick_cache {
             if *k == key {
                 return lists.clone();
@@ -3300,7 +3244,7 @@ impl State {
         let mut groups = std::collections::BTreeSet::new();
         let mut attrs = std::collections::BTreeSet::new();
         let mut widths: Vec<(String, usize)> = Vec::new();
-        let mut sim_cache = std::mem::take(&mut self.sim_cache);
+        let mut sim_cache = std::mem::take(&mut self.scene.sim_cache);
         {
             let mut sim = crate::geometry::EvalSim::new(frame, start, &mut sim_cache);
             if let Some(input_node) = crate::viewer_state::find_node_by_id(&self.doc.fs_root, &input_id) {
@@ -3336,7 +3280,7 @@ impl State {
                 }
             }
         }
-        self.sim_cache = sim_cache;
+        self.scene.sim_cache = sim_cache;
         let mut attrs: Vec<String> = attrs.into_iter().collect();
         attrs.push("Pos".to_string());
         attrs.push("Col".to_string());
@@ -3622,7 +3566,7 @@ impl State {
         // what Frame All holds: its four corners, beside the geometry.
         let image = self.image_world_corners().map(|c| c.map(Vec3::from_array));
         let points = || {
-            self.rt_sphere_verts
+            self.scene.rt_sphere_verts
                 .iter()
                 .map(|v| Vec3::from_array(v.position))
                 .chain(image.into_iter().flatten())
@@ -4647,7 +4591,7 @@ impl State {
         row(&mut options, &mut actions, "View 1:1".into(), ViewportMenuAction::OneToOne);
 
         // The image's two camera rows, under the scene's, while one shows.
-        if self.page_shown.is_some() {
+        if self.scene.page_shown.is_some() {
             row(&mut options, &mut actions, label("frame_image", "Frame Image").to_string(), ViewportMenuAction::Command("frame_image"));
             row(&mut options, &mut actions, label("view_image_pixels", "View Image Pixels 1:1").to_string(), ViewportMenuAction::Command("view_image_pixels"));
         }
@@ -5205,7 +5149,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         // it again from the seed at every refresh, at frame 240 of the
         // project this was found on two and a half times what the frame
         // itself cost.
-        let mut sim_cache = std::mem::take(&mut self.sim_cache);
+        let mut sim_cache = std::mem::take(&mut self.scene.sim_cache);
 
         // The spreadsheet (and the group markers with it) read the network
         // editor's selection, as the parameters pane does.
@@ -5230,7 +5174,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         let mut current_params = None;
 
         // What the rows were read at: a frame and a geometry version.
-        let read_at = (sim_frame, self.rt_geometry_version);
+        let read_at = (sim_frame, self.scene.rt_geometry_version);
         if let Some(node) = selected_node {
             current_name = Some(node.id.clone());
             current_params = Some(node.params.iter().map(|p| (p.name.clone(), p.text().to_string())).collect::<Vec<_>>());
@@ -5279,7 +5223,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             (
                 n.id.clone(),
                 n.params.iter().map(|p| (p.name.clone(), p.text().to_string())).collect::<Vec<_>>(),
-                self.rt_geometry_version.wrapping_add((sim_frame as u64).wrapping_mul(0x9E3779B97F4A7C15)),
+                self.scene.rt_geometry_version.wrapping_add((sim_frame as u64).wrapping_mul(0x9E3779B97F4A7C15)),
             )
         });
         let mut group_update = None;
@@ -5296,7 +5240,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             group_update = Some(member_verts);
         }
         // `selected_node` is not read past here.
-        self.sim_cache = sim_cache;
+        self.scene.sim_cache = sim_cache;
 
         if let Some((headers, columns, points)) = spreadsheet_update {
             // The selection is of rows by index, which are points of ONE
@@ -5360,7 +5304,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             (
                 n.id.clone(),
                 n.params.iter().map(|p| (p.name.clone(), p.text().to_string())).collect::<Vec<_>>(),
-                self.rt_geometry_version,
+                self.scene.rt_geometry_version,
             )
         });
         if key == self.last_pull_arrows_key {
@@ -5371,12 +5315,12 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             None => Vec::new(),
             Some(node) => {
                 let (frame, start) = (self.sim_frame(), self.sim_start_frame());
-                let mut cache = std::mem::take(&mut self.sim_cache);
+                let mut cache = std::mem::take(&mut self.scene.sim_cache);
                 let moved = {
                     let mut sim = crate::geometry::EvalSim::new(frame, start, &mut cache);
                     crate::geometry::point_displacements(&self.doc.fs_root, &node, &mut sim)
                 };
-                self.sim_cache = cache;
+                self.scene.sim_cache = cache;
                 let bases: Vec<glam::Vec3> = moved.iter().map(|(a, _)| *a).collect();
                 crate::geometry::spread_sample(&bases, Self::PULL_ARROWS_MAX)
                     .into_iter()
@@ -5410,7 +5354,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         // the 2D paint and again by the stage pass — and worked out once.
         let key = (
             mvp.to_cols_array().map(f32::to_bits),
-            self.rt_geometry_version,
+            self.scene.rt_geometry_version,
             self.render.geo_opacity.to_bits(),
             self.see_through_active(),
             self.overlay_number_labels.len() + self.overlay_prim_labels.len() + self.overlay_vertex_labels.len(),
@@ -5438,7 +5382,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             return;
         }
         let mut alpha = crate::geometry::point_transmittance(
-            &self.rt_sphere_verts,
+            &self.scene.rt_sphere_verts,
             mvp,
             eye,
             &at,
@@ -5530,7 +5474,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     /// last scene rebuild kept — a switch flipped evaluates nothing.
     pub(crate) fn rebuild_marked_group_markers(&mut self) {
         let at: Vec<Vertex3D> = self
-            .scene_groups
+            .scene.scene_groups
             .iter()
             .filter(|(name, _)| self.view.marked_groups.contains(name))
             .flat_map(|(_, members)| members.iter().map(|&position| Vertex3D { position, color: [0.0; 3] }))
@@ -5820,16 +5764,27 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             network_menu_actions: Vec::new(),
             network_menu_from: None,
             network_menu_cell: None,
-            sim_cache: crate::geometry::SimCache::default(),
-            playbar_cache_key: None,
-            page_image: None,
-            page_shown: None,
-            page_composed: None,
+            scene: SceneData {
+                rt_sphere_verts: Vec::new(),
+                rt_geometry_version: 0,
+                scene_smooth_verts: Vec::new(),
+                scene_edge_verts: Vec::new(),
+                scene_base: None,
+                scene_attributes: Vec::new(),
+                scene_groups: Vec::new(),
+                environment: crate::environment::Environment::default(),
+                page_image: None,
+                page_shown: None,
+                page_composed: None,
+                page_dirty: false,
+                page_version: 0,
+                sim_cache: crate::geometry::SimCache::default(),
+                last_sim_frame: i32::MIN,
+                playbar_cache_key: None,
+            },
             seen_renderer: false,
-            page_dirty: false,
             title_dirty: false,
             settings_save_pending: false,
-            last_sim_frame: i32::MIN,
             plate_menu_slot: None,
             plate_menu_actions: Vec::new(),
             collapsed_panes: [false; WIDGET_COUNT],
@@ -5979,8 +5934,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             render: settings.render.clone(),
             pull_arrow_pairs: Vec::new(),
             sorted_fill_key: None,
-            scene_smooth_verts: Vec::new(),
-            environment: crate::environment::Environment::default(),
             group_markers: StagedMesh::default(),
             spreadsheet_points: Vec::new(),
             row_markers: StagedMesh::default(),
@@ -6005,16 +5958,9 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             vis_hud_from: None,
             value_row_span: None,
             float2_spans: None,
-            scene_attributes: Vec::new(),
-            scene_base: None,
-            scene_groups: Vec::new(),
             marked_group_markers: StagedMesh::default(),
-            scene_edge_verts: Vec::new(),
             pick_cache: None,
-            rt_sphere_verts: Vec::new(),
-            rt_geometry_version: 0,
             last_rt_scene_key: None,
-            page_version: 0,
             ui_context,
         };
 
@@ -6998,7 +6944,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
 
         // A replacement renderer left the page pane with no image; recompose
         // and re-upload it now that the frame has settled.
-        if std::mem::take(&mut self.page_dirty) {
+        if std::mem::take(&mut self.scene.page_dirty) {
             self.rebuild_page();
         }
 
@@ -7153,9 +7099,9 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         // scene a frame behind the number on the playbar, for as long as it
         // played.
         let frame_now = self.sim_frame();
-        let frame_moved = frame_now != self.last_sim_frame;
+        let frame_moved = frame_now != self.scene.last_sim_frame;
         if frame_moved {
-            self.last_sim_frame = frame_now;
+            self.scene.last_sim_frame = frame_now;
             if crate::geometry::contains_simnet(&self.doc.fs_root) {
                 self.rebuild_scene_geometry();
                 self.viewport_dirty = true;
@@ -7330,10 +7276,10 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         }
         if self.spheres_dirty {
             self.spheres_dirty = false;
-            let fill = if self.render.smooth_shading { &self.scene_smooth_verts } else { &self.rt_sphere_verts };
+            let fill = if self.render.smooth_shading { &self.scene.scene_smooth_verts } else { &self.scene.rt_sphere_verts };
             renderer.update_mesh(meshes.spheres, bytemuck::cast_slice(fill));
             // Edge mesh for the wire pass, collected with the scene.
-            renderer.update_mesh(meshes.sphere_edges, bytemuck::cast_slice(&self.scene_edge_verts));
+            renderer.update_mesh(meshes.sphere_edges, bytemuck::cast_slice(&self.scene.scene_edge_verts));
         }
 
         // The spheres the markers are drawn over, at the sizes as they are.
@@ -7404,12 +7350,12 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         if !std::mem::replace(&mut self.seen_renderer, true) {
             return false;
         }
-        if let Some(old) = self.page_image.take() {
+        if let Some(old) = self.scene.page_image.take() {
             cce_ui::vk::free_image(old);
         }
         // Re-uploaded on the next tick, not here: this runs before the frame
         // has settled.
-        self.page_dirty = true;
+        self.scene.page_dirty = true;
         true
     }
 
@@ -7444,7 +7390,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         // Scene geometry built during `State::new` (before the renderer
         // existed) uploads on the first frame's flush, the markers with it:
         // the spheres at their sizes and the instances already staged.
-        self.spheres_dirty = !self.rt_sphere_verts.is_empty();
+        self.spheres_dirty = !self.scene.rt_sphere_verts.is_empty();
         self.marker_sphere_radii = None;
         self.group_markers.dirty = true;
         self.marked_group_markers.dirty = true;
@@ -7693,9 +7639,9 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                     let see_through = self.see_through_active();
                     if see_through && self.vertex_count_spheres > 0 {
                         let eye = (view_mat * model).inverse().transform_point3(Vec3::ZERO);
-                        let key = (self.rt_geometry_version, self.render.smooth_shading, eye.to_array());
+                        let key = (self.scene.rt_geometry_version, self.render.smooth_shading, eye.to_array());
                         if self.sorted_fill_key != Some(key) {
-                            let src = if self.render.smooth_shading { &self.scene_smooth_verts } else { &self.rt_sphere_verts };
+                            let src = if self.render.smooth_shading { &self.scene.scene_smooth_verts } else { &self.scene.rt_sphere_verts };
                             let sorted = crate::geometry::sort_triangles_back_to_front(src, eye);
                             renderer.update_mesh(meshes.spheres, bytemuck::cast_slice(&sorted));
                             self.sorted_fill_key = Some(key);
@@ -7804,9 +7750,9 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                         draws.extend(fill);
                     }
                     // One light for both views: the environment's sun.
-                    renderer.set_scene_light(self.environment.sun_direction.to_array());
+                    renderer.set_scene_light(self.scene.environment.sun_direction.to_array());
                     renderer.stage_scene((sx, sy, cw, ch), draws);
-                    if let (Some(image), Some(shown)) = (self.page_image, &self.page_shown) {
+                    if let (Some(image), Some(shown)) = (self.scene.page_image, &self.scene.page_shown) {
                         renderer.stage_scene_images(vec![cce_ui::vk::SceneImage {
                             image,
                             corners: shown.world_corners(self.world_unit_mm()),
@@ -7828,12 +7774,12 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 // (1-spp noise) and stillness converges.
                 if rt_mode {
                     let unit_mm = self.world_unit_mm();
-                    let key = (self.rt_geometry_version, self.page_version, unit_mm.to_bits());
+                    let key = (self.scene.rt_geometry_version, self.scene.page_version, unit_mm.to_bits());
                     if self.last_rt_scene_key != Some(key) {
                         let (rt_tris, rt_mats) = self.collect_rt_scene();
                         // The image the raster pass draws, traced: the same
                         // upload, at the same corners.
-                        let image = self.page_image.zip(self.page_shown.as_ref()).map(
+                        let image = self.scene.page_image.zip(self.scene.page_shown.as_ref()).map(
                             |(image, shown)| cce_ui::vk::RtImage {
                                 image,
                                 corners: shown.world_corners(unit_mm),
@@ -7850,7 +7796,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                     // pass draws it (since 2026-10-02; it was the tracer's
                     // sky). The sky still lights the scene.
                     renderer.set_rt_background(Some(cce_ui::color::to_linear_rgb(self.viewport().bg_color)));
-                    renderer.set_rt_environment(self.environment.to_rt());
+                    renderer.set_rt_environment(self.scene.environment.to_rt());
                     renderer.stage_rt((sx, sy, cw, ch), cce_ui::vk::RtCamera { inv_mvp });
                 }
             } else if self.viewport_dirty {

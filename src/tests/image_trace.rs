@@ -9,29 +9,29 @@ use super::*;
 #[test]
 fn a_recomposed_image_is_a_new_traced_scene() {
     let mut state = State::new(false);
-    let before = state.page_version;
+    let before = state.scene.page_version;
     state.rebuild_scene_geometry();
-    assert_eq!(state.page_version, before, "a scene with no image moved the image's version");
+    assert_eq!(state.scene.page_version, before, "a scene with no image moved the image's version");
 
     let mut state = state_showing_image(64, 32, 100);
-    let shown = state.page_version;
+    let shown = state.scene.page_version;
     assert!(shown > before, "showing an image did not move its version");
     state.rebuild_scene_geometry();
-    assert_eq!(state.page_version, shown, "a rebuild that changed nothing in the image recomposed it");
+    assert_eq!(state.scene.page_version, shown, "a rebuild that changed nothing in the image recomposed it");
     let page = state.current_dir().children.iter().position(|n| n.node_type == "page").unwrap();
     state.current_dir_mut().children[page].params.iter_mut().find(|p| p.name == "color").unwrap().set_text("0.50:0.20:0.10");
     state.rebuild_scene_geometry();
-    assert!(state.page_version > shown, "a recomposed image is the scene the tracer has");
+    assert!(state.scene.page_version > shown, "a recomposed image is the scene the tracer has");
 
     // Hidden, the tracer has to be told it went.
     let slot = state.current_dir().children.iter().position(|n| n.node_type == "page").unwrap();
     state.current_dir_mut().set_child_geometry_visible(slot, false);
-    let hidden = state.page_version;
+    let hidden = state.scene.page_version;
     state.rebuild_scene_geometry();
-    assert!(state.page_version > hidden, "the tracer keeps an image that is gone");
-    let gone = state.page_version;
+    assert!(state.scene.page_version > hidden, "the tracer keeps an image that is gone");
+    let gone = state.scene.page_version;
     state.rebuild_scene_geometry();
-    assert_eq!(state.page_version, gone);
+    assert_eq!(state.scene.page_version, gone);
 }
 
 /// A thumbnail of an image alone is taken square on, the image fitted

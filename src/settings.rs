@@ -194,7 +194,7 @@ pub struct RenderSettings {
     pub pull_arrow_scale: f32,
     /// Smooth (vertex-normal) shading of the scene fill, where off is the
     /// faceted look the raster pass has always had. While on,
-    /// `State::scene_smooth_verts` holds the lit fill and the draw is
+    /// `State::scene.scene_smooth_verts` holds the lit fill and the draw is
     /// `prelit`. Absent in older files: flat.
     pub smooth_shading: bool,
     /// See-through fill: below full opacity the fill draws with no culling

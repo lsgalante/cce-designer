@@ -2041,11 +2041,11 @@ impl State {
             // The scene's point groups, ranked by name, a switch each and the
             // member count in the chord column.
             Mode::Groups => {
-                let names: Vec<&str> = self.scene_groups.iter().map(|(n, _)| n.as_str()).collect();
+                let names: Vec<&str> = self.scene.scene_groups.iter().map(|(n, _)| n.as_str()).collect();
                 crate::command::fuzzy_rank(&query, &names)
                     .into_iter()
                     .map(|i| {
-                        let (name, members) = &self.scene_groups[i];
+                        let (name, members) = &self.scene.scene_groups[i];
                         Row {
                             id: format!("{GROUP_ROW_PREFIX}{name}"),
                             label: name.clone(),

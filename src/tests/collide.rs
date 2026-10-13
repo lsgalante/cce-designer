@@ -203,14 +203,14 @@ fn playback_builds_the_scene_for_the_frame_the_playbar_shows() {
     state.apply_action(McpAction::AddNode { template_name: "Simnet".into(), name: Some("sim".into()), x: 6.0, y: 8.0 }, &mut redraw).unwrap();
     assert!(crate::geometry::contains_simnet(&state.doc.fs_root));
     state.tick_frame(1.0 / 60.0);
-    assert_eq!(state.last_sim_frame, state.sim_frame());
+    assert_eq!(state.scene.last_sim_frame, state.sim_frame());
     state.ui_context[state.slots.playbar].inner_mut().playing = true;
     state.ui_context[state.slots.playbar].inner_mut().fps = 60.0;
     let start = state.sim_frame();
     for i in 1..=3 {
         assert!(state.tick_frame(1.0 / 60.0), "a playing tick asks for a redraw");
         assert_eq!(state.sim_frame(), start + i, "the playbar advanced a frame");
-        assert_eq!(state.last_sim_frame, state.sim_frame(), "and the scene was built for that frame, not the last one");
+        assert_eq!(state.scene.last_sim_frame, state.sim_frame(), "and the scene was built for that frame, not the last one");
     }
 }
 
@@ -1104,7 +1104,7 @@ fn selected_spreadsheet_rows_are_marked_in_the_scene() {
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
         state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
     };
-    let version = state.rt_geometry_version;
+    let version = state.scene.rt_geometry_version;
     press(&mut state, 1);
     assert_eq!(state.selected_spreadsheet_points(), vec![1]);
     assert!(!state.row_markers.verts.is_empty() && state.row_markers.dirty, "the marker is staged");
@@ -1120,7 +1120,7 @@ fn selected_spreadsheet_rows_are_marked_in_the_scene() {
     state.modifiers.ctrl = false;
     assert_eq!(state.selected_spreadsheet_points(), vec![0, 1]);
     assert_eq!(state.row_markers.verts.len(), 2 * one, "a marker a row");
-    assert_eq!(state.rt_geometry_version, version, "selecting evaluates nothing");
+    assert_eq!(state.scene.rt_geometry_version, version, "selecting evaluates nothing");
 
     // A refresh of the same node's table keeps it.
     state.apply_action(McpAction::SetParam { slot: a, name: "center".into(), value: "1.00:0.50:0.25".into() }, &mut redraw).unwrap();
@@ -1254,7 +1254,7 @@ fn the_spreadsheet_and_group_markers_share_the_sim_cache() {
     state.sync_nodes();
     assert_eq!(steps(), solved, "and the scene");
     // And the cache is back where it lives, its solve intact.
-    assert!(!state.sim_cache.checkpoint_frames(&state.current_dir().children[sim].id).is_empty());
+    assert!(!state.scene.sim_cache.checkpoint_frames(&state.current_dir().children[sim].id).is_empty());
 }
 
 /// The spreadsheet reads what is selected again whenever the answer

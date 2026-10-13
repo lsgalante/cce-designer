@@ -305,11 +305,11 @@ impl State {
     /// return its index.
     pub(crate) fn add_visualizer(&mut self) -> usize {
         let pick = self
-            .scene_attributes
+            .scene.scene_attributes
             .iter()
             .map(|a| a.name.as_str())
             .find(|n| !matches!(*n, "P" | "Cd" | "N"))
-            .or_else(|| self.scene_attributes.first().map(|a| a.name.as_str()))
+            .or_else(|| self.scene.scene_attributes.first().map(|a| a.name.as_str()))
             .unwrap_or("")
             .to_string();
         self.view.visualizers.push(Visualizer::new(&pick));
@@ -345,7 +345,7 @@ impl State {
         // Switching to Manual starts the range at the attribute's own,
         // which is what Auto was showing — not at 0..1.
         if field == "range" && v.is_manual() && v.manual_range == [0.0, 1.0] {
-            if let Some(a) = self.scene_attributes.iter().find(|a| a.name == v.attribute) {
+            if let Some(a) = self.scene.scene_attributes.iter().find(|a| a.name == v.attribute) {
                 v.manual_range = [a.min, a.max];
             }
         }
@@ -415,7 +415,7 @@ impl State {
             out.push(grouped(p(HUD_DELETE, "button".into(), String::new(), "Delete Visualizer"), "pick"));
             let v = &self.view.visualizers[i];
             out.push(grouped(p("enabled", "toggle".into(), v.enabled.to_string(), "Enabled"), "settings"));
-            let mut attrs: Vec<String> = self.scene_attributes.iter().map(|a| a.name.clone()).collect();
+            let mut attrs: Vec<String> = self.scene.scene_attributes.iter().map(|a| a.name.clone()).collect();
             if !v.attribute.is_empty() && !attrs.contains(&v.attribute) {
                 attrs.push(v.attribute.clone());
             }
@@ -435,7 +435,7 @@ impl State {
             out.push(grouped(p("opacity", "slider:0:1".into(), format!("{:.2}", v.opacity), "Opacity").with_show_when("mode == Ramp"), "settings"));
             out.push(grouped(p("scale", format!("slider:0:{}", 10.0f32.max(v.scale)), format!("{:.2}", v.scale), "Scale").with_show_when("mode == Vector"), "settings"));
             let mut groups: Vec<String> = vec![ALL_POINTS.to_string()];
-            groups.extend(self.scene_groups.iter().map(|(g, _)| g.clone()));
+            groups.extend(self.scene.scene_groups.iter().map(|(g, _)| g.clone()));
             if !v.group.is_empty() && !groups.contains(&v.group) {
                 groups.push(v.group.clone());
             }

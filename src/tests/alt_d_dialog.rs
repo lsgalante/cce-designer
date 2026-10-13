@@ -461,7 +461,7 @@ fn a_dialog_slider_drag_lands_without_re_evaluating_the_graph() {
         let px = band_x + SLIDER_W * t;
         state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: px as f64, y: row_y as f64 } });
     };
-    let version = state.rt_geometry_version;
+    let version = state.scene.rt_geometry_version;
 
     // The press takes the band and jumps the value; nothing is evaluated
     // and nothing is written.
@@ -469,7 +469,7 @@ fn a_dialog_slider_drag_lands_without_re_evaluating_the_graph() {
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
     assert!(state.ui_context[state.slots.dialog].slider_dragging(), "the press took the band");
     assert!((state.render.geo_opacity - 0.5).abs() < 0.02, "{}", state.render.geo_opacity);
-    assert_eq!(state.rt_geometry_version, version, "a draw-time value re-evaluated the graph");
+    assert_eq!(state.scene.rt_geometry_version, version, "a draw-time value re-evaluated the graph");
     assert!((saved(&path) - 1.0).abs() < 1e-3, "written mid-drag");
 
     // A motion lands the value live and re-reads the row in place.
@@ -477,14 +477,14 @@ fn a_dialog_slider_drag_lands_without_re_evaluating_the_graph() {
     assert!((state.render.geo_opacity - 0.25).abs() < 0.02, "{}", state.render.geo_opacity);
     let shown = state.ui_context[state.slots.dialog].rows[0].slider_value().expect("a slider row");
     assert!((shown - state.render.geo_opacity).abs() < 1e-3, "the row shows {shown}, the field holds {}", state.render.geo_opacity);
-    assert_eq!(state.rt_geometry_version, version, "a drag motion re-evaluated the graph");
+    assert_eq!(state.scene.rt_geometry_version, version, "a drag motion re-evaluated the graph");
     assert!((saved(&path) - 1.0).abs() < 1e-3, "written mid-drag");
 
     // The release writes the file once.
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left });
     assert!(!state.ui_context[state.slots.dialog].slider_dragging());
     assert!((saved(&path) - state.render.geo_opacity).abs() < 1e-3, "the release did not save");
-    assert_eq!(state.rt_geometry_version, version);
+    assert_eq!(state.scene.rt_geometry_version, version);
 
     // A single landing saves at once, and clamps as the menu clamps.
     state.land_dialog_slider(&row, 0.7);
@@ -492,14 +492,14 @@ fn a_dialog_slider_drag_lands_without_re_evaluating_the_graph() {
     assert!((saved(&path) - 0.7).abs() < 1e-3, "a wheel or arrow landing did not save");
     state.land_dialog_slider(&row, 7.0);
     assert!((state.render.geo_opacity - 1.0).abs() < 1e-6, "clamped");
-    assert_eq!(state.rt_geometry_version, version);
+    assert_eq!(state.scene.rt_geometry_version, version);
 
     // Group Marker Size re-sizes the group markers from their kept
     // members.
     state.land_dialog_slider(&setting_row_id("Group Marker Size"), 0.05);
     assert!((state.render.group_marker_size - 0.05).abs() < 1e-6);
     assert!((state.last_group_marker_size - 0.05).abs() < 1e-6);
-    assert_eq!(state.rt_geometry_version, version);
+    assert_eq!(state.scene.rt_geometry_version, version);
 
     // The spin rows land the same way: a whole number over the row's
     // unit, re-baking only the guide mesh that reads it.
@@ -519,7 +519,7 @@ fn a_dialog_slider_drag_lands_without_re_evaluating_the_graph() {
     state.land_dialog_slider(&setting_row_id("Group Marker Size"), 0.05);
     assert!((state.render.group_marker_size - state.view.point_marker_size).abs() < 1e-6);
     assert_eq!(state.settings_row_value("Point Marker Size"), state.settings_row_value("Group Marker Size"));
-    assert_eq!(state.rt_geometry_version, version, "a spin row re-evaluated the graph");
+    assert_eq!(state.scene.rt_geometry_version, version, "a spin row re-evaluated the graph");
     assert!((saved(&path) - 1.0).abs() < 1e-3, "the file follows every single landing");
     let kdl = fs::read_to_string(&path).expect("a settings file");
     let back = crate::app::DesignSettings::from_kdl_str(&kdl).viewport;
@@ -1994,8 +1994,8 @@ fn the_environment_node_lights_both_views() {
     state.on_path_changed();
     state.render.smooth_shading = true;
     state.rebuild_scene_geometry();
-    assert_eq!(state.environment, Environment::default());
-    let colours = |state: &State| state.scene_smooth_verts.iter().map(|v| v.color).collect::<Vec<_>>();
+    assert_eq!(state.scene.environment, Environment::default());
+    let colours = |state: &State| state.scene.scene_smooth_verts.iter().map(|v| v.color).collect::<Vec<_>>();
     let baked = colours(&state);
     assert!(!baked.is_empty());
     let mut redraw = false;
@@ -2004,14 +2004,14 @@ fn the_environment_node_lights_both_views() {
     let slot = state.current_dir().children.iter().position(|c| c.node_type == "environment").unwrap();
     state.apply_action(McpAction::SetParam { slot, name: "sun_elevation".into(), value: "-40".into() }, &mut redraw).unwrap();
     state.sync_environment();
-    assert!(state.environment.sun_direction.y < -0.5, "lit from below now: {:?}", state.environment.sun_direction);
-    assert_eq!(state.environment.to_rt().sun_direction, state.environment.sun_direction.to_array(), "the tracer's sun is the same one");
+    assert!(state.scene.environment.sun_direction.y < -0.5, "lit from below now: {:?}", state.scene.environment.sun_direction);
+    assert_eq!(state.scene.environment.to_rt().sun_direction, state.scene.environment.sun_direction.to_array(), "the tracer's sun is the same one");
     assert_ne!(colours(&state), baked, "the smooth bake is lit by it");
 
     // Bypassed, it is as if it were not there.
     state.set_bypassed(&[slot], true);
     state.sync_environment(); // the bypass's own rebuild has already read it
-    assert_eq!(state.environment, Environment::default());
+    assert_eq!(state.scene.environment, Environment::default());
     assert_eq!(colours(&state), baked);
 
     // Its rows evaluate at the frame.
@@ -2124,7 +2124,7 @@ fn command_palette_opens_the_dialog_on_commands() {
 /// start, which is indistinguishable from one that failed to.
 #[test]
 fn nothing_shells_out_to_cce_cloud_any_more() {
-    for name in ["app.rs", "app/input.rs", "app/document.rs", "app/network.rs", "app/camera.rs", "app/view.rs", "window.rs", "dialog.rs", "render.rs", "api.rs", "slots.rs"] {
+    for name in ["app.rs", "app/input.rs", "app/document.rs", "app/network.rs", "app/camera.rs", "app/view.rs", "app/scene.rs", "window.rs", "dialog.rs", "render.rs", "api.rs", "slots.rs"] {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(name);
         let src = std::fs::read_to_string(&path).expect("read source");
         for needle in ["CloudPopup", "run_dmenu", "CloudPopupTracker"] {
