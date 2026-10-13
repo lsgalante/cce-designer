@@ -158,7 +158,7 @@ pub struct SceneMeshes {
     /// white): the group markers' at Group Marker Size — the selected group,
     /// the marked groups and the spreadsheet's rows share it — the points'
     /// at Point Marker Size and the vertices' at `VERTEX_MARKER_SCALE` of
-    /// it. Re-uploaded when a size moves (`State::marker_sphere_radii`),
+    /// it. Re-uploaded when a size moves (`State::markers.marker_sphere_radii`),
     /// which is 240 vertices whatever the scene.
     pub group_sphere: cce_ui::vk::MeshId,
     pub point_sphere: cce_ui::vk::MeshId,

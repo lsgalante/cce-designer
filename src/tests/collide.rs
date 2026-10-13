@@ -1093,7 +1093,7 @@ fn selected_spreadsheet_rows_are_marked_in_the_scene() {
     state.apply_action(McpAction::Select { slot: a }, &mut redraw).unwrap();
     state.sync_nodes();
     assert_eq!(state.spreadsheet_points.len(), 8, "a box has eight points, a row each");
-    assert!(state.row_markers.verts.is_empty());
+    assert!(state.markers.row_markers.verts.is_empty());
 
     let (sx, sy, sw, sh) = state.positions[SPREADSHEET_IDX];
     assert!(sw > 0.0 && sh > 60.0, "the spreadsheet is laid out: {sw} x {sh}");
@@ -1107,19 +1107,19 @@ fn selected_spreadsheet_rows_are_marked_in_the_scene() {
     let version = state.scene.rt_geometry_version;
     press(&mut state, 1);
     assert_eq!(state.selected_spreadsheet_points(), vec![1]);
-    assert!(!state.row_markers.verts.is_empty() && state.row_markers.dirty, "the marker is staged");
-    let one = state.row_markers.verts.len();
+    assert!(!state.markers.row_markers.verts.is_empty() && state.markers.row_markers.dirty, "the marker is staged");
+    let one = state.markers.row_markers.verts.len();
     // The marker stands on the row's point.
     let p = state.spreadsheet_points[1];
     let n = one as f32;
-    let mid = state.row_markers.verts.iter().fold([0.0f32; 3], |m, v| [m[0] + v.position[0] / n, m[1] + v.position[1] / n, m[2] + v.position[2] / n]);
+    let mid = state.markers.row_markers.verts.iter().fold([0.0f32; 3], |m, v| [m[0] + v.position[0] / n, m[1] + v.position[1] / n, m[2] + v.position[2] / n]);
     assert!((0..3).all(|k| (mid[k] - p[k]).abs() < 1e-3), "{mid:?} is not at {p:?}");
 
     state.modifiers.ctrl = true;
     press(&mut state, 0);
     state.modifiers.ctrl = false;
     assert_eq!(state.selected_spreadsheet_points(), vec![0, 1]);
-    assert_eq!(state.row_markers.verts.len(), 2 * one, "a marker a row");
+    assert_eq!(state.markers.row_markers.verts.len(), 2 * one, "a marker a row");
     assert_eq!(state.scene.rt_geometry_version, version, "selecting evaluates nothing");
 
     // A refresh of the same node's table keeps it.
@@ -1127,7 +1127,7 @@ fn selected_spreadsheet_rows_are_marked_in_the_scene() {
     state.sync_nodes();
     assert_eq!(state.selected_spreadsheet_points(), vec![0, 1]);
     let moved = state.spreadsheet_points[1];
-    let mid = state.row_markers.verts[one..].iter().chain(&state.row_markers.verts[..one]).fold([0.0f32; 3], |m, v| [m[0] + v.position[0], m[1] + v.position[1], m[2] + v.position[2]]);
+    let mid = state.markers.row_markers.verts[one..].iter().chain(&state.markers.row_markers.verts[..one]).fold([0.0f32; 3], |m, v| [m[0] + v.position[0], m[1] + v.position[1], m[2] + v.position[2]]);
     let both = [moved, state.spreadsheet_points[0]];
     let want = [both[0][0] + both[1][0], both[0][1] + both[1][1], both[0][2] + both[1][2]];
     assert!((0..3).all(|k| (mid[k] / one as f32 - want[k]).abs() < 1e-2), "the markers followed the points");
@@ -1136,7 +1136,7 @@ fn selected_spreadsheet_rows_are_marked_in_the_scene() {
     state.apply_action(McpAction::Select { slot: b }, &mut redraw).unwrap();
     state.sync_nodes();
     assert!(state.selected_spreadsheet_points().is_empty());
-    assert!(state.row_markers.verts.is_empty());
+    assert!(state.markers.row_markers.verts.is_empty());
 }
 
 /// A node INSIDE a simnet is read as the scene draws it there: as the
@@ -1178,8 +1178,8 @@ fn rows_selected_inside_a_simnet_follow_the_simulation() {
     state.spreadsheet_mut().set_selected_rows(&[3]);
     state.rebuild_row_markers();
     let middle = |state: &State| {
-        let n = state.row_markers.verts.len() as f32;
-        state.row_markers.verts.iter().fold(0.0f32, |m, v| m + v.position[0] / n)
+        let n = state.markers.row_markers.verts.len() as f32;
+        state.markers.row_markers.verts.iter().fold(0.0f32, |m, v| m + v.position[0] / n)
     };
     let (row_at, marker_at) = (state.spreadsheet_points[3][0], middle(&state));
     assert!((row_at - marker_at).abs() < 1e-3);
@@ -1238,7 +1238,7 @@ fn the_spreadsheet_and_group_markers_share_the_sim_cache() {
     // done ONCE, by whoever asks first…
     state.apply_action(McpAction::Select { slot: tagged }, &mut redraw).unwrap();
     state.sync_nodes();
-    assert_eq!(state.group_members.len(), 5, "the markers were staged from the simulated geometry");
+    assert_eq!(state.markers.group_members.len(), 5, "the markers were staged from the simulated geometry");
     let solved = steps();
     assert!(solved >= 60, "the fixture simulates: {solved} steps");
     assert!(solved < 120, "the spreadsheet and the markers solved it between them once, not once each: {solved}");
@@ -1275,7 +1275,7 @@ fn the_spreadsheet_and_markers_follow_the_frame_and_upstream_edits() {
     let slot_of = |state: &State, name: &str| state.current_dir().children.iter().position(|c| c.name == name).expect(name);
     let sphere = slot_of(&state, "sphere1");
     // Where the markers stand, as plain numbers.
-    let marks = |state: &State| -> Vec<[f32; 3]> { state.group_members.iter().map(|v| v.position).collect() };
+    let marks = |state: &State| -> Vec<[f32; 3]> { state.markers.group_members.iter().map(|v| v.position).collect() };
 
     // No simulation in the graph. The frame moves; nothing rebuilds the
     // scene; what is selected is still read again.

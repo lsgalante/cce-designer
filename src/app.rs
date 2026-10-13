@@ -161,6 +161,9 @@ pub use scene::SceneData;
 // `State::stage`: the GPU meshes, the uploads pending, the last stage's key.
 mod stage;
 pub use stage::{SceneMeshes, SceneStage, StageKey, StagedMesh};
+// `State::markers`: the marker instances, pull arrows and overlay labels.
+mod markers;
+pub use markers::SceneMarkers;
 
 /// Which node the params pane is showing: the editor's level, the slot
 /// there, and the node's id. All three, because no one of them is an
@@ -919,87 +922,15 @@ pub struct State {
     /// display block, field for field (`settings::RenderSettings`, where
     /// each is described).
     pub render: RenderSettings,
-    /// Selected-Group membership markers: marker vertices staged CPU-side by
-    /// `sync_nodes` whenever the selection is a Group node (empty otherwise),
-    /// flushed to `meshes.group_points`; its count gates the draw. The key
-    /// (`last_group_points_key`) — (node id, params, geometry version) —
-    /// spares the re-evaluation on unrelated `sync_nodes` runs.
-    pub group_markers: StagedMesh,
+    /// What is drawn ON the scene: the marker instances, the pull arrows, the
+    /// element overlays' numbers and whiskers (`src/app/markers.rs`).
+    pub markers: SceneMarkers,
     /// The spreadsheet's selected rows, shown in the scene: a marker on the
     /// point each row is. `spreadsheet_points` is where the rows' points
     /// were when the table was last filled, kept so a selection stages its
     /// markers without an evaluation; the markers are staged by
     /// `rebuild_row_markers` and flushed to `meshes.row_points`.
     pub spreadsheet_points: Vec<[f32; 3]>,
-    pub row_markers: StagedMesh,
-    pub last_group_points_key: Option<(String, Vec<(String, String)>, u64)>,
-    /// Pull arrows: while the params pane shows an Attribute node that moves
-    /// points (`geometry::moves_points`), an arrow from where each of a
-    /// spread of its points was to where the node puts it — staged by
-    /// `sync_pull_arrows`, flushed to `meshes.pull_arrows`. Keyed like the
-    /// group markers, by (node id, params, geometry version).
-    pub pull_arrows: StagedMesh,
-    /// The sampled `(before, after)` pairs the arrows were built from, kept
-    /// so Pull Arrow Scale can re-draw them without re-evaluating the node
-    /// (`rebuild_pull_arrow_verts`).
-    pub pull_arrow_pairs: Vec<(glam::Vec3, glam::Vec3)>,
-    pub last_pull_arrows_key: Option<(String, Vec<(String, String)>, u64)>,
-    /// The selected Group's member positions, kept from the evaluation so
-    /// the markers can be re-SIZED without re-evaluating the node — a
-    /// marker size change (the viewport menu's slider, per motion of a
-    /// drag) only rebuilds the spheres (`rebuild_group_markers`).
-    pub group_members: Vec<Vertex3D>,
-    /// The marker radius `group_markers` was built at.
-    pub last_group_marker_size: f32,
-    /// The point overlays on the visible scene, rebuilt with it: marker
-    /// geometry for Show Point Markers, and (position, vertex index) labels
-    /// for Show Point Numbers — the labels project through `last_scene_mvp`
-    /// into 2D text each frame.
-    ///
-    /// These were per-node preferences on a hidden `meta` child until
-    /// 2026-09-23, so seeing the point numbering of what was on screen meant
-    /// diving into each node and flipping its own switch. They are display
-    /// settings, and display settings belong to the view: three commands in
-    /// the palette (`toggle_point_markers` / `_numbers` / `_normals`) over
-    /// the flags below, persisted in `ViewportSettings` beside Show Grid.
-    ///
-    /// The point markers, the vertex markers and the normals' whiskers go
-    /// up together (`mark_overlay_dirty`), as one rebuild stages them.
-    pub point_markers: StagedMesh,
-    /// The scene's point positions, kept by `rebuild_scene_geometry` while
-    /// Show Point Markers is on (empty otherwise), so the markers can be
-    /// re-SIZED without re-evaluating the graph — the viewport menu's Point
-    /// Marker Size slider does that on every motion of a drag
-    /// (`rebuild_overlay_markers`).
-    pub overlay_marker_points: Vec<Vertex3D>,
-    /// The same for Show Vertex Markers: where each vertex's marker
-    /// stands, inset from its point as its number is.
-    pub overlay_vertex_marker_points: Vec<Vertex3D>,
-    /// The Show Vertex Markers instances, built beside the points'
-    /// (`rebuild_overlay_markers`) and flushed with them.
-    pub vertex_markers: StagedMesh,
-    /// The radii the marker spheres were last uploaded at — group, point,
-    /// vertex — so the flush re-uploads them when a size moves.
-    pub marker_sphere_radii: Option<[f32; 3]>,
-    pub overlay_number_labels: Vec<([f32; 3], u32)>,
-    /// How much of each label above shows through the fill in front of its
-    /// point (`geometry::point_transmittance`), worked out by the stage
-    /// pass for the eye it staged. The labels are 2D text, so this is the
-    /// only occlusion they get. Emptied with every rebuild of the labels; a
-    /// label with no entry draws whole.
-    pub overlay_number_alpha: Vec<f32>,
-    /// Show Primitive Numbers and Show Vertex Numbers, the same two lists
-    /// each: a primitive's label stands at its centroid, a vertex's inside
-    /// its primitive, part of the way from its point to that centroid, so
-    /// the vertices that share a point are told apart.
-    pub overlay_prim_labels: Vec<([f32; 3], u32)>,
-    pub overlay_prim_alpha: Vec<f32>,
-    pub overlay_vertex_labels: Vec<([f32; 3], u32)>,
-    pub overlay_vertex_alpha: Vec<f32>,
-    /// Show Point Normals: LINE_LIST whiskers from each distinct point along
-    /// its smooth vertex normal (computed from topology — the kernel outputs
-    /// carry only a default up-normal attribute).
-    pub overlay_normals: StagedMesh,
     /// The params HUD shows the attribute visualizers, editing visualizer
     /// `i` (0 with none yet), in place of the selected node's parameters —
     /// `visualizer::State::open_visualizers_hud`. `None` is the node.
@@ -1014,9 +945,6 @@ pub struct State {
     /// The same for the shown node's `float2` rows, by parameter name, with
     /// the node they are for (`present_float2_rows`).
     pub float2_spans: Option<(String, Vec<(String, f32)>)>,
-    /// The marked groups' markers, staged by `rebuild_marked_group_markers`,
-    /// flushed to `meshes.marked_points`.
-    pub marked_group_markers: StagedMesh,
     /// The param pane's completion lists — (input node name, geometry
     /// version) → (group names, attribute names) read off that input's
     /// evaluated geometry, feeding the textpick rows on group/attribute
@@ -5065,7 +4993,7 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             )
         });
         let mut group_update = None;
-        if group_key != self.last_group_points_key {
+        if group_key != self.markers.last_group_points_key {
             let mut member_verts = Vec::new();
             if let Some(node) = selected_node.filter(|n| n.node_type.eq_ignore_ascii_case("group")) {
                 let group_name = node_param_str(node, "group_name", "group1");
@@ -5095,10 +5023,10 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             self.last_spreadsheet_read_at = read_at;
         }
         if let Some(members) = group_update {
-            self.group_members = members;
-            self.last_group_points_key = group_key;
+            self.markers.group_members = members;
+            self.markers.last_group_points_key = group_key;
             self.rebuild_group_markers();
-        } else if (self.render.group_marker_size - self.last_group_marker_size).abs() > f32::EPSILON {
+        } else if (self.render.group_marker_size - self.markers.last_group_marker_size).abs() > f32::EPSILON {
             // Same members, new size (the palette's Group Marker Size):
             // re-size without re-evaluating.
             self.rebuild_group_markers();
@@ -5145,11 +5073,11 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 self.scene.rt_geometry_version,
             )
         });
-        if key == self.last_pull_arrows_key {
+        if key == self.markers.last_pull_arrows_key {
             return;
         }
-        self.last_pull_arrows_key = key;
-        self.pull_arrow_pairs = match node {
+        self.markers.last_pull_arrows_key = key;
+        self.markers.pull_arrow_pairs = match node {
             None => Vec::new(),
             Some(node) => {
                 let (frame, start) = (self.sim_frame(), self.sim_start_frame());
@@ -5176,12 +5104,12 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     pub(crate) fn rebuild_pull_arrow_verts(&mut self) {
         let scale = self.render.pull_arrow_scale;
         let shown: Vec<(glam::Vec3, glam::Vec3)> =
-            self.pull_arrow_pairs.iter().map(|&(a, b)| (a, a + (b - a) * scale)).collect();
+            self.markers.pull_arrow_pairs.iter().map(|&(a, b)| (a, a + (b - a) * scale)).collect();
         // The group markers' warm accent: both are "what the selected node
         // does", and they read as one feature.
-        self.pull_arrows.verts =
+        self.markers.pull_arrows.verts =
             crate::geometry::arrow_vertices(&shown, cce_ui::color::to_linear_rgb([1.0, 0.78, 0.20]));
-        self.pull_arrows.dirty = true;
+        self.markers.pull_arrows.dirty = true;
     }
 
     /// Works out how much of each point number shows through the fill, for
@@ -5195,28 +5123,28 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             self.scene.rt_geometry_version,
             self.render.geo_opacity.to_bits(),
             self.see_through_active(),
-            self.overlay_number_labels.len() + self.overlay_prim_labels.len() + self.overlay_vertex_labels.len(),
+            self.markers.overlay_number_labels.len() + self.markers.overlay_prim_labels.len() + self.markers.overlay_vertex_labels.len(),
         );
-        let worked_out = self.overlay_number_alpha.len() == self.overlay_number_labels.len()
-            && self.overlay_prim_alpha.len() == self.overlay_prim_labels.len()
-            && self.overlay_vertex_alpha.len() == self.overlay_vertex_labels.len();
+        let worked_out = self.markers.overlay_number_alpha.len() == self.markers.overlay_number_labels.len()
+            && self.markers.overlay_prim_alpha.len() == self.markers.overlay_prim_labels.len()
+            && self.markers.overlay_vertex_alpha.len() == self.markers.overlay_vertex_labels.len();
         if self.camera.number_alpha_key == Some(key) && worked_out {
             return;
         }
         self.camera.number_alpha_key = Some(key);
         // One pass over the three lists, so the mesh is binned once.
-        let (points_n, prims_n) = (self.overlay_number_labels.len(), self.overlay_prim_labels.len());
+        let (points_n, prims_n) = (self.markers.overlay_number_labels.len(), self.markers.overlay_prim_labels.len());
         let at: Vec<[f32; 3]> = self
-            .overlay_number_labels
+            .markers.overlay_number_labels
             .iter()
-            .chain(&self.overlay_prim_labels)
-            .chain(&self.overlay_vertex_labels)
+            .chain(&self.markers.overlay_prim_labels)
+            .chain(&self.markers.overlay_vertex_labels)
             .map(|(p, _)| *p)
             .collect();
         if at.is_empty() {
-            self.overlay_number_alpha.clear();
-            self.overlay_prim_alpha.clear();
-            self.overlay_vertex_alpha.clear();
+            self.markers.overlay_number_alpha.clear();
+            self.markers.overlay_prim_alpha.clear();
+            self.markers.overlay_vertex_alpha.clear();
             return;
         }
         let mut alpha = crate::geometry::point_transmittance(
@@ -5227,9 +5155,9 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             self.render.geo_opacity,
             self.see_through_active(),
         );
-        self.overlay_vertex_alpha = alpha.split_off(points_n + prims_n);
-        self.overlay_prim_alpha = alpha.split_off(points_n);
-        self.overlay_number_alpha = alpha;
+        self.markers.overlay_vertex_alpha = alpha.split_off(points_n + prims_n);
+        self.markers.overlay_prim_alpha = alpha.split_off(points_n);
+        self.markers.overlay_number_alpha = alpha;
     }
 
     /// Build the marker overlays' instances from the kept scene positions,
@@ -5241,12 +5169,12 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     /// stand where they stood, and the flush re-uploads the sphere they are
     /// drawn over (`marker_sphere_radii`).
     pub(crate) fn rebuild_overlay_markers(&mut self) {
-        self.point_markers.verts = crate::geometry::marker_instances(
-            &self.overlay_marker_points,
+        self.markers.point_markers.verts = crate::geometry::marker_instances(
+            &self.markers.overlay_marker_points,
             cce_ui::color::to_linear_rgb(self.view.point_marker_color),
         );
-        self.vertex_markers.verts = crate::geometry::marker_instances(
-            &self.overlay_vertex_marker_points,
+        self.markers.vertex_markers.verts = crate::geometry::marker_instances(
+            &self.markers.overlay_vertex_marker_points,
             cce_ui::color::to_linear_rgb(crate::render::VERTEX_LABEL_COLOR.map(|c| c as f32 / 255.0)),
         );
         self.mark_overlay_dirty();
@@ -5256,9 +5184,9 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
     /// markers and the normals' whiskers go up together, as they did under
     /// one flag — every rebuild stages them together.
     pub(crate) fn mark_overlay_dirty(&mut self) {
-        self.point_markers.dirty = true;
-        self.vertex_markers.dirty = true;
-        self.overlay_normals.dirty = true;
+        self.markers.point_markers.dirty = true;
+        self.markers.vertex_markers.dirty = true;
+        self.markers.overlay_normals.dirty = true;
     }
 
     /// What the marker draws show, as vertices: each kind's instances over
@@ -5269,14 +5197,14 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         use crate::geometry::{expand_instances, marker_sphere};
         let group = || marker_sphere(self.render.group_marker_size);
         match kind {
-            MarkerKind::Group => expand_instances(&group(), &self.group_markers.verts),
-            MarkerKind::Row => expand_instances(&group(), &self.row_markers.verts),
-            MarkerKind::Marked => expand_instances(&group(), &self.marked_group_markers.verts),
+            MarkerKind::Group => expand_instances(&group(), &self.markers.group_markers.verts),
+            MarkerKind::Row => expand_instances(&group(), &self.markers.row_markers.verts),
+            MarkerKind::Marked => expand_instances(&group(), &self.markers.marked_group_markers.verts),
             MarkerKind::Overlay => {
-                let mut out = expand_instances(&marker_sphere(self.view.point_marker_size), &self.point_markers.verts);
+                let mut out = expand_instances(&marker_sphere(self.view.point_marker_size), &self.markers.point_markers.verts);
                 out.extend(expand_instances(
                     &marker_sphere(self.view.point_marker_size * crate::render::VERTEX_MARKER_SCALE),
-                    &self.vertex_markers.verts,
+                    &self.markers.vertex_markers.verts,
                 ));
                 out
             }
@@ -5296,8 +5224,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             .map(|&position| Vertex3D { position, color: [0.0; 3] })
             .collect();
         let [r, g, b, _] = cce_ui::color::highlight_primary_color();
-        self.row_markers.verts = crate::geometry::marker_instances(&at, cce_ui::color::to_linear_rgb([r, g, b]));
-        self.row_markers.dirty = true;
+        self.markers.row_markers.verts = crate::geometry::marker_instances(&at, cce_ui::color::to_linear_rgb([r, g, b]));
+        self.markers.row_markers.dirty = true;
         self.viewport_dirty = true;
     }
 
@@ -5317,8 +5245,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             .filter(|(name, _)| self.view.marked_groups.contains(name))
             .flat_map(|(_, members)| members.iter().map(|&position| Vertex3D { position, color: [0.0; 3] }))
             .collect();
-        self.marked_group_markers.verts = crate::geometry::marker_instances(&at, cce_ui::color::to_linear_rgb([1.0, 0.78, 0.20]));
-        self.marked_group_markers.dirty = true;
+        self.markers.marked_group_markers.verts = crate::geometry::marker_instances(&at, cce_ui::color::to_linear_rgb([1.0, 0.78, 0.20]));
+        self.markers.marked_group_markers.dirty = true;
         self.viewport_dirty = true;
     }
 
@@ -5361,10 +5289,10 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         // One size for every kind of marker on a group's members.
         self.rebuild_row_markers();
         self.rebuild_marked_group_markers();
-        self.group_markers.verts =
-            crate::geometry::marker_instances(&self.group_members, cce_ui::color::to_linear_rgb([1.0, 0.78, 0.20]));
-        self.group_markers.dirty = true;
-        self.last_group_marker_size = self.render.group_marker_size;
+        self.markers.group_markers.verts =
+            crate::geometry::marker_instances(&self.markers.group_members, cce_ui::color::to_linear_rgb([1.0, 0.78, 0.20]));
+        self.markers.group_markers.dirty = true;
+        self.markers.last_group_marker_size = self.render.group_marker_size;
     }
 
 
@@ -5774,32 +5702,34 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                 seen_renderer: false,
             },
             render: settings.render.clone(),
-            pull_arrow_pairs: Vec::new(),
-            group_markers: StagedMesh::default(),
+            markers: SceneMarkers {
+                group_markers: StagedMesh::default(),
+                last_group_points_key: None,
+                group_members: Vec::new(),
+                last_group_marker_size: 0.0,
+                marked_group_markers: StagedMesh::default(),
+                row_markers: StagedMesh::default(),
+                pull_arrows: StagedMesh::default(),
+                pull_arrow_pairs: Vec::new(),
+                last_pull_arrows_key: None,
+                marker_sphere_radii: None,
+                point_markers: StagedMesh::default(),
+                overlay_marker_points: Vec::new(),
+                vertex_markers: StagedMesh::default(),
+                overlay_vertex_marker_points: Vec::new(),
+                overlay_normals: StagedMesh::default(),
+                overlay_number_labels: Vec::new(),
+                overlay_number_alpha: Vec::new(),
+                overlay_prim_labels: Vec::new(),
+                overlay_prim_alpha: Vec::new(),
+                overlay_vertex_labels: Vec::new(),
+                overlay_vertex_alpha: Vec::new(),
+            },
             spreadsheet_points: Vec::new(),
-            row_markers: StagedMesh::default(),
-            last_group_points_key: None,
-            pull_arrows: StagedMesh::default(),
-            last_pull_arrows_key: None,
-            group_members: Vec::new(),
-            last_group_marker_size: 0.0,
-            point_markers: StagedMesh::default(),
-            overlay_marker_points: Vec::new(),
-            overlay_vertex_marker_points: Vec::new(),
-            vertex_markers: StagedMesh::default(),
-            marker_sphere_radii: None,
-            overlay_number_labels: Vec::new(),
-            overlay_number_alpha: Vec::new(),
-            overlay_prim_labels: Vec::new(),
-            overlay_prim_alpha: Vec::new(),
-            overlay_vertex_labels: Vec::new(),
-            overlay_vertex_alpha: Vec::new(),
-            overlay_normals: StagedMesh::default(),
             vis_hud: None,
             vis_hud_from: None,
             value_row_span: None,
             float2_spans: None,
-            marked_group_markers: StagedMesh::default(),
             pick_cache: None,
             ui_context,
         };
@@ -7128,8 +7058,8 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             self.view.point_marker_size,
             self.view.point_marker_size * crate::render::VERTEX_MARKER_SCALE,
         ];
-        if self.marker_sphere_radii != Some(radii) {
-            self.marker_sphere_radii = Some(radii);
+        if self.markers.marker_sphere_radii != Some(radii) {
+            self.markers.marker_sphere_radii = Some(radii);
             for (mesh, r) in [meshes.group_sphere, meshes.point_sphere, meshes.vertex_sphere].into_iter().zip(radii) {
                 renderer.update_mesh(mesh, bytemuck::cast_slice(&crate::geometry::marker_sphere(r)));
             }
@@ -7137,31 +7067,31 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
         }
 
         // Selected-Group markers, staged by sync_nodes.
-        if self.group_markers.flush(renderer, meshes.group_points) {
+        if self.markers.group_markers.flush(renderer, meshes.group_points) {
             self.viewport_dirty = true;
         }
 
         // The marked groups' markers, staged by the dialog's switches and
         // by every scene rebuild.
-        if self.marked_group_markers.flush(renderer, meshes.marked_points) {
+        if self.markers.marked_group_markers.flush(renderer, meshes.marked_points) {
             self.viewport_dirty = true;
         }
 
         // The spreadsheet's selected rows, staged by their selection.
-        if self.row_markers.flush(renderer, meshes.row_points) {
+        if self.markers.row_markers.flush(renderer, meshes.row_points) {
             self.viewport_dirty = true;
         }
 
         // The point overlays, staged together by rebuild_scene_geometry.
-        let points = self.point_markers.flush(renderer, meshes.overlay_points);
-        let vertices = self.vertex_markers.flush(renderer, meshes.vertex_points);
-        let normals = self.overlay_normals.flush(renderer, meshes.overlay_normals);
+        let points = self.markers.point_markers.flush(renderer, meshes.overlay_points);
+        let vertices = self.markers.vertex_markers.flush(renderer, meshes.vertex_points);
+        let normals = self.markers.overlay_normals.flush(renderer, meshes.overlay_normals);
         if points || vertices || normals {
             self.viewport_dirty = true;
         }
 
         // Pull arrows, staged by sync_pull_arrows.
-        if self.pull_arrows.flush(renderer, meshes.pull_arrows) {
+        if self.markers.pull_arrows.flush(renderer, meshes.pull_arrows) {
             self.viewport_dirty = true;
         }
     }
@@ -7224,17 +7154,17 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             overlay_normals: renderer.create_mesh(&[]),
             // Seeded with what is staged: a replacement renderer gets the
             // arrows back without waiting for the selection to change.
-            pull_arrows: renderer.create_mesh(bytemuck::cast_slice(&self.pull_arrows.verts)),
+            pull_arrows: renderer.create_mesh(bytemuck::cast_slice(&self.markers.pull_arrows.verts)),
         });
-        self.pull_arrows.count = self.pull_arrows.verts.len() as u32;
+        self.markers.pull_arrows.count = self.markers.pull_arrows.verts.len() as u32;
         // Scene geometry built during `State::new` (before the renderer
         // existed) uploads on the first frame's flush, the markers with it:
         // the spheres at their sizes and the instances already staged.
         self.stage.spheres_dirty = !self.scene.rt_sphere_verts.is_empty();
-        self.marker_sphere_radii = None;
-        self.group_markers.dirty = true;
-        self.marked_group_markers.dirty = true;
-        self.row_markers.dirty = true;
+        self.markers.marker_sphere_radii = None;
+        self.markers.group_markers.dirty = true;
+        self.markers.marked_group_markers.dirty = true;
+        self.markers.row_markers.dirty = true;
         self.mark_overlay_dirty();
         self.viewport_dirty = true;
     }
@@ -7503,24 +7433,24 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                     }
                     // Selected-Group markers: full-opacity selection feedback,
                     // deliberately outside the Render node's Opacity.
-                    if self.group_markers.count > 0 {
+                    if self.markers.group_markers.count > 0 {
                         draws.push(SceneDraw { mesh: meshes.group_sphere, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: Some(meshes.group_points), screen_space: false });
                     }
                     // The marked groups: the same amber as a selected
                     // group's markers, and the same tier.
-                    if self.marked_group_markers.count > 0 {
+                    if self.markers.marked_group_markers.count > 0 {
                         draws.push(SceneDraw { mesh: meshes.group_sphere, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: Some(meshes.marked_points), screen_space: false });
                     }
                     // The spreadsheet's selected rows, while it is shown.
-                    if self.show_spreadsheet && self.row_markers.count > 0 {
+                    if self.show_spreadsheet && self.markers.row_markers.count > 0 {
                         draws.push(SceneDraw { mesh: meshes.group_sphere, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: Some(meshes.row_points), screen_space: false });
                     }
                     // Show Point Markers and Show Vertex Markers, the same
                     // full-opacity tier, each its sphere instanced.
-                    if self.point_markers.count > 0 {
+                    if self.markers.point_markers.count > 0 {
                         draws.push(SceneDraw { mesh: meshes.point_sphere, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: Some(meshes.overlay_points), screen_space: false });
                     }
-                    if self.vertex_markers.count > 0 {
+                    if self.markers.vertex_markers.count > 0 {
                         draws.push(SceneDraw { mesh: meshes.vertex_sphere, mvp, wireframe: false, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: false, instances: Some(meshes.vertex_points), screen_space: false });
                     }
                     // The page the level shows stands in the scene as an
@@ -7543,13 +7473,13 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
                         // Show Point Normals: thin cyan whiskers,
                         // width deliberately fixed (a chunky Wire Width is a
                         // wireframe styling choice, not a normals one).
-                        if self.overlay_normals.count > 0 {
+                        if self.markers.overlay_normals.count > 0 {
                             draws.push(SceneDraw { mesh: meshes.overlay_normals, mvp, wireframe: true, wire_tint: NO_TINT, opacity: 1.0, line_width: 1.0, wire_base_width: 0.0, prelit: false, see_through: true, instances: None, screen_space: false });
                         }
                         // Pull arrows: selection feedback, like the group
                         // markers — full opacity, a little heavier than the
                         // whiskers.
-                        if self.pull_arrows.count > 0 {
+                        if self.markers.pull_arrows.count > 0 {
                             draws.push(SceneDraw { mesh: meshes.pull_arrows, mvp, wireframe: true, wire_tint: NO_TINT, opacity: 1.0, line_width: 2.0, wire_base_width: 0.0, prelit: false, see_through: true, instances: None, screen_space: false });
                         }
                         // With wires coming, the fill is pushed back by its

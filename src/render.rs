@@ -1176,9 +1176,9 @@ impl State {
         // nudge off the place it names — a point's number beside its
         // marker, the other two about on the spot, which is theirs alone.
         let lists: [(&[([f32; 3], u32)], &[f32], [u8; 3], (f32, f32)); 3] = [
-            (&self.overlay_number_labels, &self.overlay_number_alpha, [0xee, 0xee, 0xff], (4.0, -6.0)),
-            (&self.overlay_prim_labels, &self.overlay_prim_alpha, PRIM_LABEL_COLOR, (-4.0, -6.0)),
-            (&self.overlay_vertex_labels, &self.overlay_vertex_alpha, VERTEX_LABEL_COLOR, (-3.0, -5.0)),
+            (&self.markers.overlay_number_labels, &self.markers.overlay_number_alpha, [0xee, 0xee, 0xff], (4.0, -6.0)),
+            (&self.markers.overlay_prim_labels, &self.markers.overlay_prim_alpha, PRIM_LABEL_COLOR, (-4.0, -6.0)),
+            (&self.markers.overlay_vertex_labels, &self.markers.overlay_vertex_alpha, VERTEX_LABEL_COLOR, (-3.0, -5.0)),
         ];
         if lists.iter().all(|(labels, ..)| labels.is_empty()) {
             return out;
@@ -1518,10 +1518,10 @@ impl State {
             self.view.point_marker_size,
             self.view.point_marker_color,
         );
-        self.point_markers.verts = markers;
+        self.markers.point_markers.verts = markers;
         // Kept for re-sizing the markers without this evaluation — see
         // `State::rebuild_overlay_markers`.
-        self.overlay_marker_points = if self.view.show_point_markers {
+        self.markers.overlay_marker_points = if self.view.show_point_markers {
             geom.positions()
                 .iter()
                 .map(|&position| crate::geometry::Vertex3D { position, color: [0.0; 3] })
@@ -1529,9 +1529,9 @@ impl State {
         } else {
             Vec::new()
         };
-        self.overlay_number_labels = labels;
-        self.overlay_number_alpha.clear();
-        self.overlay_normals.verts = normals;
+        self.markers.overlay_number_labels = labels;
+        self.markers.overlay_number_alpha.clear();
+        self.markers.overlay_normals.verts = normals;
         let elements = scene_element_overlays(
             &geom,
             ElementOverlays {
@@ -1543,14 +1543,14 @@ impl State {
             },
             self.view.point_marker_size * 4.0,
         );
-        self.overlay_prim_labels = elements.prim_labels;
-        self.overlay_prim_alpha.clear();
-        self.overlay_vertex_labels = elements.vertex_labels;
-        self.overlay_vertex_alpha.clear();
-        self.overlay_normals.verts.extend(elements.normals);
-        self.overlay_vertex_marker_points = elements.vertex_markers;
-        self.vertex_markers.verts = crate::geometry::marker_instances(
-            &self.overlay_vertex_marker_points,
+        self.markers.overlay_prim_labels = elements.prim_labels;
+        self.markers.overlay_prim_alpha.clear();
+        self.markers.overlay_vertex_labels = elements.vertex_labels;
+        self.markers.overlay_vertex_alpha.clear();
+        self.markers.overlay_normals.verts.extend(elements.normals);
+        self.markers.overlay_vertex_marker_points = elements.vertex_markers;
+        self.markers.vertex_markers.verts = crate::geometry::marker_instances(
+            &self.markers.overlay_vertex_marker_points,
             cce_ui::color::to_linear_rgb(VERTEX_LABEL_COLOR.map(|c| c as f32 / 255.0)),
         );
         // The wire pass's edges, likewise — topological, and only while the
@@ -1560,7 +1560,7 @@ impl State {
 
         // Visualize's vector markers — a node's or a visualizer's — ride the
         // same LINE_LIST channel as the normal whiskers.
-        self.overlay_normals.verts.extend(crate::geometry::vis_marker_vertices(
+        self.markers.overlay_normals.verts.extend(crate::geometry::vis_marker_vertices(
             &geom,
             cce_ui::color::to_linear_rgb,
         ));

@@ -498,7 +498,7 @@ fn a_dialog_slider_drag_lands_without_re_evaluating_the_graph() {
     // members.
     state.land_dialog_slider(&setting_row_id("Group Marker Size"), 0.05);
     assert!((state.render.group_marker_size - 0.05).abs() < 1e-6);
-    assert!((state.last_group_marker_size - 0.05).abs() < 1e-6);
+    assert!((state.markers.last_group_marker_size - 0.05).abs() < 1e-6);
     assert_eq!(state.scene.rt_geometry_version, version);
 
     // The spin rows land the same way: a whole number over the row's
@@ -2124,7 +2124,7 @@ fn command_palette_opens_the_dialog_on_commands() {
 /// start, which is indistinguishable from one that failed to.
 #[test]
 fn nothing_shells_out_to_cce_cloud_any_more() {
-    for name in ["app.rs", "app/input.rs", "app/document.rs", "app/network.rs", "app/camera.rs", "app/view.rs", "app/scene.rs", "app/stage.rs", "window.rs", "dialog.rs", "render.rs", "api.rs", "slots.rs"] {
+    for name in ["app.rs", "app/input.rs", "app/document.rs", "app/network.rs", "app/camera.rs", "app/view.rs", "app/scene.rs", "app/stage.rs", "app/markers.rs", "window.rs", "dialog.rs", "render.rs", "api.rs", "slots.rs"] {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(name);
         let src = std::fs::read_to_string(&path).expect("read source");
         for needle in ["CloudPopup", "run_dmenu", "CloudPopupTracker"] {

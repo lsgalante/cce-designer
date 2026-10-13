@@ -3631,7 +3631,7 @@ thousand points; 240 KB instanced). The spheres are three meshes —
 the group markers' at Group Marker Size, shared by the selected group,
 the marked groups and the rows; the points' at Point Marker Size; the
 vertices' at `VERTEX_MARKER_SCALE` of it — re-uploaded by the flush when
-a size moves (`State::marker_sphere_radii`), so a size slider uploads 240
+a size moves (`State::markers.marker_sphere_radii`), so a size slider uploads 240
 vertices and builds nothing else. `State::drawn_markers` (tests) expands
 instances over their sphere as the shader does;
 `instanced_markers_draw_what_the_copied_spheres_drew` holds that to the
@@ -3800,7 +3800,7 @@ anywhere over the open menu is swallowed rather than orbiting the scene.
 `land_viewport_menu_slider`, which sets the live field and redoes only what
 it feeds: opacity and wire thickness are draw-time, and group marker size
 re-bakes the Selected-Group
-markers — re-sized from `State::group_members`, the positions `sync_nodes`
+markers — re-sized from `State::markers.group_members`, the positions `sync_nodes`
 keeps from its evaluation, by `rebuild_group_markers`; point marker
 size re-sizes the Show Point Markers overlay from the scene positions
 `rebuild_scene_geometry` keeps while it is on (`overlay_marker_points`,

@@ -1470,19 +1470,19 @@ fn a_scene_rebuild_keeps_the_point_numbers_dimmed() {
     let mut state = State::new(false);
     state.view.show_point_numbers = true;
     state.rebuild_scene_geometry();
-    assert!(!state.overlay_number_labels.is_empty());
+    assert!(!state.markers.overlay_number_labels.is_empty());
     // The view the stage pass last staged: from +z, looking at the origin.
     let view = Mat4::look_at_rh(Vec3::new(0.0, 0.0, 6.0), Vec3::ZERO, Vec3::Y);
     let proj = Mat4::perspective_rh(0.9, 1.5, 0.1, 100.0);
     state.camera.last_scene_mvp = Some(proj * view);
     state.camera.last_scene_eye = Vec3::new(0.0, 0.0, 6.0);
     state.sync_point_number_alpha(proj * view, state.camera.last_scene_eye);
-    let staged = state.overlay_number_alpha.clone();
+    let staged = state.markers.overlay_number_alpha.clone();
     assert!(staged.iter().any(|a| *a < 0.02), "the far side's numbers are hidden: {staged:?}");
     assert!(staged.iter().any(|a| *a > 0.98), "the near side's are shown");
 
     state.rebuild_scene_geometry();
-    assert_eq!(state.overlay_number_alpha, staged, "the rebuild left the dimming as the view has it");
+    assert_eq!(state.markers.overlay_number_alpha, staged, "the rebuild left the dimming as the view has it");
 }
 
 /// A point number is dimmed by the fill in front of its point, as a
@@ -1522,10 +1522,10 @@ fn a_point_number_is_dimmed_by_the_fill_in_front_of_it() {
     let mut state = State::new(false);
     state.view.show_point_numbers = true;
     state.rebuild_scene_geometry();
-    assert!(state.overlay_number_alpha.is_empty(), "a rebuild drops the old eye's answers");
+    assert!(state.markers.overlay_number_alpha.is_empty(), "a rebuild drops the old eye's answers");
     let labels = |state: &mut State| {
         let numbers: std::collections::HashSet<String> =
-            state.overlay_number_labels.iter().map(|(_, i)| i.to_string()).collect();
+            state.markers.overlay_number_labels.iter().map(|(_, i)| i.to_string()).collect();
         state
             .collect_display_list()
             .items
@@ -1537,7 +1537,7 @@ fn a_point_number_is_dimmed_by_the_fill_in_front_of_it() {
     state.camera.last_scene_mvp = Some(Mat4::IDENTITY);
     state.camera.last_scene_view_rect = (0.0, 0.0, 800.0, 600.0);
     let whole = labels(&mut state);
-    state.overlay_number_alpha = vec![0.0; state.overlay_number_labels.len()];
+    state.markers.overlay_number_alpha = vec![0.0; state.markers.overlay_number_labels.len()];
     assert!(labels(&mut state) < whole, "hidden labels are not drawn");
 }
 
@@ -2054,8 +2054,8 @@ fn primitives_and_vertices_are_numbered_where_they_are() {
     assert!(drawn(&state).is_empty());
     state.run_command("toggle_vertex_markers");
     let built = drawn(&state);
-    assert!(!built.is_empty() && !state.overlay_vertex_marker_points.is_empty());
-    assert_eq!(built.len(), state.vertex_markers.verts.len() * 240, "a sphere drawn over each instance");
+    assert!(!built.is_empty() && !state.markers.overlay_vertex_marker_points.is_empty());
+    assert_eq!(built.len(), state.markers.vertex_markers.verts.len() * 240, "a sphere drawn over each instance");
     state.view.point_marker_size *= 2.0;
     state.rebuild_overlay_markers();
     assert_eq!(drawn(&state).len(), built.len());
@@ -2068,10 +2068,10 @@ fn primitives_and_vertices_are_numbered_where_they_are() {
     state.view.show_prim_numbers = false;
     state.view.show_vertex_numbers = false;
     state.rebuild_scene_geometry();
-    assert!(state.overlay_prim_labels.is_empty() && state.overlay_vertex_labels.is_empty());
+    assert!(state.markers.overlay_prim_labels.is_empty() && state.markers.overlay_vertex_labels.is_empty());
     state.run_command("toggle_prim_numbers");
     state.run_command("toggle_vertex_numbers");
-    assert!(!state.overlay_prim_labels.is_empty() && !state.overlay_vertex_labels.is_empty());
+    assert!(!state.markers.overlay_prim_labels.is_empty() && !state.markers.overlay_vertex_labels.is_empty());
     let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
     let back = crate::app::DesignSettings::from_kdl_str(&kdl).viewport;
     assert!(back.show_prim_numbers && back.show_vertex_numbers && !back.show_prim_normals);
@@ -2129,7 +2129,7 @@ fn the_viewport_menu_toggles_show_point_normals() {
     let mut state = State::new(false);
     state.view.show_point_normals = false;
     state.rebuild_scene_geometry();
-    let whiskers = state.overlay_normals.verts.len();
+    let whiskers = state.markers.overlay_normals.verts.len();
     let row = |state: &State| {
         let (options, actions) = state.viewport_menu_rows_of(state.viewport_menu_page_of(A::Command("toggle_point_normals")));
         let i = actions.iter().position(|a| *a == A::Command("toggle_point_normals")).expect("a Show Point Normals row");
@@ -2140,7 +2140,7 @@ fn the_viewport_menu_toggles_show_point_normals() {
     state.run_viewport_menu_action(A::Command("toggle_point_normals"));
     assert!(state.view.show_point_normals);
     assert_eq!(row(&state), format!("● {label}"));
-    assert!(state.overlay_normals.verts.len() > whiskers, "the whiskers were collected");
+    assert!(state.markers.overlay_normals.verts.len() > whiskers, "the whiskers were collected");
     let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
     assert!(crate::app::DesignSettings::from_kdl_str(&kdl).viewport.show_point_normals, "persisted");
 }
@@ -2161,11 +2161,11 @@ fn the_viewport_menu_toggles_show_point_numbers() {
     };
     let label = crate::command::by_id("toggle_point_numbers").unwrap().label;
     assert_eq!(row(&state), format!("○ {label}"));
-    assert!(state.overlay_number_labels.is_empty());
+    assert!(state.markers.overlay_number_labels.is_empty());
     state.run_viewport_menu_action(A::Command("toggle_point_numbers"));
     assert!(state.view.show_point_numbers);
     assert_eq!(row(&state), format!("● {label}"));
-    assert!(!state.overlay_number_labels.is_empty(), "the labels were collected");
+    assert!(!state.markers.overlay_number_labels.is_empty(), "the labels were collected");
     let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
     assert!(crate::app::DesignSettings::from_kdl_str(&kdl).viewport.show_point_numbers, "persisted");
 }
@@ -2418,12 +2418,12 @@ fn the_viewport_menu_toggles_show_point_markers() {
     };
     let label = crate::command::by_id("toggle_point_markers").unwrap().label;
     assert_eq!(row(&state), format!("○ {label}"));
-    assert!(state.point_markers.verts.is_empty());
+    assert!(state.markers.point_markers.verts.is_empty());
     state.run_viewport_menu_action(A::Command("toggle_point_markers"));
     assert!(state.view.show_point_markers);
     assert_eq!(row(&state), format!("● {label}"));
-    assert!(!state.point_markers.verts.is_empty(), "the overlay was built");
-    assert!(!state.overlay_marker_points.is_empty(), "and its positions kept for re-sizing");
+    assert!(!state.markers.point_markers.verts.is_empty(), "the overlay was built");
+    assert!(!state.markers.overlay_marker_points.is_empty(), "and its positions kept for re-sizing");
     let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
     assert!(crate::app::DesignSettings::from_kdl_str(&kdl).viewport.show_point_markers, "persisted");
 }
@@ -2527,7 +2527,7 @@ fn the_viewport_menu_sets_the_point_marker_size_without_a_rebuild() {
     state.view.show_point_markers = true;
     state.view.point_marker_size = 0.02;
     state.rebuild_scene_geometry();
-    assert!(!state.overlay_marker_points.is_empty(), "the bundled scene has points");
+    assert!(!state.markers.overlay_marker_points.is_empty(), "the bundled scene has points");
     let version = state.scene.rt_geometry_version;
 
     state.cursor_x = 300.0;
@@ -2545,7 +2545,7 @@ fn the_viewport_menu_sets_the_point_marker_size_without_a_rebuild() {
     state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 4.0) });
     assert!((state.view.point_marker_size - 0.04).abs() < 1e-5, "{}", state.view.point_marker_size);
     assert_eq!(state.scene.rt_geometry_version, version, "no rebuild ran");
-    assert!(state.point_markers.dirty);
+    assert!(state.markers.point_markers.dirty);
     let resized: Vec<[f32; 3]> = state.drawn_markers(crate::app::MarkerKind::Overlay).iter().map(|v| v.position).collect();
     context_menu::hide();
 
@@ -2556,7 +2556,7 @@ fn the_viewport_menu_sets_the_point_marker_size_without_a_rebuild() {
 
     // Off, nothing is kept to re-size.
     state.run_command("toggle_point_markers");
-    assert!(state.overlay_marker_points.is_empty());
+    assert!(state.markers.overlay_marker_points.is_empty());
 }
 
 /// Pull Arrow Scale stretches the pull arrows along the pull from their
@@ -2573,10 +2573,10 @@ fn pull_arrow_scale_stretches_the_arrows_from_their_base() {
     let mut state = State::new(false);
     state.render.pull_arrow_scale = 1.0;
     let (a, b) = (glam::Vec3::new(0.0, 1.0, 0.0), glam::Vec3::new(0.0, 1.06, 0.0));
-    state.pull_arrow_pairs = vec![(a, b)];
+    state.markers.pull_arrow_pairs = vec![(a, b)];
     state.rebuild_pull_arrow_verts();
     // The shaft is the first stroke: from the base to the tip.
-    let shaft = |state: &State| (state.pull_arrows.verts[0].position, state.pull_arrows.verts[1].position);
+    let shaft = |state: &State| (state.markers.pull_arrows.verts[0].position, state.markers.pull_arrows.verts[1].position);
     assert_eq!(shaft(&state).0, a.to_array(), "the base stays on the point");
     assert!((shaft(&state).1[1] - 1.06).abs() < 1e-6, "scale 1 is the true vector");
 
@@ -2596,7 +2596,7 @@ fn pull_arrow_scale_stretches_the_arrows_from_their_base() {
     assert!(k > 1.0, "the wheel raised the scale: {k}");
     assert_eq!(shaft(&state).0, a.to_array());
     assert!((shaft(&state).1[1] - (1.0 + 0.06 * k)).abs() < 1e-5, "the tip stretched to {:?} at {k}x", shaft(&state).1);
-    assert_eq!(state.pull_arrow_pairs, vec![(a, b)], "the kept pairs are the measurement, never scaled");
+    assert_eq!(state.markers.pull_arrow_pairs, vec![(a, b)], "the kept pairs are the measurement, never scaled");
     context_menu::hide();
 }
 
@@ -2611,7 +2611,7 @@ fn the_viewport_menu_sets_the_group_marker_size() {
     let mut state = State::new(false);
     state.render.group_marker_size = 0.025;
     let centre = [0.0f32, 1.0, 0.0];
-    state.group_members = vec![crate::geometry::Vertex3D { position: centre, color: [0.0; 3] }];
+    state.markers.group_members = vec![crate::geometry::Vertex3D { position: centre, color: [0.0; 3] }];
     state.rebuild_group_markers();
     let radius = |state: &State| {
         state.drawn_markers(crate::app::MarkerKind::Group).iter().map(|v| (v.position[1] - centre[1]).abs()).fold(0.0f32, f32::max)
@@ -2632,7 +2632,7 @@ fn the_viewport_menu_sets_the_group_marker_size() {
     state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(0.0, 3.0) });
     assert!((state.render.group_marker_size - 0.04).abs() < 1e-5, "{}", state.render.group_marker_size);
     assert!((radius(&state) - 0.04).abs() < 1e-5, "the markers re-sized: {}", radius(&state));
-    assert!(state.group_markers.dirty, "and will re-upload");
+    assert!(state.markers.group_markers.dirty, "and will re-upload");
     let kdl = fs::read_to_string(crate::app::DesignSettings::file_path()).expect("saved");
     let saved = crate::app::DesignSettings::from_kdl_str(&kdl).render.group_marker_size;
     assert!((saved - 0.04).abs() < 1e-5, "persisted: {saved}");
@@ -2679,7 +2679,7 @@ fn the_dialog_plate_is_the_menu_plate() {
     let r = cce_ui::layout::menu_corner_radius();
     let rect = cce_ui::scene::layout::Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 };
     assert_eq!(dialog.corner_style(rect).map(|(r, _)| r), (r > 0.0).then_some(r));
-    for file in ["src/dialog.rs", "src/render.rs", "src/app.rs", "src/app/input.rs", "src/app/document.rs", "src/app/network.rs", "src/app/camera.rs", "src/app/view.rs", "src/app/scene.rs", "src/app/stage.rs"] {
+    for file in ["src/dialog.rs", "src/render.rs", "src/app.rs", "src/app/input.rs", "src/app/document.rs", "src/app/network.rs", "src/app/camera.rs", "src/app/view.rs", "src/app/scene.rs", "src/app/stage.rs", "src/app/markers.rs"] {
         let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(file)).unwrap();
         assert!(!src.contains("dialog/compression") && !src.contains("DIALOG_COMPRESSION"), "{file} overrides the menu material");
     }
@@ -3001,12 +3001,12 @@ fn the_point_numbers_are_placed_by_the_camera_as_it_is() {
     // stage pass is about to stage.
     let (_, proj, view) = state.scene_view().expect("a scene");
     assert_eq!(state.camera.last_scene_mvp, Some(proj * view));
-    let alphas = state.overlay_number_alpha.clone();
-    assert_eq!(alphas.len(), state.overlay_number_labels.len(), "and are dimmed for that view");
+    let alphas = state.markers.overlay_number_alpha.clone();
+    assert_eq!(alphas.len(), state.markers.overlay_number_labels.len(), "and are dimmed for that view");
     // Asked again for the same view, the dimming is not worked out again.
     let key = state.camera.number_alpha_key;
     state.sync_point_number_alpha(proj * view, state.camera.last_scene_eye);
-    assert_eq!((state.camera.number_alpha_key, &state.overlay_number_alpha), (key, &alphas));
+    assert_eq!((state.camera.number_alpha_key, &state.markers.overlay_number_alpha), (key, &alphas));
 }
 
 /// A pan slides the camera across its own view: what is at the pivot
