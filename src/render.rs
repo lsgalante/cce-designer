@@ -1116,15 +1116,15 @@ impl State {
         self.paint_widget(DIALOG_IDX, pc, show_cursor, visited, clip, None);
     }
 
-    /// The dialog's own paint — the query line and the rows — straight from
-    /// `Dialog`'s `Paint` impl rather than through the adapter's
-    /// `paint_self`, which re-emits a widget's prims under the host's clip
-    /// and drops the rect clips the widget drew them under: the query line
-    /// is cut at its well and the rows at the list by theirs. The dialog is
-    /// a subtree painter with no label, so the adapter adds nothing else.
+    /// The dialog's own paint — the query line and the rows — through the
+    /// adapter's `paint_self`, which keeps the rect clips the widget drew them
+    /// under: the query line is cut at its well and the rows at the list by
+    /// theirs. (Until cce-ui's 2026-10-13 fix it dropped them, and this went
+    /// to `Dialog`'s `Paint` impl directly.) The dialog is a subtree painter
+    /// with no label, so the adapter adds nothing else.
     fn paint_dialog_body(&self, pc: &mut PaintCtx) {
         let d = &self.ui_context[self.slots.dialog];
-        cce_ui::widget::Paint::paint_ui(d.inner(), &self.ui_context, d.content_rect(), pc);
+        cce_ui::widget::WidgetHost::paint_self(d, &self.ui_context, pc);
     }
 
     /// Open popovers (the params pane's expanded dropdowns), background then
