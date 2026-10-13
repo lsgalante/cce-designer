@@ -6587,9 +6587,6 @@ impl State {
                 self.sync_parameters_to_project();
             }
         }
-        if cce_ui::widget::hover_animation::tick(dt) {
-            tick_changed = true;
-        }
 
         let py = self.viewport().pending_yaw;
         let pp = self.viewport().pending_pitch;
