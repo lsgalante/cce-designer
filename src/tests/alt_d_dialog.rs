@@ -2124,7 +2124,7 @@ fn command_palette_opens_the_dialog_on_commands() {
 /// start, which is indistinguishable from one that failed to.
 #[test]
 fn nothing_shells_out_to_cce_cloud_any_more() {
-    for name in ["app.rs", "app/input.rs", "app/document.rs", "app/network.rs", "app/camera.rs", "app/view.rs", "app/scene.rs", "app/stage.rs", "app/markers.rs", "app/params.rs", "app/sheet.rs", "window.rs", "dialog.rs", "render.rs", "api.rs", "slots.rs"] {
+    for name in ["app.rs", "app/input.rs", "app/document.rs", "app/network.rs", "app/camera.rs", "app/view.rs", "app/scene.rs", "app/stage.rs", "app/markers.rs", "app/params.rs", "app/sheet.rs", "app/menus.rs", "window.rs", "dialog.rs", "render.rs", "api.rs", "slots.rs"] {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(name);
         let src = std::fs::read_to_string(&path).expect("read source");
         for needle in ["CloudPopup", "run_dmenu", "CloudPopupTracker"] {

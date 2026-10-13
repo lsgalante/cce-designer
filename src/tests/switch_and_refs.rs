@@ -766,7 +766,7 @@ fn the_row_menu_copies_and_pastes_references() {
     assert!(!state.viewport_menu_open());
     let radius_desc = described(&state, sphere, "radius");
     assert_eq!(
-        state.param_menu_actions,
+        state.menus.param_menu_actions,
         vec![ParamMenuAction::Info; 10 + radius_desc.len()].into_iter().chain([ParamMenuAction::Separator, ParamMenuAction::CopyParameter, ParamMenuAction::Separator, ParamMenuAction::EditExpression]).collect::<Vec<_>>(),
         "nothing copied yet, and the row holds a value"
     );
@@ -841,7 +841,7 @@ fn the_row_menu_copies_and_pastes_references() {
     let (x, y) = row_center(&state, "Radius");
     state.handle_event(&WindowEvent::CursorMoved { position: LocalPosition { x: x as f64, y: y as f64 } });
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Right });
-    assert!(state.param_menu_actions.contains(&ParamMenuAction::PasteRelative), "with a copy, paste is offered");
+    assert!(state.menus.param_menu_actions.contains(&ParamMenuAction::PasteRelative), "with a copy, paste is offered");
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Right });
     state.run_param_action(&ball_id, "radius", ParamMenuAction::PasteRelative);
     let radius = |state: &State, slot: usize| state.current_dir().children[slot].params.iter().find(|p| p.name == "radius").unwrap().clone();

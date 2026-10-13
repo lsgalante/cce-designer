@@ -269,8 +269,8 @@ fn a_plates_rows_are_in_its_right_click_menu() {
     // The spreadsheet: the plate menu alone.
     let (x, y, w, h) = state.slots.get_dyn(&state.ui_context, SPREADSHEET_IDX).rect();
     press_at(&mut state, x + w - 6.0, y + h - 6.0, MouseButton::Right);
-    assert_eq!(state.plate_menu_slot, Some(SPREADSHEET_IDX));
-    assert!(state.plate_menu_actions.contains(&PlateMenuAction::Collapse));
+    assert_eq!(state.menus.plate_menu_slot, Some(SPREADSHEET_IDX));
+    assert!(state.menus.plate_menu_actions.contains(&PlateMenuAction::Collapse));
     press_at(&mut state, 2.0, 2.0, MouseButton::Left);
     assert!(!state.plate_menu_open(), "a press outside dismisses it");
 
@@ -289,9 +289,9 @@ fn a_plates_rows_are_in_its_right_click_menu() {
         .find(|&(px, py)| state.params_claims(px, py) && state.param_row_at(px, py).is_none())
         .expect("a free spot on the HUD");
     press_at(&mut state, free.0, free.1, MouseButton::Right);
-    assert_eq!(state.plate_menu_slot, Some(PARAM_IDX));
-    assert!(state.plate_menu_actions.contains(&PlateMenuAction::Detach));
-    assert!(!state.plate_menu_actions.contains(&PlateMenuAction::Collapse), "the HUD does not collapse");
+    assert_eq!(state.menus.plate_menu_slot, Some(PARAM_IDX));
+    assert!(state.menus.plate_menu_actions.contains(&PlateMenuAction::Detach));
+    assert!(!state.menus.plate_menu_actions.contains(&PlateMenuAction::Collapse), "the HUD does not collapse");
     press_at(&mut state, 2.0, 2.0, MouseButton::Left);
     state.params.params_plate = false;
 
@@ -304,7 +304,7 @@ fn a_plates_rows_are_in_its_right_click_menu() {
     press_at(&mut state, px, py, MouseButton::Right);
     assert!(state.viewport_menu_open());
     press_at(&mut state, context_menu::x() + 8.0, context_menu::row_y(0) + 4.0, MouseButton::Left);
-    assert!(state.network_menu_active, "the Network row turned the menu into the network's");
+    assert!(state.menus.network_menu_active, "the Network row turned the menu into the network's");
     let options = cce_ui::widget::context_menu::options();
     assert_eq!(options.first().map(String::as_str), Some("Add Node"));
     assert!(!options.iter().any(|o| o == "Plate" || *o == collapse || o.starts_with("Move To")), "no plate rows: {options:?}");
@@ -315,11 +315,11 @@ fn a_plates_rows_are_in_its_right_click_menu() {
     press_at(&mut state, x + w * 0.5, y + h * 0.5, MouseButton::Right);
     let options = context_menu::options();
     assert!(!options.contains(&collapse), "{options:?}");
-    assert!(state.playbar_menu_actions.contains(&crate::app::PlaybarMenuAction::PlatePage));
+    assert!(state.menus.playbar_menu_actions.contains(&crate::app::PlaybarMenuAction::PlatePage));
     let plate = options.iter().position(|o| o == "Plate").unwrap();
     press_at(&mut state, context_menu::x() + 8.0, context_menu::row_y(plate) + 4.0, MouseButton::Left);
-    assert_eq!(state.plate_menu_slot, Some(PLAYBAR_IDX));
-    assert!(state.plate_menu_actions.contains(&PlateMenuAction::Collapse));
+    assert_eq!(state.menus.plate_menu_slot, Some(PLAYBAR_IDX));
+    assert!(state.menus.plate_menu_actions.contains(&PlateMenuAction::Collapse));
     assert_eq!(context_menu::back_title().as_deref(), Some("Playbar"));
     press_at(&mut state, 2.0, 2.0, MouseButton::Left);
 }
@@ -404,7 +404,7 @@ fn test_collapse_shrinks_the_plate_and_restores_it() {
     // A right press on the stub offers Expand; a left press expands it.
     let (x, y, w, h) = state.slots.get_dyn(&state.ui_context, SPREADSHEET_IDX).rect();
     press_at(&mut state, x + w * 0.5, y + h * 0.5, cce_ui::widget::MouseButton::Right);
-    assert!(state.plate_menu_actions.contains(&crate::plate_menu::PlateMenuAction::Expand));
+    assert!(state.menus.plate_menu_actions.contains(&crate::plate_menu::PlateMenuAction::Expand));
     state.close_plate_menu();
     press_at(&mut state, x + w * 0.5, y + h * 0.5, cce_ui::widget::MouseButton::Left);
     let (_, _, _, back_h) = state.slots.get_dyn(&state.ui_context, SPREADSHEET_IDX).rect();
@@ -449,7 +449,7 @@ fn test_detached_pane_claims_its_window_and_leaves_the_parent() {
     assert_eq!(stub_h, STUB_H, "the parent's leftover is not a stub");
     let (sx, sy, sw, sh) = parent.slots.get_dyn(&parent.ui_context, PARAM_IDX).rect();
     press_at(&mut parent, sx + sw * 0.5, sy + sh * 0.5, cce_ui::widget::MouseButton::Right);
-    assert_eq!(parent.plate_menu_actions, vec![crate::plate_menu::PlateMenuAction::Reattach],
+    assert_eq!(parent.menus.plate_menu_actions, vec![crate::plate_menu::PlateMenuAction::Reattach],
         "the stub's right press offers Reattach — nothing else can reattach the pane");
     parent.close_plate_menu();
     // Collapsed and detached stubs must not read the same.
@@ -493,7 +493,7 @@ fn the_network_menu_is_a_page_of_the_viewport_menu_without_the_plate() {
     assert_ne!((state.net.grid_cursor_col, state.net.grid_cursor_row), cell, "pick a cell the cursor is not on");
     press(&mut state, px, py, MouseButton::Right);
     assert!(state.viewport_menu_open(), "empty graph space is the scene's");
-    assert_eq!(state.viewport_menu_actions.first(), Some(&A::NetworkPage));
+    assert_eq!(state.menus.viewport_menu_actions.first(), Some(&A::NetworkPage));
     assert!(context_menu::leads_to_page(0), "a page row");
     assert_eq!(context_menu::options().first().map(String::as_str), Some("Network"));
     assert_ne!((state.net.grid_cursor_col, state.net.grid_cursor_row), cell, "opening the menu moves no cursor");
@@ -501,21 +501,21 @@ fn the_network_menu_is_a_page_of_the_viewport_menu_without_the_plate() {
     // The turn: the network menu, under a band back to the viewport's.
     assert!(state.run_menu_turn(PageTurn::Into(0)));
     assert_eq!(state.open_menu_origin(), Some(MenuOrigin::Network));
-    assert_eq!(state.network_menu_actions.first(), Some(&NetworkMenuAction::Command("add_node")));
-    assert_eq!(state.network_menu_from, Some(MenuOrigin::Viewport));
+    assert_eq!(state.menus.network_menu_actions.first(), Some(&NetworkMenuAction::Command("add_node")));
+    assert_eq!(state.menus.network_menu_from, Some(MenuOrigin::Viewport));
     assert_eq!((state.net.grid_cursor_col, state.net.grid_cursor_row), cell, "the cursor is on the cell pressed");
     assert_eq!(state.focused_pane, LEFT_MENUBAR_IDX, "the network has focus");
 
     // Back to the viewport menu, then forward again by its row.
     assert!(state.run_menu_turn(PageTurn::Back));
     assert_eq!(state.open_menu_origin(), Some(MenuOrigin::Viewport));
-    assert_eq!(state.network_menu_from, None);
+    assert_eq!(state.menus.network_menu_from, None);
     state.run_viewport_menu_action(A::NetworkPage);
     assert_eq!(state.open_menu_origin(), Some(MenuOrigin::Network));
 
     // Add Node from there, and back out of the dialog to the network
     // menu, which still goes back to the viewport's.
-    let add = state.network_menu_actions.iter().position(|a| *a == NetworkMenuAction::Command("add_node")).unwrap();
+    let add = state.menus.network_menu_actions.iter().position(|a| *a == NetworkMenuAction::Command("add_node")).unwrap();
     assert!(state.run_menu_turn(PageTurn::Into(add)));
     assert!(state.dialog_visible());
     assert!(state.dialog_back());

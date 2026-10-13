@@ -22,10 +22,10 @@
 //!   an `at`): the viewport menu's Style, Markers and Network, the
 //!   playbar menu's Plate. (The plate rows' Add Tab was one until docks
 //!   lost their tabs, 2026-10-07.)
-//! - The dialog turned to from a row (`State::dialog_from`) goes back to
+//! - The dialog turned to from a row (`State::menus.dialog_from`) goes back to
 //!   that menu, shown again at the dialog's corner; inside the dialog, a
 //!   mode turned to from another (Group Markers from the palette, one
-//!   visualizer from the list) goes back to it first (`State::dialog_trail`).
+//!   visualizer from the list) goes back to it first (`State::menus.dialog_trail`).
 //!
 //! What runs a turn is [`State::run_menu_turn`], which a press
 //! ([`State::press_menu_turn`]) and a swipe ([`State::take_menu_turn`]) both
@@ -106,16 +106,16 @@ impl State {
         if !context_menu::is_visible() {
             return None;
         }
-        if self.viewport_menu_active {
+        if self.menus.viewport_menu_active {
             Some(MenuOrigin::Viewport)
-        } else if self.network_menu_active {
+        } else if self.menus.network_menu_active {
             Some(MenuOrigin::Network)
-        } else if self.playbar_menu_active {
+        } else if self.menus.playbar_menu_active {
             Some(MenuOrigin::Playbar)
-        } else if let Some(idx) = self.plate_menu_slot {
+        } else if let Some(idx) = self.menus.plate_menu_slot {
             Some(MenuOrigin::Plate(idx))
         } else {
-            self.node_menu_slot.map(MenuOrigin::Node)
+            self.menus.node_menu_slot.map(MenuOrigin::Node)
         }
     }
 
@@ -171,25 +171,25 @@ impl State {
         let at = (context_menu::x(), context_menu::y());
         match turn {
             PageTurn::Back => match origin {
-                MenuOrigin::Viewport if self.viewport_menu_page.is_some() => {
+                MenuOrigin::Viewport if self.menus.viewport_menu_page.is_some() => {
                     self.show_viewport_menu_page(None, Some(at));
                 }
                 // The network menu turned to from the viewport's (the plate
                 // off) goes back to it.
-                MenuOrigin::Network if self.network_menu_from.is_some() => {
-                    let from = self.network_menu_from.take().unwrap();
+                MenuOrigin::Network if self.menus.network_menu_from.is_some() => {
+                    let from = self.menus.network_menu_from.take().unwrap();
                     self.close_network_menu();
                     self.reopen_menu(from, at.0, at.1);
                 }
-                MenuOrigin::Plate(_) if self.plate_page_from.is_some() => {
-                    let from = self.plate_page_from.take().unwrap();
+                MenuOrigin::Plate(_) if self.menus.plate_page_from.is_some() => {
+                    let from = self.menus.plate_page_from.take().unwrap();
                     self.close_plate_menu();
                     self.reopen_menu(from, at.0, at.1);
                 }
                 _ => return false,
             },
             PageTurn::Into(n) => match origin {
-                MenuOrigin::Viewport => match self.viewport_menu_actions.get(n).copied() {
+                MenuOrigin::Viewport => match self.menus.viewport_menu_actions.get(n).copied() {
                     Some(ViewportMenuAction::Page(page)) => self.show_viewport_menu_page(Some(page), Some(at)),
                     Some(ViewportMenuAction::NetworkPage) => {
                         self.close_viewport_menu();
@@ -197,14 +197,14 @@ impl State {
                     }
                     _ => return false,
                 },
-                MenuOrigin::Network => match self.network_menu_actions.get(n).copied() {
+                MenuOrigin::Network => match self.menus.network_menu_actions.get(n).copied() {
                     Some(NetworkMenuAction::Command("add_node")) => {
                         self.close_network_menu();
                         self.open_dialog_from(Mode::AddNode, origin, at);
                     }
                     _ => return false,
                 },
-                MenuOrigin::Playbar => match self.playbar_menu_actions.get(n).copied() {
+                MenuOrigin::Playbar => match self.menus.playbar_menu_actions.get(n).copied() {
                     Some(PlaybarMenuAction::PlatePage) => {
                         self.close_playbar_menu();
                         self.open_plate_page(PLAYBAR_IDX, at, origin);
@@ -214,7 +214,7 @@ impl State {
                 // A plate menu has no page rows (Add Tab was one, until
                 // docks lost their tabs).
                 MenuOrigin::Plate(_) => return false,
-                MenuOrigin::Node(slot) => match self.node_menu_actions.get(n).copied() {
+                MenuOrigin::Node(slot) => match self.menus.node_menu_actions.get(n).copied() {
                     Some(NodeMenuAction::Rename) => {
                         self.close_node_menu();
                         self.open_rename_dialog_from(slot, Some((origin, at)));
@@ -233,11 +233,11 @@ impl State {
         if !self.dialog_visible() {
             return false;
         }
-        if let Some(&prev) = self.dialog_trail.last() {
+        if let Some(&prev) = self.menus.dialog_trail.last() {
             self.open_dialog_mode(prev);
             return true;
         }
-        let Some(origin) = self.dialog_from else { return false };
+        let Some(origin) = self.menus.dialog_from else { return false };
         // The menu turns back out of the plate as it is drawn: it shrinks
         // from the dialog's size into its own.
         let (x, y, w, h) = self.positions[DIALOG_IDX];

@@ -297,7 +297,7 @@ fn test_reattach_brings_a_detached_pane_back() {
     state.apply_layout();
 
     state.open_plate_menu(PARAM_IDX);
-    assert_eq!(state.plate_menu_actions, vec![PlateMenuAction::Reattach],
+    assert_eq!(state.menus.plate_menu_actions, vec![PlateMenuAction::Reattach],
         "a detached pane must offer Reattach and only Reattach");
     state.close_plate_menu();
 
@@ -378,14 +378,14 @@ fn test_plate_corner_menu_is_contextual() {
         .expect("some plate is shown at this size");
 
     state.open_plate_menu(idx);
-    assert!(state.plate_menu_actions.contains(&PlateMenuAction::Collapse));
-    assert!(!state.plate_menu_actions.contains(&PlateMenuAction::Expand));
+    assert!(state.menus.plate_menu_actions.contains(&PlateMenuAction::Collapse));
+    assert!(!state.menus.plate_menu_actions.contains(&PlateMenuAction::Expand));
     state.close_plate_menu();
 
     state.set_pane_collapsed(idx, true);
     state.open_plate_menu(idx);
-    assert!(state.plate_menu_actions.contains(&PlateMenuAction::Expand));
-    assert!(!state.plate_menu_actions.contains(&PlateMenuAction::Collapse));
+    assert!(state.menus.plate_menu_actions.contains(&PlateMenuAction::Expand));
+    assert!(!state.menus.plate_menu_actions.contains(&PlateMenuAction::Collapse));
     state.close_plate_menu();
 }
 
@@ -716,7 +716,7 @@ fn the_network_is_in_no_dock() {
     state.set_pane_collapsed(NETWORK_PANEL_IDX, true);
     assert!(!state.pane_is_collapsed(NETWORK_PANEL_IDX));
     state.open_plate_menu(NETWORK_PANEL_IDX);
-    assert_eq!(state.plate_menu_actions, vec![PlateMenuAction::Detach]);
+    assert_eq!(state.menus.plate_menu_actions, vec![PlateMenuAction::Detach]);
     state.close_plate_menu();
 
     let at = |state: &mut State, x: f32, y: f32| {
@@ -1923,7 +1923,7 @@ fn the_viewport_menu_turns_into_its_pages_and_back() {
     state.cursor_y = 200.0;
     state.open_viewport_context_menu();
     let corner = (context_menu::x(), context_menu::y());
-    let row_of = |state: &State, a: A| state.viewport_menu_actions.iter().position(|x| *x == a).unwrap_or_else(|| panic!("no {a:?} row"));
+    let row_of = |state: &State, a: A| state.menus.viewport_menu_actions.iter().position(|x| *x == a).unwrap_or_else(|| panic!("no {a:?} row"));
     let move_to = |state: &mut State, x: f32, y: f32| {
         state.cursor_x = x;
         state.cursor_y = y;
@@ -1948,9 +1948,9 @@ fn the_viewport_menu_turns_into_its_pages_and_back() {
     assert!(!context_menu::leads_to_page(row_of(&state, A::FrameAll)));
 
     move_to(&mut state, corner.0 + 20.0, context_menu::row_y(markers) + 12.0);
-    assert_eq!(state.viewport_menu_page, None, "pointing turns nothing");
+    assert_eq!(state.menus.viewport_menu_page, None, "pointing turns nothing");
     press(&mut state);
-    assert_eq!(state.viewport_menu_page, Some(P::Markers), "a press turns the menu");
+    assert_eq!(state.menus.viewport_menu_page, Some(P::Markers), "a press turns the menu");
     assert_eq!((context_menu::x(), context_menu::y()), corner, "where the menu stood");
     assert_eq!(context_menu::back_title().as_deref(), Some("Viewport"));
     let prims = row_of(&state, A::Command("toggle_prim_numbers"));
@@ -1959,22 +1959,22 @@ fn the_viewport_menu_turns_into_its_pages_and_back() {
     move_to(&mut state, corner.0 + 20.0, context_menu::row_y(prims) + 12.0);
     press(&mut state);
     assert!(state.view.show_prim_numbers, "the switch flipped");
-    assert!(state.viewport_menu_open() && state.viewport_menu_page == Some(P::Markers), "and the page is still up");
+    assert!(state.viewport_menu_open() && state.menus.viewport_menu_page == Some(P::Markers), "and the page is still up");
     assert!(context_menu::options()[prims].starts_with('●'), "re-marked: {}", context_menu::options()[prims]);
 
     swipe(&mut state, 80.0);
-    assert_eq!(state.viewport_menu_page, None, "a swipe back turned back to the menu");
+    assert_eq!(state.menus.viewport_menu_page, None, "a swipe back turned back to the menu");
     assert!(state.viewport_menu_open());
     assert_eq!((context_menu::x(), context_menu::y()), corner);
     assert_eq!(context_menu::back_title(), None, "the menu goes back nowhere");
 
     move_to(&mut state, corner.0 + 20.0, context_menu::row_y(style) + 12.0);
     swipe(&mut state, -80.0);
-    assert_eq!(state.viewport_menu_page, Some(P::Style), "a swipe forward over the row turns into its page");
-    assert_eq!(state.viewport_menu_actions[0], A::Command("toggle_wireframe"));
+    assert_eq!(state.menus.viewport_menu_page, Some(P::Style), "a swipe forward over the row turns into its page");
+    assert_eq!(state.menus.viewport_menu_actions[0], A::Command("toggle_wireframe"));
     move_to(&mut state, corner.0 + 20.0, corner.1 + context_menu::PAD + context_menu::ROW_H * 0.5);
     press(&mut state);
-    assert_eq!(state.viewport_menu_page, None, "a press on the back band turns back");
+    assert_eq!(state.menus.viewport_menu_page, None, "a press on the back band turns back");
 
     // A row of the menu itself runs and closes it.
     let grid = row_of(&state, A::Command("toggle_grid"));
@@ -2381,7 +2381,7 @@ fn the_viewport_menu_sets_the_camera_pivot_size() {
     state.cursor_x = 300.0;
     state.cursor_y = 200.0;
     state.open_viewport_context_menu();
-    let actions = state.viewport_menu_actions.clone();
+    let actions = state.menus.viewport_menu_actions.clone();
     let i = actions.iter().position(|a| *a == A::CameraPivotSizeSlider).expect("a Camera Pivot Size row");
     assert_eq!(actions[i - 1], A::Command("toggle_camera_pivot"), "it sits under its switch");
     let sl = context_menu::slider(i).expect("a slider");
@@ -2491,7 +2491,7 @@ fn a_shortened_viewport_menu_scrolls_and_picks_the_scrolled_row() {
     // Over the first row, which is Frame All — an action, not a slider.
     state.cursor_x = context_menu::x() + 20.0;
     state.cursor_y = context_menu::row_y(0) + context_menu::ROW_H * 0.5;
-    assert_eq!(state.viewport_menu_actions[0], A::FrameAll);
+    assert_eq!(state.menus.viewport_menu_actions[0], A::FrameAll);
     state.handle_event(&WindowEvent::CursorMoved {
         position: LocalPosition { x: state.cursor_x as f64, y: state.cursor_y as f64 },
     });
@@ -2504,8 +2504,8 @@ fn a_shortened_viewport_menu_scrolls_and_picks_the_scrolled_row() {
     // action. Pick a row whose effect is visible: a toggle.
     let row = context_menu::row_at(state.cursor_x, state.cursor_y).expect("a row under the pointer");
     assert_eq!(row, 3);
-    let A::Command(id) = state.viewport_menu_actions[row] else {
-        panic!("row 3 should be a toggle command, is {:?}", state.viewport_menu_actions[row]);
+    let A::Command(id) = state.menus.viewport_menu_actions[row] else {
+        panic!("row 3 should be a toggle command, is {:?}", state.menus.viewport_menu_actions[row]);
     };
     let before = state.command_toggle_state(id);
     state.handle_event(&WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left });
@@ -2679,7 +2679,7 @@ fn the_dialog_plate_is_the_menu_plate() {
     let r = cce_ui::layout::menu_corner_radius();
     let rect = cce_ui::scene::layout::Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 };
     assert_eq!(dialog.corner_style(rect).map(|(r, _)| r), (r > 0.0).then_some(r));
-    for file in ["src/dialog.rs", "src/render.rs", "src/app.rs", "src/app/input.rs", "src/app/document.rs", "src/app/network.rs", "src/app/camera.rs", "src/app/view.rs", "src/app/scene.rs", "src/app/stage.rs", "src/app/markers.rs", "src/app/params.rs", "src/app/sheet.rs"] {
+    for file in ["src/dialog.rs", "src/render.rs", "src/app.rs", "src/app/input.rs", "src/app/document.rs", "src/app/network.rs", "src/app/camera.rs", "src/app/view.rs", "src/app/scene.rs", "src/app/stage.rs", "src/app/markers.rs", "src/app/params.rs", "src/app/sheet.rs", "src/app/menus.rs"] {
         let src = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(file)).unwrap();
         assert!(!src.contains("dialog/compression") && !src.contains("DIALOG_COMPRESSION"), "{file} overrides the menu material");
     }

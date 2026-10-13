@@ -170,6 +170,9 @@ pub use params::ParamsPane;
 // `State::sheet`: what the spreadsheet's rows were read from, its height.
 mod sheet;
 pub use sheet::SheetPane;
+// `State::menus`: which context menu is open, what its rows do.
+mod menus;
+pub use menus::ContextMenus;
 
 /// Which node the params pane is showing: the editor's level, the slot
 /// there, and the node's id. All three, because no one of them is an
@@ -743,54 +746,10 @@ pub struct State {
     pub slots: Box<WidgetSlots>,
     pub positions: Vec<(f32, f32, f32, f32)>,
     pub splitter_layout: crate::panes::SplitterLayout,
-    /// The node right-click context menu: the targeted node slot and the
-    /// actions parallel to the visible items pushed into `context_menu::show`.
-    /// `None` when no menu is open. The menu's geometry/paint lives in the
-    /// cce-ui `context_menu` thread-local; these just remember what to do on
-    /// click, since the designer routes menu clicks itself.
-    pub node_menu_slot: Option<usize>,
-    pub node_menu_actions: Vec<NodeMenuAction>,
-    /// The viewport right-click menu (same thread-local `context_menu`
-    /// machinery as the node menu; this flag says the open menu is OURS).
-    pub viewport_menu_active: bool,
-    pub viewport_menu_actions: Vec<ViewportMenuAction>,
-    /// Which page of the viewport menu is up: `None` for the menu itself.
-    pub viewport_menu_page: Option<ViewportMenuPage>,
-    /// The menu the dialog was turned to from by a page row (Add Node,
-    /// Rename, Attribute Visualizers), which a swipe back from it shows
-    /// again — see `crate::menu_page`.
-    pub dialog_from: Option<crate::menu_page::MenuOrigin>,
-    /// The dialog's own modes it was turned through on the way to the one
-    /// up, nearest last: Commands under Group Markers, the visualizer list
-    /// under one visualizer.
-    pub dialog_trail: Vec<crate::dialog::Mode>,
-    /// The menu a plate PAGE was turned to from (the playbar's Plate row),
-    /// which its back band returns to (`open_plate_page`).
-    pub plate_page_from: Option<crate::menu_page::MenuOrigin>,
-    /// A parameter row's right-click menu — the same thread-local; the
-    /// target is (node id, parameter name) rather than a slot and a row, so
-    /// it holds across a re-layout of the pane.
-    pub param_menu_active: bool,
-    pub param_menu_actions: Vec<ParamMenuAction>,
-    /// The playbar's right-click menu, the same contract.
-    pub playbar_menu_active: bool,
-    pub playbar_menu_actions: Vec<PlaybarMenuAction>,
-    pub param_menu_target: Option<(String, String)>,
-    /// The node the rename dialog is open on, by id.
-    pub rename_target: Option<String>,
-    /// The network editor's right-click menu — the same thread-local again,
-    /// with the flag saying the open menu is this one.
-    pub network_menu_active: bool,
-    pub network_menu_actions: Vec<NetworkMenuAction>,
-    /// The menu the network menu was turned to from — the viewport's, while
-    /// the network overlays the scene — which its back band returns to. None when a right
-    /// press on the graph opened it.
-    pub network_menu_from: Option<crate::menu_page::MenuOrigin>,
-    /// The grid cell under the viewport menu's right press, while the
-    /// network has no plate and the press was over its area: where the
-    /// grid cursor goes if the menu is turned to the network's, so Add Node
-    /// places at the cell pointed at, as the plated network's press does.
-    pub network_menu_cell: Option<(i32, i32)>,
+    /// The context menus the app routes itself — which one is open and what
+    /// its rows do — and where the dialog and the pages were turned from
+    /// (`src/app/menus.rs`).
+    pub menus: ContextMenus,
     /// The displayed scene as last built: the evaluated geometry, its
     /// attributes and groups, the fill and edges, the light, the page
     /// image, the sim cache (`src/app/scene.rs`).
@@ -802,10 +761,6 @@ pub struct State {
     /// A dialog setting changed during a slider drag and is saved when the
     /// drag ends (`apply_setting`), not on every motion of it.
     pub settings_save_pending: bool,
-    /// The plate menu — the same `context_menu` thread-local again; the
-    /// slot says which plate's menu is open.
-    pub plate_menu_slot: Option<usize>,
-    pub plate_menu_actions: Vec<crate::plate_menu::PlateMenuAction>,
     /// Panes shrunk to their title stub, indexed by slot. Only the
     /// `plate_menu::PLATE_SLOTS` entries are ever set.
     pub collapsed_panes: [bool; WIDGET_COUNT],
@@ -3245,18 +3200,18 @@ impl State {
         let target = self.slots.get_dyn(&self.ui_context, CONTENT_IDX).base().id();
         self.put_up_menu(at, None, options, 0, target);
         crate::menu_page::mark_page_rows(&actions, |a| a == NodeMenuAction::Rename);
-        self.node_menu_slot = Some(slot);
-        self.node_menu_actions = actions;
+        self.menus.node_menu_slot = Some(slot);
+        self.menus.node_menu_actions = actions;
     }
 
     fn node_menu_open(&self) -> bool {
-        cce_ui::widget::context_menu::is_visible() && self.node_menu_slot.is_some()
+        cce_ui::widget::context_menu::is_visible() && self.menus.node_menu_slot.is_some()
     }
 
     pub(crate) fn close_node_menu(&mut self) {
         cce_ui::widget::context_menu::hide();
-        self.node_menu_slot = None;
-        self.node_menu_actions.clear();
+        self.menus.node_menu_slot = None;
+        self.menus.node_menu_actions.clear();
     }
 
     /// Route a left press while the node menu is open. A press ON the menu is
@@ -3268,7 +3223,7 @@ impl State {
         }
         if cce_ui::widget::context_menu::hit_test(self.cursor_x, self.cursor_y) {
             let idx = cce_ui::widget::context_menu::row_at(self.cursor_x, self.cursor_y);
-            let picked = self.node_menu_slot.zip(idx.and_then(|i| self.node_menu_actions.get(i).copied()));
+            let picked = self.menus.node_menu_slot.zip(idx.and_then(|i| self.menus.node_menu_actions.get(i).copied()));
             self.close_node_menu();
             if let Some((slot, action)) = picked {
                 self.dispatch_node_menu(slot, action);
@@ -3656,20 +3611,20 @@ impl State {
         let (options, actions, headers) = self.param_menu_rows(slot, &pname);
         let target = self.slots.get_dyn(&self.ui_context, crate::slots::PARAM_IDX).base().id();
         cce_ui::widget::context_menu::show(self.cursor_x, self.cursor_y, options, headers, target);
-        self.param_menu_active = true;
-        self.param_menu_actions = actions;
-        self.param_menu_target = Some((node_id, pname));
+        self.menus.param_menu_active = true;
+        self.menus.param_menu_actions = actions;
+        self.menus.param_menu_target = Some((node_id, pname));
     }
 
     pub fn param_menu_open(&self) -> bool {
-        cce_ui::widget::context_menu::is_visible() && self.param_menu_active
+        cce_ui::widget::context_menu::is_visible() && self.menus.param_menu_active
     }
 
     fn close_param_menu(&mut self) {
         cce_ui::widget::context_menu::hide();
-        self.param_menu_active = false;
-        self.param_menu_actions.clear();
-        self.param_menu_target = None;
+        self.menus.param_menu_active = false;
+        self.menus.param_menu_actions.clear();
+        self.menus.param_menu_target = None;
     }
 
     /// Route a left press while the row menu is open — same contract as
@@ -3680,8 +3635,8 @@ impl State {
         }
         if cce_ui::widget::context_menu::hit_test(self.cursor_x, self.cursor_y) {
             let idx = cce_ui::widget::context_menu::row_at(self.cursor_x, self.cursor_y);
-            let picked = idx.and_then(|i| self.param_menu_actions.get(i).copied());
-            let target = self.param_menu_target.clone();
+            let picked = idx.and_then(|i| self.menus.param_menu_actions.get(i).copied());
+            let target = self.menus.param_menu_target.clone();
             self.close_param_menu();
             if let (Some(action), Some((node_id, pname))) = (picked, target) {
                 self.run_param_action(&node_id, &pname, action);
@@ -3782,18 +3737,18 @@ impl State {
                 cce_ui::widget::context_menu::set_row_slider(i, slider);
             }
         }
-        self.playbar_menu_actions = actions;
-        self.playbar_menu_active = true;
+        self.menus.playbar_menu_actions = actions;
+        self.menus.playbar_menu_active = true;
     }
 
     pub fn playbar_menu_open(&self) -> bool {
-        cce_ui::widget::context_menu::is_visible() && self.playbar_menu_active
+        cce_ui::widget::context_menu::is_visible() && self.menus.playbar_menu_active
     }
 
     pub(crate) fn close_playbar_menu(&mut self) {
         cce_ui::widget::context_menu::hide();
-        self.playbar_menu_active = false;
-        self.playbar_menu_actions.clear();
+        self.menus.playbar_menu_active = false;
+        self.menus.playbar_menu_actions.clear();
     }
 
     /// Whether the pointer is over the playbar's plate.
@@ -3815,7 +3770,7 @@ impl State {
         }
         if cce_ui::widget::context_menu::hit_test(self.cursor_x, self.cursor_y) {
             let idx = cce_ui::widget::context_menu::row_at(self.cursor_x, self.cursor_y);
-            let picked = idx.and_then(|i| self.playbar_menu_actions.get(i).copied());
+            let picked = idx.and_then(|i| self.menus.playbar_menu_actions.get(i).copied());
             self.close_playbar_menu();
             if let Some(action) = picked {
                 self.run_playbar_menu_action(action);
@@ -3844,7 +3799,7 @@ impl State {
             }
             return false;
         };
-        if let Some(action) = self.playbar_menu_actions.get(idx).copied() {
+        if let Some(action) = self.menus.playbar_menu_actions.get(idx).copied() {
             self.land_playbar_menu_slider(action, v);
             if persist {
                 self.save_settings();
@@ -4004,22 +3959,22 @@ impl State {
             }
         }
         crate::menu_page::mark_page_rows(&actions, |a| a.leads_to_page());
-        self.viewport_menu_actions = actions;
-        self.viewport_menu_page = page;
-        self.viewport_menu_active = true;
+        self.menus.viewport_menu_actions = actions;
+        self.menus.viewport_menu_page = page;
+        self.menus.viewport_menu_active = true;
     }
 
     /// Re-read the shown viewport menu page's labels and slider values in
     /// place, after a row of it ran and it stays up: how a switch's mark
     /// follows the switch.
     pub(crate) fn refill_viewport_menu(&mut self) {
-        let (options, actions) = self.viewport_menu_rows_of(self.viewport_menu_page);
+        let (options, actions) = self.viewport_menu_rows_of(self.menus.viewport_menu_page);
         let sliders: Vec<_> = actions.iter().map(|a| self.viewport_menu_slider(*a)).collect();
         if cce_ui::widget::context_menu::refill(options, &sliders) {
-            self.viewport_menu_actions = actions;
+            self.menus.viewport_menu_actions = actions;
         } else {
             let at = (cce_ui::widget::context_menu::x(), cce_ui::widget::context_menu::y());
-            self.show_viewport_menu_page(self.viewport_menu_page, Some(at));
+            self.show_viewport_menu_page(self.menus.viewport_menu_page, Some(at));
         }
     }
 
@@ -4190,7 +4145,7 @@ impl State {
     pub(crate) fn drain_viewport_menu_slider(&mut self, persist: bool) -> bool {
         use cce_ui::widget::context_menu;
         let changed = context_menu::take_slider_change()
-            .and_then(|(idx, v)| Some((self.viewport_menu_actions.get(idx).copied()?, v)));
+            .and_then(|(idx, v)| Some((self.menus.viewport_menu_actions.get(idx).copied()?, v)));
         let Some((action, v)) = changed else {
             if persist {
                 self.save_settings();
@@ -4231,8 +4186,8 @@ impl State {
     pub(crate) fn open_viewport_page_with(&mut self, action: ViewportMenuAction) -> Vec<ViewportMenuAction> {
         let page = self.viewport_menu_page_of(action).expect("a page holds the row");
         self.run_viewport_menu_action(ViewportMenuAction::Page(page));
-        assert_eq!(self.viewport_menu_page, Some(page), "the menu turned");
-        self.viewport_menu_actions.clone()
+        assert_eq!(self.menus.viewport_menu_page, Some(page), "the menu turned");
+        self.menus.viewport_menu_actions.clone()
     }
 
     /// The page of the viewport menu that holds `action`, `None` for the
@@ -4386,14 +4341,14 @@ impl State {
     }
 
     pub fn viewport_menu_open(&self) -> bool {
-        cce_ui::widget::context_menu::is_visible() && self.viewport_menu_active
+        cce_ui::widget::context_menu::is_visible() && self.menus.viewport_menu_active
     }
 
     pub(crate) fn close_viewport_menu(&mut self) {
         cce_ui::widget::context_menu::hide();
-        self.viewport_menu_active = false;
-        self.viewport_menu_actions.clear();
-        self.viewport_menu_page = None;
+        self.menus.viewport_menu_active = false;
+        self.menus.viewport_menu_actions.clear();
+        self.menus.viewport_menu_page = None;
     }
 
     /// Route a left press while the viewport menu is open — same contract as
@@ -4411,12 +4366,12 @@ impl State {
         use cce_ui::widget::context_menu;
         if context_menu::hit_test(self.cursor_x, self.cursor_y) {
             let idx = context_menu::row_at(self.cursor_x, self.cursor_y);
-            let picked = idx.and_then(|i| self.viewport_menu_actions.get(i).copied());
+            let picked = idx.and_then(|i| self.menus.viewport_menu_actions.get(i).copied());
             // A row of a PAGE runs and the page stays up, re-marked: a page
             // is a panel of settings, opened to set several, and a switch
             // that closed it would cost a right-click and a turn per
             // setting. A row of the menu itself runs and closes it.
-            if self.viewport_menu_page.is_some() {
+            if self.menus.viewport_menu_page.is_some() {
                 if let Some(action) = picked {
                     self.run_viewport_menu_action(action);
                     if self.viewport_menu_open() {
@@ -4450,7 +4405,7 @@ impl State {
     /// the viewport menu's radio rows use, read through
     /// `command_toggle_state` — the one table the dialog's switches read too.
     fn open_network_context_menu(&mut self) {
-        self.network_menu_from = None;
+        self.menus.network_menu_from = None;
         self.open_network_context_menu_at(None);
     }
 
@@ -4460,7 +4415,7 @@ impl State {
     /// cursor ones act only on a focused network — and the grid cursor goes
     /// to the cell the menu was opened over, when it was opened over one.
     pub(crate) fn open_network_menu_from_viewport(&mut self, at: (f32, f32)) {
-        if let Some((col, row)) = self.network_menu_cell.take() {
+        if let Some((col, row)) = self.menus.network_menu_cell.take() {
             self.net.grid_cursor_col = col;
             self.net.grid_cursor_row = row;
         }
@@ -4471,7 +4426,7 @@ impl State {
             }
             self.sync_pane_focus();
         }
-        self.network_menu_from = Some(crate::menu_page::MenuOrigin::Viewport);
+        self.menus.network_menu_from = Some(crate::menu_page::MenuOrigin::Viewport);
         self.open_network_context_menu_at(Some(at));
     }
 
@@ -4508,21 +4463,21 @@ impl State {
         // `detach_circular_window` command in the palette.
 
         let target = self.slots.get_dyn(&self.ui_context, CONTENT_IDX).base().id();
-        let back = self.network_menu_from.filter(|_| at.is_some());
+        let back = self.menus.network_menu_from.filter(|_| at.is_some());
         self.put_up_menu(at, back, options, 0, target);
         crate::menu_page::mark_page_rows(&actions, |a| a.leads_to_page());
-        self.network_menu_active = true;
-        self.network_menu_actions = actions;
+        self.menus.network_menu_active = true;
+        self.menus.network_menu_actions = actions;
     }
 
     fn network_menu_open(&self) -> bool {
-        cce_ui::widget::context_menu::is_visible() && self.network_menu_active
+        cce_ui::widget::context_menu::is_visible() && self.menus.network_menu_active
     }
 
     pub(crate) fn close_network_menu(&mut self) {
         cce_ui::widget::context_menu::hide();
-        self.network_menu_active = false;
-        self.network_menu_actions.clear();
+        self.menus.network_menu_active = false;
+        self.menus.network_menu_actions.clear();
     }
 
     /// Route a left press while the network menu is open — same contract as
@@ -4535,7 +4490,7 @@ impl State {
         }
         if cce_ui::widget::context_menu::hit_test(self.cursor_x, self.cursor_y) {
             let idx = cce_ui::widget::context_menu::row_at(self.cursor_x, self.cursor_y);
-            let picked = idx.and_then(|i| self.network_menu_actions.get(i).copied());
+            let picked = idx.and_then(|i| self.menus.network_menu_actions.get(i).copied());
             // The rows that turn the menu (Add Node, Plate) were taken by
             // the press's page turn ahead of this.
             self.close_network_menu();
@@ -5475,24 +5430,28 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             slots,
             positions,
             splitter_layout,
-            node_menu_slot: None,
-            node_menu_actions: Vec::new(),
-            viewport_menu_active: false,
-            viewport_menu_actions: Vec::new(),
-            viewport_menu_page: None,
-            dialog_from: None,
-            dialog_trail: Vec::new(),
-            plate_page_from: None,
-            param_menu_active: false,
-            param_menu_actions: Vec::new(),
-            playbar_menu_active: false,
-            playbar_menu_actions: Vec::new(),
-            param_menu_target: None,
-            rename_target: None,
-            network_menu_active: false,
-            network_menu_actions: Vec::new(),
-            network_menu_from: None,
-            network_menu_cell: None,
+            menus: ContextMenus {
+                node_menu_slot: None,
+                node_menu_actions: Vec::new(),
+                viewport_menu_active: false,
+                viewport_menu_actions: Vec::new(),
+                viewport_menu_page: None,
+                network_menu_active: false,
+                network_menu_actions: Vec::new(),
+                network_menu_from: None,
+                network_menu_cell: None,
+                param_menu_active: false,
+                param_menu_actions: Vec::new(),
+                param_menu_target: None,
+                playbar_menu_active: false,
+                playbar_menu_actions: Vec::new(),
+                plate_menu_slot: None,
+                plate_menu_actions: Vec::new(),
+                plate_page_from: None,
+                dialog_from: None,
+                dialog_trail: Vec::new(),
+                rename_target: None,
+            },
             scene: SceneData {
                 rt_sphere_verts: Vec::new(),
                 rt_geometry_version: 0,
@@ -5513,8 +5472,6 @@ pub(crate) fn geometry_to_spreadsheet_columns(geom: &Detail) -> (Vec<String>, Ve
             },
             title_dirty: false,
             settings_save_pending: false,
-            plate_menu_slot: None,
-            plate_menu_actions: Vec::new(),
             collapsed_panes: [false; WIDGET_COUNT],
             drag_widget: None,
             drag_press_cursor: None,

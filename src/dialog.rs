@@ -1762,7 +1762,7 @@ impl State {
         let from = Rect { x: at.0, y: at.1, width: context_menu::w(), height: context_menu::h() };
         self.close_dialog();
         self.open_dialog_anchored(mode, Some(at));
-        self.dialog_from = Some(origin);
+        self.menus.dialog_from = Some(origin);
         self.ui_context[self.slots.dialog].turning = Some(DialogTurn { from: Some(from), start: std::time::Instant::now(), dir: 1.0 });
     }
 
@@ -1802,7 +1802,7 @@ impl State {
             self.update_status_text("Select a node to rename.");
             return;
         };
-        self.rename_target = Some(id);
+        self.menus.rename_target = Some(id);
         match from {
             Some((origin, at)) => self.open_dialog_from(Mode::Rename, origin, at),
             None => self.open_dialog_in(Mode::Rename),
@@ -1822,7 +1822,7 @@ impl State {
     /// has and the one it would get, or why not. None when the node is
     /// gone.
     pub fn rename_outcome(&self, typed: &str) -> Option<Result<(String, String), String>> {
-        let id = self.rename_target.as_ref()?;
+        let id = self.menus.rename_target.as_ref()?;
         let node = crate::viewer_state::find_node_by_id(&self.doc.fs_root, id)?;
         Some(self.rename_check(id, typed).map(|new| (node.name.clone(), new)))
     }
@@ -1843,11 +1843,11 @@ impl State {
             Some(prev) if anchor.is_none() => {
                 // The same plate turned to another list: the rows slide in,
                 // from the right going on, from the left coming back.
-                let dir = if self.dialog_trail.last() == Some(&mode) {
-                    self.dialog_trail.pop();
+                let dir = if self.menus.dialog_trail.last() == Some(&mode) {
+                    self.menus.dialog_trail.pop();
                     Some(-1.0)
                 } else if prev != mode {
-                    self.dialog_trail.push(prev);
+                    self.menus.dialog_trail.push(prev);
                     Some(1.0)
                 } else {
                     None
@@ -1856,8 +1856,8 @@ impl State {
             }
             _ => {
                 self.ui_context[self.slots.dialog].anchor = anchor;
-                self.dialog_trail.clear();
-                self.dialog_from = None;
+                self.menus.dialog_trail.clear();
+                self.menus.dialog_from = None;
             }
         }
         // Always with an empty query: a dialog that reopens holding the last
@@ -1892,8 +1892,8 @@ impl State {
         self.ui_context[self.slots.dialog].dropdown_row = None;
         self.ui_context[self.slots.dialog].dropdown_armed = false;
         self.ui_context[self.slots.dialog].set_visible(false);
-        self.dialog_from = None;
-        self.dialog_trail.clear();
+        self.menus.dialog_from = None;
+        self.menus.dialog_trail.clear();
         if self.focused_widget == Some(DIALOG_IDX) {
             self.focused_widget = None;
         }
@@ -2955,7 +2955,7 @@ impl State {
             // answer used to arrive — read BEFORE the close, since closing
             // relays the panes.
             Mode::Rename => {
-                let Some(target) = self.rename_target.take() else { return };
+                let Some(target) = self.menus.rename_target.take() else { return };
                 let typed = self.ui_context[self.slots.dialog].query.clone();
                 match self.rename_node(&target, &typed) {
                     Ok(said) | Err(said) => self.update_status_text(&said),

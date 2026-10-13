@@ -128,9 +128,9 @@ impl State {
         }
         let target = self.slots.get_dyn(&self.ui_context, idx).base().id();
         self.put_up_menu(at, None, options, 0, target);
-        self.plate_menu_slot = Some(idx);
-        self.plate_menu_actions = actions;
-        self.plate_page_from = None;
+        self.menus.plate_menu_slot = Some(idx);
+        self.menus.plate_menu_actions = actions;
+        self.menus.plate_page_from = None;
     }
 
     /// `idx`'s plate rows as a PAGE of another menu — the playbar's Plate
@@ -142,20 +142,20 @@ impl State {
         }
         let target = self.slots.get_dyn(&self.ui_context, idx).base().id();
         self.put_up_menu(Some(at), Some(from), options, 0, target);
-        self.plate_menu_slot = Some(idx);
-        self.plate_menu_actions = actions;
-        self.plate_page_from = Some(from);
+        self.menus.plate_menu_slot = Some(idx);
+        self.menus.plate_menu_actions = actions;
+        self.menus.plate_page_from = Some(from);
     }
 
     pub fn plate_menu_open(&self) -> bool {
-        cce_ui::widget::context_menu::is_visible() && self.plate_menu_slot.is_some()
+        cce_ui::widget::context_menu::is_visible() && self.menus.plate_menu_slot.is_some()
     }
 
     pub fn close_plate_menu(&mut self) {
         cce_ui::widget::context_menu::hide();
-        self.plate_menu_slot = None;
-        self.plate_menu_actions.clear();
-        self.plate_page_from = None;
+        self.menus.plate_menu_slot = None;
+        self.menus.plate_menu_actions.clear();
+        self.menus.plate_page_from = None;
     }
 
     /// Route a left press while the plate menu is open — same contract as
@@ -166,7 +166,7 @@ impl State {
         }
         if cce_ui::widget::context_menu::hit_test(self.cursor_x, self.cursor_y) {
             let row = cce_ui::widget::context_menu::row_at(self.cursor_x, self.cursor_y);
-            let picked = self.plate_menu_slot.zip(row.and_then(|r| self.plate_menu_actions.get(r).copied()));
+            let picked = self.menus.plate_menu_slot.zip(row.and_then(|r| self.menus.plate_menu_actions.get(r).copied()));
             self.close_plate_menu();
             if let Some((idx, action)) = picked {
                 self.run_plate_menu_action(idx, action);

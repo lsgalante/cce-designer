@@ -1043,7 +1043,7 @@ impl State {
         self.close_network_menu();
         self.close_param_menu();
         if self.cursor_in_viewport() && !in_circle_network_pane {
-            self.network_menu_cell = (self.network_overlay()
+            self.menus.network_menu_cell = (self.network_overlay()
                 && self.in_network_area(self.cursor_x, self.cursor_y))
             .then(|| self.cell_at(self.cursor_x, self.cursor_y));
             self.open_viewport_context_menu();

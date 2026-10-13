@@ -320,7 +320,7 @@ gone from cce-ui with the wgpu path).
   params pane off a row, the spreadsheet (`open_plate_menu`, at the
   pointer). A row from any of them runs through
   `run_plate_menu_action`; a Plate page's band goes back to the menu it was
-  turned from (`State::plate_page_from`). Collapse shrinks a plate to its title stub via
+  turned from (`State::menus.plate_page_from`). Collapse shrinks a plate to its title stub via
   `apply_collapsed_panes`, a post-pass over `positions[..]` (one place, all three
   branches); a LEFT press on a collapsed stub expands it, and a right press on any
   stub (collapsed or detached) opens its plate menu. `a_plates_rows_are_in_its_right_click_menu`
@@ -3131,9 +3131,9 @@ glyph). The menus' `● ` / `○ ` switch marks are cce-ui's `MARK_ON` /
   flips and is re-marked in place (`refill_viewport_menu`, cce-ui's
   `refill`), a slider is worked; a row of the menu itself runs and closes
   it, as before.
-- **The dialog remembers where it was turned from**: `State::dialog_from`,
+- **The dialog remembers where it was turned from**: `State::menus.dialog_from`,
   the menu (shown again at the dialog's corner by a swipe back), and
-  `State::dialog_trail`, the modes it turned through while up — a mode
+  `State::menus.dialog_trail`, the modes it turned through while up — a mode
   opened while the dialog is up keeps the plate where it stands and puts
   the mode it leaves on the trail, and turning to the trail's last (by a
   swipe back) takes it off. The palette's Group Markers row runs with the
@@ -3178,9 +3178,9 @@ menu. That is the overlay's whole rule, and it predates this menu. So in
 overlay mode (always, outside the circular pane, since 2026-10-06) **this menu is a page of the
 viewport's**: a **Network** row heads the viewport menu
 (`ViewportMenuAction::NetworkPage`) and turns it into this one under a
-`‹ Viewport` band (`State::network_menu_from`). The viewport menu's press
+`‹ Viewport` band (`State::menus.network_menu_from`). The viewport menu's press
 remembers the cell under it when it lands in the network's area
-(`State::network_menu_cell`), and the turn (`open_network_menu_from_viewport`)
+(`State::menus.network_menu_cell`), and the turn (`open_network_menu_from_viewport`)
 puts the grid cursor there and focuses the network — so Add Node places
 where the menu was opened, and Frame Cursor, gated on the network's focus,
 acts. Merely opening the viewport menu moves no cursor: the cursor is the
@@ -3733,7 +3733,7 @@ Normals; Show Vertex Markers, Show Vertex Numbers, Show Vertex Normals).
 `viewport_menu_rows_of(page)` is the rows of the menu (`None`) or of a
 page, `show_viewport_menu_page` puts either up — at the pointer, or at the
 corner of the plate it replaces with a back band to the menu — and
-`State::viewport_menu_page` says which is up. `viewport_menu_actions` is
+`State::menus.viewport_menu_page` says which is up. `viewport_menu_actions` is
 always the shown rows' actions, so the slider hooks and
 `drain_viewport_menu_slider` need nothing per page. History: on
 2026-09-29 the two were pages of the one popup with a Back row, then the
@@ -4338,7 +4338,7 @@ rather than two:
   be — its name already, another node's, none. `State::rename_check` is
   that rule and `State::rename_node` the one entry the dialog and MCP's
   `rename_node` share; a sibling's name is refused in both, since wires
-  are by name. `State::rename_target` holds the node by id.
+  are by name. `State::menus.rename_target` holds the node by id.
   `a_node_is_renamed_from_its_menu` is the test.
 - `Mode::Groups` (the `group_markers` command, **Group Markers** in the
   palette — the palette TRANSFORMS into this list, since 2026-09-29) —
