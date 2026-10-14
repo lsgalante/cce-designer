@@ -3712,9 +3712,8 @@ nothing because the layout was already right looks identical to a broken one,
 and the status line is the only thing that separates them.
 
 The command is `layout_nodes` on `Ctrl+Shift+L` rather than the bare `L`
-Houdini uses: bare hjkl is the cursor, and shift+hjkl is reserved for the
-select family this app cannot implement until the Graph widget has
-multi-selection, so taking `Shift+L` now would have to be given back later.
+Houdini uses: bare hjkl is the cursor, and shift+hjkl is the extend-the-selection
+family (`extend_*`, above), so `Shift+L` is `extend_right`'s.
 
 ### The playbar is attached to the bottom edge (since 2026-10-06)
 
