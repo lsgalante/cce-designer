@@ -700,7 +700,7 @@ Where it all went:
 - **The active camera** keeps the viewport menubar's own menu, whose entries
   are the camera NODES — not something a fixed table can hold.
 
-`Project::migrate_meta_settings_node` runs on every load: it takes the meta
+`State::migrate_meta_settings_node` runs on every load: it takes the meta
 node (and the four subnets, which PRE-Session saves parked flat at the root —
 hence no early return on the container alone), reads its values onto the live
 state, and saves them to `state.kdl`. Per-node children go in
@@ -812,7 +812,7 @@ caught it); so any test that then reached `save_settings` —
 `run_command("toggle_network_plate")` (retired since), the dialog's toggle rows — wrote the
 BUNDLED project's show_grid / show_cube / show_origin over the user's real
 state.kdl. `cargo test` reset three of the user's own toggles on every run,
-and the run was green either way. `Project::load_recent_files` /
+and the run was green either way. `State::load_recent_files` /
 `save_recent_files` are gated the same way, for a variant of the same reason:
 cce-ui derives that path from the EXE's basename, so test binaries had left
 seven real `~/.config/cce/cce_designer-<hash>/` directories behind. So is the
@@ -1395,7 +1395,7 @@ because linear is what the cast that worked used.
 
 `src/expr.rs` is the expression language and `geometry.rs`'s `TreeScope`
 is what binds it to the node tree. **A parameter holds a value or an
-expression, and `ParamDef::expr` says which** — a flag, not a guess about
+expression, and `ParamDef::is_expr()` says which** — the slot it holds, not a guess about
 the text, because a kernel's Code contains `chf(`, a node name is an
 identifier and `0.5` parses as an expression too. Houdini makes the same
 choice (a parm has a channel or it does not). An expression parameter is
