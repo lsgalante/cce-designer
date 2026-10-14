@@ -3536,8 +3536,8 @@ told `set_show_network_grid(false)`, and the always-true
 are gone. Everything the lattice MEANS stays: where a node stands, the
 snap, the pitch and zoom, the grid cursor and its region. Its
 cell-and-gap setters (`set_grid_sizes` / `set_skipped_sizes`) survive as a
-description of the same lattice for cce-files and cce-graph, which still
-speak it; this app sets the pitch.
+description of the same lattice for cce-graph, which still speaks it; this app
+sets the pitch.
 
 ### Node wires have a style
 
