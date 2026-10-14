@@ -227,7 +227,7 @@ engine's shaping/glyph pass (the app has no `FontSystem` or buffer cache of its 
 `cce_ui::cosmic_text`; `glyphon` is not a dependency of this crate at all, having
 gone from cce-ui with the wgpu path).
 
-- `src/app.rs` (~7.2k lines) — the heart: `State` (the whole app model), `McpAction` /
+- `src/app.rs` (~7.5k lines) — the heart: `State` (the whole app model), `McpAction` /
   `CustomEvent`, pane layout, and most of `State`'s methods. `tick_frame` (simulation:
   config polling, inertia, widget ticks) and `stage_frame` (renderer staging) are the
   two halves of the old render loop. GPU mesh updates are staged CPU-side
@@ -342,7 +342,7 @@ gone from cce-ui with the wgpu path).
   `shift_grid_cursor` — taking the pane's origin where it answers in window
   space, and `State`'s methods of those names forward with the content slot's
   top-left. Also a child module, and in the same two source scans.
-- `src/model.rs` (~1.6k lines) — the node tree and the project file, with no window or
+- `src/model.rs` (~1.7k lines) — the node tree and the project file, with no window or
   GPU: `FsNode`, `Project` (load, migrations, template merge), node ids, the wire and
   splice operations, parameter rows, `load_fs_tree` (node-template loading).
 - `src/settings.rs` — `ViewportSettings`, `RenderSettings`, `DesignSettings`, the grid
