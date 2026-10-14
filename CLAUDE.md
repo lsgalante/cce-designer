@@ -1524,7 +1524,8 @@ template DECLARES them (`ParamDef::declared_range`, an inline
 `Range: lo..hi` with its step as the pane APPLIES it (`ParamDef::range`,
 the numbers `param_display` builds the pane's row from — the declared
 ends, else the pane's defaults — or the presented row's own range for a
-parameter that has none, the Value row's `VALUE_ROW_RANGE`),
+parameter that has none, the Value row's span from `value_row_span`: ± the
+smallest power of ten (at least one) whose middle half holds the value),
 `Options: a, b, c` for a choice, and `Shown when:`
 with the row's `show_when` condition when it has one. They are the context menu's header rows —
 dimmed, never hovered — and `ParamMenuAction::Info` runs nothing. The paste writes `chs()` when the
