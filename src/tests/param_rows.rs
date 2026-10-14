@@ -254,3 +254,34 @@ fn a_run_of_rows_can_grow() {
     assert_eq!(merged, [row("operand_1", "Operand 1", "a"), row("operand_2", "Operand 2", "b"), row("add_operand", "Add Operand", "")]);
     assert!(root.children[0].params.iter().filter(|p| p.multi == "operand").take(2).all(|p| p.kind() == ParamKind::Operand));
 }
+
+/// A `sliderspinbox` parameter is a slider with a spinbox in the pane: its row carries the
+/// range and step the template gives (an inline `sliderspinbox:lo:hi` wins, as for a slider),
+/// and as many decimals as the step has — none for a whole step, so it holds whole numbers.
+/// Its value is a number, as a slider's is.
+#[test]
+fn a_sliderspinbox_parameter_is_a_slider_with_a_spinbox_row() {
+    use crate::app::{param_display, ParamDef, ParamKind, ParamValue};
+    let params = vec![
+        ParamDef::new("count", "sliderspinbox", "4").with_range(Some(0.0), Some(10.0)).with_step(Some(2.0)),
+        ParamDef::new("amount", "sliderspinbox", "0.25").with_range(Some(0.0), Some(1.0)).with_step(Some(0.05)),
+        ParamDef::new("inline", "sliderspinbox:-2:2", "0"),
+    ];
+    let rows = param_display(&params);
+    assert_eq!(rows[0].2, "sliderspinbox:0:10:2:0");
+    assert_eq!(rows[1].2, "sliderspinbox:0:1:0.05:2");
+    assert_eq!(rows[2].2, "sliderspinbox:-2:2:1:0", "the inline range, the default step");
+    assert_eq!(params[0].kind(), ParamKind::SliderSpin);
+    assert_eq!(params[1].value(), Some(&ParamValue::Number(0.25)));
+    assert_eq!(ParamKind::parse("sliderspinbox"), Some(ParamKind::SliderSpin));
+}
+
+/// The row menu says what a `sliderspinbox` row is: a slider with a spinbox, setting an
+/// integer when its step is whole and a float otherwise.
+#[test]
+fn the_row_menu_names_a_sliderspinbox() {
+    use crate::app::{control_and_type, ParamKind};
+    let k = ParamKind::SliderSpin;
+    assert_eq!(control_and_type("sliderspinbox:0:10:2:0", k), ("slider with spinbox", "integer"));
+    assert_eq!(control_and_type("sliderspinbox:0:1:0.05:2", k), ("slider with spinbox", "float"));
+}

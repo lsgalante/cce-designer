@@ -45,6 +45,12 @@ pub enum ParamKind {
     Slider,
     /// A whole number, stepped.
     Spin,
+    /// A number over a range, stepped (`min`/`max`/`step`, or inline
+    /// `sliderspinbox:lo:hi`), shown as a slider with a spinbox at its right
+    /// end: the band for a coarse value, the box to type or step an exact
+    /// one. A whole step makes it a whole number; a fractional one, a number
+    /// to as many decimals as the step has. Held as a number, like Slider.
+    SliderSpin,
     /// Two numbers, `x:y` — a range's two ends (a Remap's From and To,
     /// Visualize's Manual Range). Shown as two sliders over a SOFT range
     /// that adapts to the value (`app::value_row_span`), since like a
@@ -91,7 +97,7 @@ impl ParamKind {
     /// The type-string heads [`ParamKind::parse`] accepts, for messages.
     /// `string` is left out: it is an alias, not something to ask for.
     pub const NAMES: &'static [&'static str] =
-        &["text", "float", "slider", "spinbox", "float2", "float3", "choice", "toggle", "button", "code", "node", "attribute", "group", "operand"];
+        &["text", "float", "slider", "spinbox", "sliderspinbox", "float2", "float3", "choice", "toggle", "button", "code", "node", "attribute", "group", "operand"];
 
     /// The kind's name — the type-string head that names it.
     pub fn name(self) -> &'static str {
@@ -100,6 +106,7 @@ impl ParamKind {
             Self::Float => "float",
             Self::Slider => "slider",
             Self::Spin => "spinbox",
+            Self::SliderSpin => "sliderspinbox",
             Self::Float2 => "float2",
             Self::Float3 => "float3",
             Self::Choice => "choice",
@@ -121,6 +128,7 @@ impl ParamKind {
             "float" => Self::Float,
             "slider" => Self::Slider,
             "spinbox" => Self::Spin,
+            "sliderspinbox" => Self::SliderSpin,
             "float2" => Self::Float2,
             "float3" => Self::Float3,
             "choice" => Self::Choice,
@@ -406,7 +414,7 @@ pub fn parse_value(kind: ParamKind, text: &str, options: &[String]) -> Result<Pa
         | ParamKind::Operand
         | ParamKind::Code
         | ParamKind::Button => Ok(ParamValue::Text(text.to_string())),
-        ParamKind::Float | ParamKind::Slider => {
+        ParamKind::Float | ParamKind::Slider | ParamKind::SliderSpin => {
             number(t).map(ParamValue::Number).ok_or_else(|| format!("'{text}' is not a number"))
         }
         ParamKind::Spin => match t.parse::<f64>() {
@@ -608,10 +616,10 @@ impl ParamDef {
     }
 
     /// The range the pane holds this parameter to, as `(min, max, step)`,
-    /// for the kinds that have one — Slider, Float3 and Spin (a Float2's
-    /// adapts to its value, and is the pane's to choose). An inline
+    /// for the kinds that have one — Slider, Float3, Spin and SliderSpin (a
+    /// Float2's adapts to its value, and is the pane's to choose). An inline
     /// detail (`slider:-2:2`) wins, then the template's `min` / `max`, then
-    /// the pane's own defaults (0..2, -10..10, 1..10000), which are what a
+    /// the pane's own defaults (0..2, -10..10, 1..10000, 0..10), which are what a
     /// row with none declared clamps to. `param_display` builds the pane's
     /// row from this and the row menu's `Range:` reads it, so the two
     /// cannot disagree. `None` for a kind with no range.
@@ -620,11 +628,12 @@ impl ParamDef {
             ParamKind::Slider => (0.0, 2.0),
             ParamKind::Float3 => (-10.0, 10.0),
             ParamKind::Spin => (1.0, 10000.0),
+            ParamKind::SliderSpin => (0.0, 10.0),
             _ => return None,
         };
         let (min, max, step) = self.declared_range();
         let step = match self.kind() {
-            ParamKind::Spin => Some(step.unwrap_or(1.0)),
+            ParamKind::Spin | ParamKind::SliderSpin => Some(step.unwrap_or(1.0)),
             _ => step,
         };
         Some((min.unwrap_or(lo), max.unwrap_or(hi), step))
@@ -757,7 +766,7 @@ impl ParamDef {
                 }
             }
             (ParamKind::Spin, Value::Num(n)) if n.is_finite() => Some(ParamValue::Int(n.trunc() as i64)),
-            (ParamKind::Float | ParamKind::Slider, Value::Num(n)) => Some(ParamValue::Number(*n as f32)),
+            (ParamKind::Float | ParamKind::Slider | ParamKind::SliderSpin, Value::Num(n)) => Some(ParamValue::Number(*n as f32)),
             _ => parse_value(kind, &v.as_str(), &self.choice_options()).ok(),
         }
     }

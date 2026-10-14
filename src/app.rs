@@ -295,6 +295,7 @@ pub fn control_and_type(shown: &str, kind: ParamKind) -> (&'static str, &'static
         "float3" if shown.split(':').nth(3) == Some("trackball") => "trackball and sliders",
         "slider" | "float2" | "float3" | "float4" => "slider",
         "spinbox" => "spinbox",
+        "sliderspinbox" => "slider with spinbox",
         "choice" => "dropdown",
         "toggle" | "checkbox" => "toggle",
         "button" => "button",
@@ -311,8 +312,11 @@ pub fn control_and_type(shown: &str, kind: ParamKind) -> (&'static str, &'static
         // A text parameter presented as a slider (the Attribute node's
         // Value, one wide) sets a number.
         "slider" => "float",
+        // A slider-spinbox to no decimals (`sliderspinbox:lo:hi:step:0`) steps whole numbers.
+        "sliderspinbox" if shown.split(':').nth(4).is_none_or(|d| d == "0") => "integer",
+        "sliderspinbox" => "float",
         _ => match kind {
-            ParamKind::Slider | ParamKind::Float => "float",
+            ParamKind::Slider | ParamKind::SliderSpin | ParamKind::Float => "float",
             ParamKind::Spin => "integer",
             ParamKind::Float2 => "float2",
             ParamKind::Float3 => "float3",

@@ -1499,8 +1499,8 @@ written, so a save carries none and `sim_solve_key` does not see it.
 Every parameter a template ships has one —
 `the_row_menu_says_what_a_parameter_does` reads the raw files — so a new
 parameter needs its description written with it. `Control:` is the
-control the pane DRAWS for the row (slider, spinbox, dropdown, toggle,
-text box, text box with picker, code editor, button) and `Type:` the type
+control the pane DRAWS for the row (slider, spinbox, slider with spinbox,
+dropdown, toggle, text box, text box with picker, code editor, button) and `Type:` the type
 of value that control SETS, in a programmer's terms (float, float3,
 integer, boolean, enum, string, and node / attribute / group for a text
 that names one) — `control_and_type`, read off the row as the pane shows
@@ -1518,7 +1518,7 @@ the template's value as written there
 (`State::template_default`, which takes a subnet template's override for
 a child inside an instance — the Embryo's `sphere1` defaults its Radius to
 `chf("../radius")` — and is absent for a parameter no template names),
-then for a slider, float3 or spinbox `Min:` / `Max:` / `Step:` as the
+then for a slider, float3, spinbox or sliderspinbox `Min:` / `Max:` / `Step:` as the
 template DECLARES them (`ParamDef::declared_range`, an inline
 `slider:-2:2` included, `none` where it says nothing) followed by
 `Range: lo..hi` with its step as the pane APPLIES it (`ParamDef::range`,

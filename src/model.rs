@@ -570,6 +570,11 @@ pub(crate) fn param_row(p: &ParamDef) -> (String, String, String) {
         } else if p.ty() == "spinbox" {
             let (min, max, step) = p.range().expect("a spinbox has a range");
             format!("spinbox:{}:{}:{}", min as i32, max as i32, step.unwrap_or(1.0) as i32)
+        } else if kind == ParamKind::SliderSpin {
+            // To as many decimals as the step has: a whole step is a whole number.
+            let (min, max, step) = p.range().expect("a slider-spinbox has a range");
+            let step = step.unwrap_or(1.0);
+            format!("sliderspinbox:{}:{}:{}:{}", min, max, step, step_decimals(step))
         } else if p.ty() == "choice" {
             format!("choice:{}", p.options().join(","))
         } else {
@@ -577,6 +582,17 @@ pub(crate) fn param_row(p: &ParamDef) -> (String, String, String) {
         };
         (key.to_string(), value, ptype)
     }
+}
+
+/// The decimals a step is written to, so a value on its grid shows exactly: none for a whole
+/// step, two for 0.05; at most four.
+pub(crate) fn step_decimals(step: f32) -> u32 {
+    (0..=4u32)
+        .find(|&d| {
+            let scaled = step.abs() * 10f32.powi(d as i32);
+            (scaled - scaled.round()).abs() < 1e-3
+        })
+        .unwrap_or(4)
 }
 
 pub fn flatten_node_templates(root: &FsNode) -> Vec<NodeTemplate> {

@@ -165,7 +165,7 @@ pub(crate) fn mcp_tools() -> Vec<McpTool> {
                     "slot": slot("Child index in the current network level"),
                     "name": { "type": "string", "description": "The parameter's name, what a ch() path spells: lowercase letters, digits and underscores (base_resolution)" },
                     "label": { "type": "string", "description": "What the params pane shows for it (Base Resolution); the name when absent" },
-                    "param_type": { "type": "string", "description": "One of text, float, slider, spinbox, float3, choice, toggle, button, code, node, attribute, group — optionally with detail after a colon (slider:-2:2, choice:A,B,C)" },
+                    "param_type": { "type": "string", "description": "One of text, float, slider, spinbox, sliderspinbox, float3, choice, toggle, button, code, node, attribute, group — optionally with detail after a colon (slider:-2:2, choice:A,B,C)" },
                     "default": { "type": "string", "description": "Default value, as a string" },
                 },
                 "required": ["slot", "name", "param_type", "default"],
