@@ -460,6 +460,7 @@ fn main() {
             alpha: 1.0,
             z_before: (verts.len() as u32).saturating_sub(6),
             clip: None,
+            clip_rrect: None,
         }];
         if let Some(renderer) = &mut app.renderer {
             // 3D pane: right of the side panel, below the header (physical px).
