@@ -225,14 +225,85 @@ impl State {
         }
     }
 
-    /// An MCP tool call: `get_state` returns the project snapshot; every
-    /// other tool name is an `McpAction` tag — injected into the arguments
-    /// and run through the shared action path.
+    /// What the `context` tool answers: the project, the level on screen,
+    /// the selection by slot, and the level's nodes as the summary.
+    pub(crate) fn mcp_context(&self) -> cce_ui::mcp::Context {
+        let mut node = &self.doc.fs_root;
+        let mut level = String::new();
+        for &i in &self.doc.current_path {
+            let Some(child) = node.children.get(i) else { break };
+            node = child;
+            level.push('/');
+            level.push_str(&node.name);
+        }
+        if level.is_empty() {
+            level.push('/');
+        }
+        let slots = self.selected_slots();
+        let nodes: Vec<String> = node
+            .children
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let mut line = format!("slot {i}: {} ({})", c.name, c.node_type);
+                if c.bypassed {
+                    line.push_str(", bypassed");
+                }
+                if !c.children.is_empty() {
+                    line.push_str(", enterable");
+                }
+                if slots.contains(&i) {
+                    line.push_str(", selected");
+                }
+                line
+            })
+            .collect();
+        let path = self.doc.loaded_project_path.as_ref();
+        cce_ui::mcp::Context {
+            document: Some(cce_ui::mcp::ContextDocument {
+                title: path
+                    .and_then(|p| p.file_name())
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "Untitled project".to_string()),
+                path: path.map(|p| p.display().to_string()),
+            }),
+            view: serde_json::json!({
+                "level": level,
+                "nodes_at_level": node.children.len(),
+                "frame": self.ui_context[self.slots.playbar].inner().current_frame.round() as i64,
+            }),
+            selection: slots.iter().map(|i| i.to_string()).collect(),
+            dirty: Some(self.has_unsaved_changes()),
+            undo: Some("the `undo` tool: the window's Ctrl+Z history".to_string()),
+            summary: (!nodes.is_empty()).then(|| nodes.join("\n")),
+            ..cce_ui::mcp::Context::new(concat!("cce-designer ", env!("CARGO_PKG_VERSION")))
+        }
+    }
+
+    /// An MCP tool call: `context`, `get_state`, `undo` and `redo` are
+    /// answered here; every other tool name is an `McpAction` tag — injected
+    /// into the arguments and run through the shared action path.
     pub(crate) fn apply_mcp_call(
         &mut self,
         call: &cce_ui::mcp::McpToolCall,
         needs_redraw: &mut bool,
     ) -> Result<serde_json::Value, String> {
+        match call.name.as_str() {
+            cce_ui::mcp::CONTEXT_TOOL => return Ok(self.mcp_context().into_result()),
+            // The parameter history the window's Ctrl+Z walks (not a code
+            // row's typing or a viewer tool's: an agent edits neither).
+            "undo" | "redo" => {
+                let undo = call.name == "undo";
+                return if self.history_step(undo) {
+                    self.sync_parameters_pane();
+                    *needs_redraw = true;
+                    Ok(serde_json::json!(if undo { "Undone" } else { "Redone" }))
+                } else {
+                    Ok(serde_json::json!(if undo { "Nothing to undo" } else { "Nothing to redo" }))
+                };
+            }
+            _ => {}
+        }
         if call.name == "get_state" {
             let mut v = serde_json::to_value(self.project_snapshot())
                 .map_err(|e| format!("failed to serialize state: {e}"))?;

@@ -88,11 +88,19 @@ gone.)
 
 The main window runs an embedded MCP server on `127.0.0.1:3001`
 (`CCE_DESIGNER_MCP_PORT` overrides so a second instance can run alongside;
-`src/api.rs`). This is the way to drive/inspect the running app: attach with
+`src/api.rs`), filed in cce-ui's MCP registry so the cce-claude popup finds
+it. `mcp_server()` carries the brief (`BRIEF`, sent as `instructions`) and
+classes every tool: `context` and `get_state` read; navigation, edits,
+`undo` and `redo` are Edit; `save`, `load`, `menu_click`, `run_command` and
+`menu_action` are Outward (a new tool needs a class, or the popup asks for it
+every time). `context` (`mcp_context` in `src/window.rs`) names the project,
+the level, the selection by slot and the level's nodes; `undo` / `redo` walk
+`history_step`, the parameter history Ctrl+Z walks. This is the way to drive/inspect the running app: attach with
 `claude mcp add --transport http cce-designer http://127.0.0.1:3001/mcp`, or
 speak JSON-RPC directly with curl (`initialize` / `tools/list` / `tools/call`).
 There is one tool per `McpAction` variant (tool name = the variant's serde
-tag, dispatched in `apply_mcp_call` in `src/window.rs`) plus `get_state`,
+tag, dispatched in `apply_mcp_call` in `src/window.rs`) plus `context`,
+`undo`, `redo` and `get_state`,
 which returns the project beside three app-state fields that are not part of
 the save: `playbar`, `grid` and `status` — the status line's text as shown,
 which is the way to read a load report, a node error or a refused edit when

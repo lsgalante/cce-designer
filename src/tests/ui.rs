@@ -6271,8 +6271,8 @@ fn test_popover_draws_over_widget_labels() {
 
 #[test]
 fn test_mcp_tools_map_to_actions() {
-    // Every MCP tool except get_state must dispatch by injecting its name
-    // as the McpAction serde tag; filling each schema property with a
+    // Every MCP tool except the four answered directly (context, get_state,
+    // undo, redo) must dispatch by injecting its name as the McpAction serde tag; filling each schema property with a
     // dummy of its declared type must yield a deserializable action, so
     // this catches tool-name/field drift against the enum.
     let tools = crate::api::mcp_tools();
@@ -6281,7 +6281,7 @@ fn test_mcp_tools_map_to_actions() {
     for tool in &tools {
         assert!(names.insert(tool.name.clone()), "duplicate tool name: {}", tool.name);
         assert_eq!(tool.input_schema["type"], "object", "{}: schema must be an object", tool.name);
-        if tool.name == "get_state" {
+        if matches!(tool.name.as_str(), "context" | "get_state" | "undo" | "redo") {
             continue;
         }
         let mut args = serde_json::Map::new();
@@ -6302,6 +6302,49 @@ fn test_mcp_tools_map_to_actions() {
         serde_json::from_value::<McpAction>(serde_json::Value::Object(args))
             .unwrap_or_else(|e| panic!("tool '{}' does not map to an McpAction: {e}", tool.name));
     }
+}
+
+/// The popup's two entry points into the designer: `context` names the
+/// level on screen and its nodes by slot, and `undo` takes back an edit an
+/// agent made, through the same history the window's Ctrl+Z walks.
+#[test]
+fn mcp_context_names_the_level_and_undo_takes_back_an_agent_edit() {
+    let call = |state: &mut State, name: &str| {
+        let (reply, _rx) = std::sync::mpsc::channel();
+        let call = cce_ui::mcp::McpToolCall { name: name.into(), arguments: serde_json::json!({}), reply };
+        let mut redraw = false;
+        state.apply_mcp_call(&call, &mut redraw)
+    };
+    let mut state = State::new(false);
+    let mut redraw = false;
+    state
+        .apply_action(McpAction::AddNode { template_name: "Wrangle".into(), name: Some("ctx_probe".into()), x: 3.0, y: 9.0 }, &mut redraw)
+        .unwrap();
+    let slot = state.current_dir().children.iter().position(|c| c.name == "ctx_probe").unwrap();
+    state.apply_action(McpAction::Select { slot }, &mut redraw).unwrap();
+
+    let ctx = call(&mut state, "context").unwrap();
+    assert!(ctx["app"].as_str().unwrap().starts_with("cce-designer "));
+    // The default project opens inside its first network.
+    let mut node = &state.doc.fs_root;
+    let mut level = String::new();
+    for &i in &state.doc.current_path {
+        node = &node.children[i];
+        level = format!("{level}/{}", node.name);
+    }
+    assert!(!level.is_empty(), "the default project opens inside a network");
+    assert_eq!(ctx["view"]["level"], level);
+    assert_eq!(ctx["selection"], serde_json::json!([slot.to_string()]));
+    let summary = ctx["summary"].as_str().unwrap();
+    assert!(summary.contains(&format!("slot {slot}: ctx_probe (")), "{summary}");
+    assert!(summary.lines().any(|l| l.contains("ctx_probe") && l.ends_with("selected")), "{summary}");
+
+    state.apply_action(McpAction::RenameNode { slot, new_name: "renamed".into() }, &mut redraw).unwrap();
+    assert_eq!(state.current_dir().children[slot].name, "renamed");
+    assert_eq!(call(&mut state, "undo").unwrap(), "Undone");
+    assert_eq!(state.current_dir().children[slot].name, "ctx_probe");
+    assert_eq!(call(&mut state, "redo").unwrap(), "Redone");
+    assert_eq!(state.current_dir().children[slot].name, "renamed");
 }
 
 #[test]
