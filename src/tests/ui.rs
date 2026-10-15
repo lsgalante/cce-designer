@@ -6304,6 +6304,13 @@ fn test_mcp_tools_map_to_actions() {
     }
 }
 
+/// An unclassed tool makes the cce-claude popup ask before every call.
+#[test]
+fn every_mcp_tool_is_classed() {
+    let server = crate::api::mcp_server();
+    assert!(server.unclassed().is_empty(), "classify these in mcp_server(): {:?}", server.unclassed());
+}
+
 /// The popup's two entry points into the designer: `context` names the
 /// level on screen and its nodes by slot, and `undo` takes back an edit an
 /// agent made, through the same history the window's Ctrl+Z walks.
