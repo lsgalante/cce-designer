@@ -397,6 +397,15 @@ pub struct Dialog {
     /// Which of the dragged row's sliders the press took: 0 for a slider,
     /// either end of a float2.
     slider_part: usize,
+    /// What the current scroll gesture moved first — the list (`None`) or a
+    /// row's slider part — while the gesture is the dialog's
+    /// (`scroll_initiate_widget_id`, cleared at the gesture break). It keeps
+    /// the rest of the gesture, so a list scrolled under the pointer never
+    /// hands it to a slider row the scroll carries there, nor a slider
+    /// turned under the pointer to the list once the pointer slips off its
+    /// band.
+    wheel_latch: Option<usize>,
+    wheel_latch_part: usize,
     /// The float2 end under the pointer, while its row's control is
     /// hovered — the one that lifts.
     hover_part: usize,
@@ -452,6 +461,8 @@ impl Dialog {
             slider_stamp: RefCell::new(slider_stamp),
             slider_drag: None,
             slider_part: 0,
+            wheel_latch: None,
+            wheel_latch_part: 0,
             hover_part: 0,
             slider_track: (0.0, 1.0),
             slider_change: None,
@@ -1547,14 +1558,31 @@ impl Input for Dialog {
                 if self.rows.is_empty() {
                     return false;
                 }
+                // The rest of a gesture goes where its first wheel did.
+                let id = ectx.id;
+                let latched = ectx.ui.as_deref().is_some_and(|ui| ui.scroll_initiate_widget_id == Some(id));
+                let latch = |ectx: &mut EventCtx| {
+                    if let Some(ui) = ectx.ui.as_deref_mut() {
+                        ui.scroll_initiate_widget_id = Some(id);
+                    }
+                };
                 // Over a slider row's control the wheel turns the slider,
                 // not the list — the rest of the row still scrolls.
-                if let Some(i) = self.row_at(rect, *x, *y) {
-                    if let Some((k, _)) = self.row_rect(rect, i).and_then(|r| self.slider_part_at(r, i, *x, false)) {
-                        // Up is more, for a wheel and for a finger alike
-                        // (`value_notches_y`).
-                        return self.scroll_slider(i, k, delta.value_notches_y());
+                let slider = if latched {
+                    self.wheel_latch.map(|i| (i, self.wheel_latch_part))
+                } else {
+                    self.row_at(rect, *x, *y)
+                        .and_then(|i| self.row_rect(rect, i).and_then(|r| self.slider_part_at(r, i, *x, false)).map(|(k, _)| (i, k)))
+                };
+                if let Some((i, k)) = slider {
+                    // Up is more, for a wheel and for a finger alike
+                    // (`value_notches_y`).
+                    let turned = self.scroll_slider(i, k, delta.value_notches_y());
+                    if turned && !latched {
+                        (self.wheel_latch, self.wheel_latch_part) = (Some(i), k);
+                        latch(ectx);
                     }
+                    return turned || latched;
                 }
                 // The DE scroll model: a notch is one row and glides there, a
                 // trackpad tracks 1:1 and coasts on the lift (`tick` advances).
@@ -1567,6 +1595,10 @@ impl Input for Dialog {
                     cce_ui::widget::Bounds::max(max),
                 );
                 self.scroll_px = self.scroll_motion.y.pos();
+                if moved && !latched {
+                    self.wheel_latch = None;
+                    latch(ectx);
+                }
                 // A scroll raises the bar and starts its hold.
                 self.sb_activity.bump();
                 moved || self.scroll_motion.is_animating()

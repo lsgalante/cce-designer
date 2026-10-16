@@ -282,7 +282,14 @@ impl State {
         } else {
             // The pane hit but the Graph widget did not take the
             // wheel (circular-pane hit shape wider than its rect,
-            // or a hidden graph): a plain instant pan.
+            // or a hidden graph): a plain instant pan — the Graph's,
+            // so not in a gesture something else owns (the routed
+            // pass has noted this wheel).
+            let graph = self.slots.content.id();
+            if !self.ui_context.may_take_wheel(graph) {
+                return false;
+            }
+            self.ui_context.claim_scroll_gesture(graph);
             let (dx, dy) = match delta {
                 MouseScrollDelta::LineDelta(x, y) => {
                     (*x * 30.0 * self.net.graph_scroll_speed, *y * 30.0 * self.net.graph_scroll_speed)

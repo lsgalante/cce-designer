@@ -524,9 +524,70 @@ fn dialog_slider_row_press_reports_the_value_under_the_pointer() {
     assert!(ctx.lend_h(d, |w, ctx| w.handle_event(&wheel(band_x + 10.0, row_y), ctx)).unwrap());
     let v = ctx[d].take_slider_change().map(|(_, v)| v).expect("a wheel over the band reports a value");
     assert!((v - (before + 0.02 * 300.0)).abs() < 1e-3, "notch up: {before} -> {v}");
+    // A new gesture: the last one is the slider's to its end.
+    ctx.last_scroll_time = None;
     ctx.note_scroll_event();
     ctx.lend_h(d, |w, ctx| w.handle_event(&wheel(30.0, row_y), ctx)).unwrap();
     assert_eq!(ctx[d].take_slider_change(), None, "over the label the wheel is the list's");
+}
+
+/// A scroll gesture is the list's or a slider row's, whichever it first
+/// moved: the list scrolled under the pointer carries slider rows there and
+/// they decline the rest of the gesture; a slider turned under the pointer
+/// keeps it when the pointer slips off its band.
+#[test]
+fn a_dialog_scroll_gesture_stays_with_what_it_first_moved() {
+    use crate::dialog::{Control, Dialog, Row, ROW_H, SLIDER_W};
+    use cce_ui::widget::scroll_motion::{force_scroll_settings, ScrollSettings};
+    use cce_ui::widget::WidgetHost;
+    force_scroll_settings(Some(ScrollSettings { smooth: false, kinetic: false, ..Default::default() }));
+    let pause = || std::thread::sleep(std::time::Duration::from_millis(8));
+    let mut ctx = cce_ui::context::UiContext::new();
+    let d = ctx.insert(Dialog::new());
+    ctx[d].set_visible(true);
+    WidgetHost::set_rect(&mut ctx[d], 0.0, 0.0, 520.0, 420.0);
+    let plain = |i: usize| Row { id: format!("c{i}"), label: format!("Command {i}"), chord: String::new(), control: None, truncate_head: false };
+    let slider = |i: usize| Row {
+        id: format!("s{i}"),
+        label: format!("Slider {i}"),
+        chord: String::new(),
+        control: Some(Control::Slider { value: 100.0, min: 20.0, max: 320.0, dec: 0, step: 10.0, suffix: "%" }),
+        truncate_head: false,
+    };
+    ctx[d].set_rows((0..3).map(plain).chain((3..30).map(slider)).collect());
+    ctx[d].set_page(10);
+    ctx[d].set_occluding(false);
+    let row_y = 12.0 + 30.0 + 8.0 + 12.0;
+    let band_x = 520.0 - 12.0 - 8.0 - SLIDER_W + 10.0;
+    let wheel = |x: f32, y: f32| cce_ui::widget::Event::MouseWheel {
+        delta: cce_ui::widget::MouseScrollDelta::LineDelta(0.0, -1.0),
+        x, y, local_x: x, local_y: y,
+    };
+    let values = |ctx: &cce_ui::context::UiContext| ctx[d].rows.iter().filter_map(|r| r.slider_value()).collect::<Vec<_>>();
+    let start = values(&ctx);
+
+    // Over the band's column on a plain row: the list scrolls, and goes on
+    // scrolling as slider rows pass under the pointer.
+    for n in 1..=6 {
+        assert!(ctx.lend_h(d, |w, ctx| w.handle_event(&wheel(band_x, row_y), ctx)).unwrap());
+        assert_eq!(ctx[d].scroll_px, n as f32 * ROW_H, "notch {n} scrolls the list");
+        pause();
+    }
+    assert_eq!(ctx[d].take_slider_change(), None);
+    assert_eq!(values(&ctx), start, "no slider row took the list's gesture");
+
+    // A new gesture over a slider row's band turns it, and keeps turning
+    // it with the pointer off the band; the list stays put.
+    ctx.last_scroll_time = None;
+    let scrolled = ctx[d].scroll_px;
+    assert!(ctx.lend_h(d, |w, ctx| w.handle_event(&wheel(band_x, row_y), ctx)).unwrap());
+    let (_, v) = ctx[d].take_slider_change().expect("the slider turns");
+    pause();
+    ctx.lend_h(d, |w, ctx| w.handle_event(&wheel(30.0, row_y), ctx)).unwrap();
+    let (_, w) = ctx[d].take_slider_change().expect("the slider keeps the gesture");
+    assert!(w < v, "{v} -> {w}");
+    assert_eq!(ctx[d].scroll_px, scrolled, "the list stays put");
+    force_scroll_settings(None);
 }
 
 /// The band ends where the key bindings do. The chord column's right edge

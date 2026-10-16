@@ -569,6 +569,7 @@ fn a_scroll_over_the_plateless_network_orbits_unless_it_begins_on_a_node() {
 
     // On a node: the graph's, not the camera's.
     state.net.overlay_wheel = None;
+    state.ui_context.last_scroll_time = None; // and the toolkit's gesture
     let find_node = |state: &State| state
         .current_dir()
         .children
@@ -589,6 +590,7 @@ fn a_scroll_over_the_plateless_network_orbits_unless_it_begins_on_a_node() {
     let (nx, ny) = find_node(&state);
     at(&mut state, nx, ny);
     state.net.overlay_wheel = None;
+    state.ui_context.last_scroll_time = None; // and the toolkit's gesture
     assert!(state.overlay_wheel_to_graph(ScrollPhase::Finger));
     state.net.pan_x += cw;
     state.sync_grid_settings();
@@ -670,12 +672,14 @@ fn a_chain_under_the_pointer_has_a_box_and_its_input_is_the_networks() {
 
     // The wheel pans the graph and turns no camera.
     state.net.overlay_wheel = None;
+    state.ui_context.last_scroll_time = None; // and the toolkit's gesture
     let (turned, pan) = (orbit(&state), (state.net.pan_x, state.net.pan_y));
     state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::PixelDelta(Position { x: 0.0, y: 30.0 }) });
     assert_eq!(orbit(&state), turned, "a scroll in the box does not orbit");
     assert_ne!((state.net.pan_x, state.net.pan_y), pan, "it pans the graph");
     assert_eq!(state.focused_pane, LEFT_MENUBAR_IDX);
     state.net.overlay_wheel = None;
+    state.ui_context.last_scroll_time = None; // and the toolkit's gesture
 
     // The box followed its chain through the pan; find empty space in it again.
     state.tick_frame(1.0 / 60.0);
@@ -723,6 +727,7 @@ fn a_chain_under_the_pointer_has_a_box_and_its_input_is_the_networks() {
         state.tick_frame(1.0 / 30.0);
     }
     assert!(state.net.chain_box.is_none(), "the box fades out");
+    state.ui_context.last_scroll_time = None; // a new gesture
     let turned = orbit(&state);
     state.handle_event(&WindowEvent::MouseWheel { delta: MouseScrollDelta::PixelDelta(Position { x: 0.0, y: 30.0 }) });
     assert_ne!(orbit(&state), turned, "a scroll outside the boxes orbits");
