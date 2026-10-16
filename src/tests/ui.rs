@@ -422,7 +422,7 @@ fn test_plate_corner_menu_is_contextual() {
     use crate::plate_menu::{PlateMenuAction, PLATE_SLOTS};
     let mut state = State::new(false);
     state.resize(1600.0, 900.0, 1.0);
-    state.execute_menu_action("Show Spreadsheet Pane");
+    show_spreadsheet_with_a_row(&mut state);
 
     // A plate that collapses: not the network nor the params HUD,
     // which are on the scene and not plates of a dock.
@@ -762,7 +762,7 @@ fn the_network_is_in_no_dock() {
     use cce_ui::widget::{ElementState, MouseButton};
     let mut state = State::new(false);
     state.resize(1600.0, 900.0, 1.0);
-    state.execute_menu_action("Show Spreadsheet Pane");
+    show_spreadsheet_with_a_row(&mut state);
     assert_eq!(state.positions[NETWORK_PANEL_IDX], (0.0, HEADER_H, 1600.0, state.body_h()));
     assert!(state.slots.get_dyn(&state.ui_context, crate::slots::CONTENT_IDX).visible(), "shown");
     assert_eq!(state.positions[SPREADSHEET_IDX].0, 18.0, "the spreadsheet flush left, a gap in");
@@ -1311,9 +1311,7 @@ fn the_playbar_is_attached_to_the_bottom_edge() {
     let mut state = State::new(false);
     state.resize(1600.0, 900.0, 1.0);
     state.execute_menu_action("Show Playbar Pane");
-    state.execute_menu_action("Show Spreadsheet Pane");
-    state.rebuild_positions();
-    state.apply_layout();
+    show_spreadsheet_with_a_row(&mut state);
     assert!(state.show_playbar && state.show_spreadsheet);
     let pb = state.positions[PLAYBAR_IDX];
     let lip = cce_ui::layout::bevel_width();
@@ -1356,8 +1354,8 @@ fn the_params_hud_is_under_the_plates_and_stops_above_the_bottom_ones() {
     // The spreadsheet and the playbar below it: it stops a gap above
     // the higher of them. The plate is as wide as its table: a narrow
     // one, along the left, is not under the HUD and leaves it be.
-    state.execute_menu_action("Show Spreadsheet Pane");
     state.execute_menu_action("Show Playbar Pane");
+    show_spreadsheet_with_a_row(&mut state);
     state.sheet.floating_spreadsheet_height = 500.0;
     state.spreadsheet_mut().set_spreadsheet_data(vec!["a".into()], vec![vec!["1".into()]]);
     state.rebuild_positions();

@@ -372,6 +372,40 @@ fn the_spreadsheet_plate_is_as_wide_as_its_table() {
     assert_eq!(state.positions[SPREADSHEET_IDX].2, 1600.0 - 36.0, "a table wider than the window fills its room");
 }
 
+/// An empty spreadsheet has no plate: with nothing selected, or a node
+/// that gives no points, it is not laid out, claims nothing and takes no
+/// resize; it comes back with the first row.
+#[test]
+fn an_empty_spreadsheet_is_hidden() {
+    use crate::slots::SPREADSHEET_IDX;
+    let mut state = State::new(false);
+    state.resize(1600.0, 900.0, 1.0);
+    if !state.show_spreadsheet {
+        state.execute_menu_action("Show Spreadsheet Pane");
+    }
+    state.deselect_node();
+    state.sync_nodes();
+    assert!(state.sheet.spreadsheet_points.is_empty(), "nothing selected, no rows");
+    assert!(!state.spreadsheet_shown());
+    assert_eq!(state.positions[SPREADSHEET_IDX].2, 0.0, "no plate");
+    assert!(!cce_ui::widget::WidgetHost::visible(&state.ui_context[state.slots.spreadsheet]));
+    let (gx, gy, _, _) = state.floating_spreadsheet_rect();
+    assert!(!state.on_spreadsheet_resize_edge(gx + 20.0, gy), "no edge to resize");
+    assert!(!state.over_floating_pane_at(gx + 20.0, gy + 20.0), "the scene is the scene's");
+
+    let mut redraw = false;
+    let slot = state.current_dir().children.iter().position(|c| c.name == "sphere1").unwrap();
+    state.apply_action(McpAction::Select { slot }, &mut redraw).unwrap();
+    state.sync_nodes();
+    assert!(state.spreadsheet_shown(), "a sphere's points are rows");
+    assert_eq!(state.positions[SPREADSHEET_IDX], state.floating_spreadsheet_rect());
+    assert!(cce_ui::widget::WidgetHost::visible(&state.ui_context[state.slots.spreadsheet]));
+
+    state.deselect_node();
+    state.sync_nodes();
+    assert_eq!(state.positions[SPREADSHEET_IDX].2, 0.0, "emptied, gone again");
+}
+
 /// `merge_owned` takes a detail's arrays where `merge` copies them,
 /// and the result is `merge`'s: every point, identity (renumbered),
 /// attribute, kind and group, the detail attributes left behind, and

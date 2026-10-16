@@ -3030,7 +3030,14 @@ the scene; now the params HUD runs down past a plate that stops short of
 it. A refill that changes the table's width lays out positions again at
 the end of `sync_selection_readouts` — positions only, since
 `sync_layout` also moves the grid cursor and with it the selection
-(`the_spreadsheet_plate_is_as_wide_as_its_table`). Its TOP edge resizes it (`on_spreadsheet_resize_edge`
+(`the_spreadsheet_plate_is_as_wide_as_its_table`). **An empty table has no
+plate** (since 2026-10-16, `State::spreadsheet_shown`, which every layout
+branch reads): with nothing selected, or a node that gives no points, the
+spreadsheet is not laid out — no rect, no claim, no resize edge — and the
+first row brings it back, through the same relayout. A row is a point, so
+the count is `SheetPane::spreadsheet_points`. A detached spreadsheet keeps
+its stub, and its window its pane (`an_empty_spreadsheet_is_hidden`; the
+layout tests give the sheet a row with `show_spreadsheet_with_a_row`). Its TOP edge resizes it (`on_spreadsheet_resize_edge`
 — its sides tucked it under a side dock's plate). The **params HUD**'s left
 edge sets `params_hud_width`. The plate menus hold the window actions alone
 — Collapse / Expand, Detach / Reattach. `PlateGeometry` saves those two

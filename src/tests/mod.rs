@@ -244,6 +244,16 @@ fn test_set_as_default_without_a_loaded_file_is_a_noop() {
 }
 
 /// Press `button` at (x, y), as the pointer would.
+/// Show the spreadsheet with a row in it, so it has a plate: an empty one
+/// is not laid out (`State::spreadsheet_shown`). The row is a point, in the
+/// shape a refill leaves it; tests that need a real table select a node.
+pub(super) fn show_spreadsheet_with_a_row(state: &mut State) {
+    state.show_spreadsheet = true;
+    state.sheet.spreadsheet_points = vec![[0.0; 3]];
+    state.rebuild_positions();
+    state.apply_layout();
+}
+
 fn press_at(state: &mut State, x: f32, y: f32, button: cce_ui::widget::MouseButton) {
     use crate::window::{LocalPosition, WindowEvent};
     use cce_ui::widget::ElementState;
@@ -262,10 +272,8 @@ fn a_plates_rows_are_in_its_right_click_menu() {
     use cce_ui::widget::{context_menu, MouseButton};
     let mut state = State::new(false);
     state.resize(1600.0, 900.0, 1.0);
-    state.show_spreadsheet = true;
     state.show_playbar = true;
-    state.rebuild_positions();
-    state.apply_layout();
+    show_spreadsheet_with_a_row(&mut state);
     let collapse = "Collapse".to_string();
 
     // The spreadsheet: the plate menu alone.
@@ -337,10 +345,10 @@ fn the_plates_have_no_docks() {
     use crate::slots::{NETWORK_PANEL_IDX, PARAM_IDX, PLAYBAR_IDX, SPREADSHEET_IDX};
     let mut state = State::new(false);
     state.resize(1600.0, 900.0, 1.0);
-    state.execute_menu_action("Show Spreadsheet Pane");
     if !state.show_playbar {
         state.execute_menu_action("Show Playbar Pane");
     }
+    show_spreadsheet_with_a_row(&mut state);
     let (x, y, w, h) = state.positions[SPREADSHEET_IDX];
     let table = state.slots.spreadsheet(&state.ui_context).content_width().ceil();
     assert_eq!((x, w), (18.0, table.clamp(State::SPREADSHEET_MIN_W, 1600.0 - 36.0)), "as wide as its table, within the window");
@@ -377,6 +385,7 @@ fn the_plates_have_no_docks() {
     let mut b = State::new(false);
     b.resize(1600.0, 900.0, 1.0);
     b.load_from_file(&dir).expect("load");
+    show_spreadsheet_with_a_row(&mut b);
     let (bx, _, bw, _) = b.positions[SPREADSHEET_IDX];
     assert_eq!((bx, bw), (18.0, b.floating_spreadsheet_rect().2), "along the bottom");
     assert!((b.params.params_hud_width - 400.0).abs() < 0.5, "an older save's params width is the HUD's: {}", b.params.params_hud_width);
@@ -395,7 +404,7 @@ fn test_collapse_shrinks_the_plate_and_restores_it() {
     state.resize(1600.0, 900.0, 1.0);
     state.set_pane_collapsed(NETWORK_PANEL_IDX, true);
     assert!(!state.pane_is_collapsed(NETWORK_PANEL_IDX), "the network does not collapse");
-    state.execute_menu_action("Show Spreadsheet Pane");
+    show_spreadsheet_with_a_row(&mut state);
 
     let (_, _, _, full_h) = state.slots.get_dyn(&state.ui_context, SPREADSHEET_IDX).rect();
     assert!(full_h > STUB_H, "the plate starts taller than a stub");
@@ -890,9 +899,7 @@ fn spreadsheet_header_press_reaches_the_widget_not_the_camera() {
     use cce_ui::widget::{ElementState, MouseButton};
     let mut state = State::new(false);
     state.resize(1600.0, 900.0, 1.0);
-    state.show_spreadsheet = true;
-    state.rebuild_positions();
-    state.apply_layout();
+    show_spreadsheet_with_a_row(&mut state);
     state.spreadsheet_mut().set_spreadsheet_data(
         vec!["Point".into(), "Pos.x".into()],
         vec![vec!["0".into(), "9".into()], vec!["1".into(), "10".into()]],

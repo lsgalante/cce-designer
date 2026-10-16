@@ -1853,6 +1853,22 @@ impl State {
     /// The narrowest the spreadsheet's plate is, an empty table's.
     pub const SPREADSHEET_MIN_W: f32 = 150.0;
 
+    /// Whether the spreadsheet's plate is laid out: shown, and holding a
+    /// row (since 2026-10-16). A table with no rows — nothing selected, a
+    /// node with no points — is no plate at all, as the params plate is a
+    /// dot with nothing to show; it comes back with the first row. A row is
+    /// a point (`SheetPane::spreadsheet_points`, kept by every refill), so
+    /// that is the count. A detached spreadsheet keeps its stub, the one way
+    /// back, and a detached spreadsheet WINDOW its pane, whatever the table
+    /// holds. Every layout branch reads this, so what is laid out is what
+    /// this says and the refill's relayout below cannot chase it.
+    pub fn spreadsheet_shown(&self) -> bool {
+        self.show_spreadsheet
+            && (!self.sheet.spreadsheet_points.is_empty()
+                || self.pane_is_detached(SPREADSHEET_IDX)
+                || self.detached.detached_pane == Some(SPREADSHEET_IDX))
+    }
+
     /// The spreadsheet's rect — the single derivation the layout pass and
     /// the edge hotspot share: the strip along the bottom, a gap in from
     /// the window's left, standing a gap above the playbar, as tall as
@@ -1881,7 +1897,7 @@ impl State {
     /// height. (Its left and right edges tucked it under a side dock's plate
     /// until the docks went, 2026-10-07.)
     pub fn on_spreadsheet_resize_edge(&self, cx: f32, cy: f32) -> bool {
-        if !self.show_spreadsheet {
+        if !self.show_spreadsheet || self.positions[SPREADSHEET_IDX].2 <= 0.0 {
             return false;
         }
         let (ss_x, ss_y, ss_w, _) = self.floating_spreadsheet_rect();
@@ -4918,11 +4934,15 @@ impl State {
             self.rebuild_group_markers();
         }
         // The plate is as wide as the table: a table that came out wider or
-        // narrower lays the panes out again — last, once everything this
-        // refresh read is in, since the layout pass can come back here.
-        // Positions only: `sync_layout` also moves the grid cursor and with
-        // it the selection, which a refresh of what is selected must not.
-        if self.show_spreadsheet && self.positions[SPREADSHEET_IDX].2 > 0.0 && self.positions[SPREADSHEET_IDX].2 != self.floating_spreadsheet_rect().2 {
+        // narrower, or that emptied or filled (an empty one has no plate),
+        // lays the panes out again — last, once everything this refresh
+        // read is in, since the layout pass can come back here. Positions
+        // only: `sync_layout` also moves the grid cursor and with it the
+        // selection, which a refresh of what is selected must not.
+        let laid = self.positions[SPREADSHEET_IDX].2 > 0.0;
+        if self.show_spreadsheet
+            && (laid != self.spreadsheet_shown() || (laid && self.positions[SPREADSHEET_IDX].2 != self.floating_spreadsheet_rect().2))
+        {
             self.rebuild_positions();
             self.apply_layout();
         }
@@ -5736,7 +5756,7 @@ impl State {
             let body_h = body_h - pb_h;
             let left_visible = false;
             let viewport_visible = self.show_viewport;
-            let spreadsheet_visible = self.show_spreadsheet;
+            let spreadsheet_visible = self.spreadsheet_shown();
             let center_visible = viewport_visible || spreadsheet_visible;
             let right_visible = self.show_parameters;
 
@@ -5834,7 +5854,7 @@ impl State {
                 let body_h = body_h - pb_h;
                 let left_visible = false;
                 let viewport_visible = self.show_viewport;
-                let spreadsheet_visible = self.show_spreadsheet;
+                let spreadsheet_visible = self.spreadsheet_shown();
                 let center_visible = viewport_visible || spreadsheet_visible;
                 let right_visible = self.show_parameters;
 
@@ -5942,7 +5962,7 @@ impl State {
                 self.ui_context[self.slots.playbar].set_visible(self.show_playbar);
             } else {
                 let viewport_visible = self.show_viewport;
-                let spreadsheet_visible = self.show_spreadsheet;
+                let spreadsheet_visible = self.spreadsheet_shown();
                 let right_visible = self.show_parameters;
 
                 let col_c_x = paginator_w;
@@ -6061,7 +6081,7 @@ impl State {
             if active_menubar == PARAM_MENUBAR_IDX && !self.show_parameters {
                 active_menubar = HEADER_IDX;
             }
-            if active_menubar == SPREADSHEET_MENUBAR_IDX && !self.show_spreadsheet {
+            if active_menubar == SPREADSHEET_MENUBAR_IDX && !self.spreadsheet_shown() {
                 active_menubar = HEADER_IDX;
             }
 
