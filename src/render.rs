@@ -1259,9 +1259,28 @@ impl State {
             return;
         }
         let (vx, vy, vw, vh) = self.camera.last_scene_view_rect;
+        // The nodes stand in front of the scene, and its numbers behind
+        // them: a number is painted into what the nodes leave of it.
+        let covers = self.network_node_covers();
         pc.clip(rect(vx, vy, vw, vh), |pc| {
             for (text, x, y, color, alpha) in labels {
-                pc.text_faded(text, x, y, POINT_NUMBER_PX, color, alpha, None, None);
+                // The label's box, generous: what falls outside every
+                // piece is cut, and an estimate a glyph overruns would
+                // clip the number itself.
+                let (bx, by) = (x - 2.0, y - 2.0);
+                let (w, h) = (text.len() as f32 * POINT_NUMBER_PX * 0.7 + 4.0, POINT_NUMBER_PX * 1.4 + 4.0);
+                let hit: Vec<_> = covers
+                    .iter()
+                    .copied()
+                    .filter(|&(cx, cy, cw, ch)| cx < bx + w && cx + cw > bx && cy < by + h && cy + ch > by)
+                    .collect();
+                if hit.is_empty() {
+                    pc.text_faded(text, x, y, POINT_NUMBER_PX, color, alpha, None, None);
+                    continue;
+                }
+                for piece in uncovered(rect(bx, by, w, h), &hit) {
+                    pc.clip(piece, |pc| pc.text_faded(text.clone(), x, y, POINT_NUMBER_PX, color, alpha, None, None));
+                }
             }
         });
     }

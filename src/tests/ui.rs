@@ -1301,6 +1301,56 @@ fn a_point_number_under_a_plate_is_not_drawn() {
     assert_eq!(state.point_number_labels().len(), all.len());
 }
 
+/// The nodes stand in front of the scene, and a point number behind
+/// them: it is painted into what the node bodies and names leave of it,
+/// since the engine lays all text out after all geometry and a number
+/// would otherwise stand over a node.
+#[test]
+fn a_point_number_is_behind_the_nodes() {
+    let mut state = State::new(false);
+    state.resize(1600.0, 900.0, 1.0);
+    state.rebuild_positions();
+    state.apply_layout();
+    state.view.show_point_numbers = true;
+    state.rebuild_scene_geometry();
+    let _ = state.collect_display_list();
+    let covers = state.network_node_covers();
+    assert!(!covers.is_empty(), "the level has nodes");
+    for &(x, y, w, h) in covers.iter().step_by(2) {
+        assert!(state.graph().is_node_rect(x, y, w, h), "a cover is a node's body as drawn: {:?}", (x, y, w, h));
+    }
+
+    // Slide the network so the first node's body begins halfway along a
+    // number: the number is cut at the body's left edge.
+    let labels = state.point_number_labels();
+    let (text, lx, ly, ..) = labels.iter().find(|l| l.0.len() >= 2).cloned().expect("a number of two digits");
+    let (bx, by, _, bh) = covers[0];
+    let edge = lx + 8.0;
+    state.net.pan_x += edge - bx;
+    state.net.pan_y += ly + 6.0 - (by + bh * 0.5);
+    state.sync_grid_settings();
+    state.rebuild_positions();
+    state.apply_layout();
+    state.update_panel_bounds();
+    let list = state.collect_display_list();
+    assert_eq!(state.point_number_labels().iter().find(|l| l.0 == text && l.1 == lx).map(|l| l.2), Some(ly), "the camera did not move");
+    let body = state.network_node_covers()[0];
+    assert!((body.0 - edge).abs() < 0.5, "the body begins mid-number: {body:?}");
+    let clips: Vec<_> = list
+        .items
+        .iter()
+        .filter_map(|i| match &i.prim {
+            cce_ui::scene::paint::Prim::Text { text: t, x, y, .. } if *t == text && *x == lx && *y == ly => Some(i.clip),
+            _ => None,
+        })
+        .collect();
+    assert!(!clips.is_empty(), "what the body leaves of the number is drawn");
+    for clip in clips {
+        let c = clip.expect("cut");
+        assert!(c.x + c.width <= edge + 0.01, "nothing of it over the body: {c:?}");
+    }
+}
+
 /// The playbar is attached to the window's bottom edge, the full width;
 /// the plates above stop a gap short of its top, and the viewport's
 /// bottom-anchored text stands on it rather than on its transport.

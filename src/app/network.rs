@@ -1307,6 +1307,31 @@ impl State {
         )
     }
 
+    /// What the network draws in front of the scene, as window rects: each
+    /// node's body and its name, where the overlay shows them. A point
+    /// number is scene text, and the engine lays all text out after all
+    /// geometry, so it is painted into what these leave (`uncovered`) or
+    /// it stands over the nodes. The name's rect is its floor's, padded
+    /// as `node_label_floors` pads it, from `node_extent`'s estimate.
+    pub(crate) fn network_node_covers(&self) -> Vec<(f32, f32, f32, f32)> {
+        if !self.network_overlay() {
+            return Vec::new();
+        }
+        let g = &self.net.grid;
+        let (ox, oy) = self.network_origin();
+        let (ox, oy) = (ox + self.net.pan_x, oy + self.net.pan_y);
+        let font = (14.0 * g.node_w / 80.0).clamp(6.0, 48.0);
+        let mut out = Vec::new();
+        for n in self.graph().get_nodes() {
+            let (x0, x1, _, _) = Self::node_extent(&n.name, n.position, g);
+            let (cx, cy) = (ox + n.position.0 * g.pitch_x, oy + n.position.1 * g.pitch_y);
+            out.push((cx - g.node_w * 0.5, cy - g.node_h * 0.5, g.node_w, g.node_h));
+            let name_x = ox + x0 + g.node_w;
+            out.push((name_x, cy - font * 0.7, ox + x1 - name_x + font * 0.4, font * 1.4));
+        }
+        out
+    }
+
     /// How far a chain's outline stands out from its nodes and their
     /// names: a share of the body's height, so it scales with the zoom.
     pub fn chain_box_pad(&self) -> f32 {

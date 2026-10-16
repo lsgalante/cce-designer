@@ -4165,7 +4165,14 @@ after every batch, so a number under a plate stood over it, sharp, where
 the markers and wires beside it showed through frosted. Blurring it with
 the scene needs a text layer drawn ahead of the plates, which cce-ui does
 not have; under the pane tint a blurred 10 px number would not be read in
-any case. `a_point_number_under_a_plate_is_not_drawn` is the test.
+any case. `a_point_number_under_a_plate_is_not_drawn` is the test. **A number is behind the
+network's nodes** (since 2026-10-16): the overlay's node bodies and names
+are geometry in front of the scene, but the number is text, laid out after
+them, so it was drawn over them. `append_point_numbers` paints a number
+that meets one into what they leave of it (`render::uncovered`, a clip a
+piece, as the params HUD under the plates), from
+`State::network_node_covers` — each body as drawn and its name's floor.
+`a_point_number_is_behind_the_nodes`; checked in a shadow session.
 
 **What the 2D frame draws over the scene is placed by the camera as it
 is when the frame is painted** (`State::refresh_scene_view`, at the top of
