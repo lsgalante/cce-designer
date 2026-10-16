@@ -88,7 +88,7 @@ gone.)
 
 The main window runs an embedded MCP server on `127.0.0.1:3001`
 (`CCE_DESIGNER_MCP_PORT` overrides so a second instance can run alongside;
-`src/api.rs`), filed in cce-ui's MCP registry so the cce-claude popup finds
+`src/api.rs`), filed in cce-ui's MCP registry so the cce-code-agent popup finds
 it. `mcp_server()` carries the brief (`BRIEF`, sent as `instructions`) and
 classes every tool: `context` and `get_state` read; navigation, edits,
 `undo` and `redo` are Edit; `save`, `load`, `menu_click`, `run_command` and

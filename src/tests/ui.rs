@@ -6352,7 +6352,7 @@ fn test_mcp_tools_map_to_actions() {
     }
 }
 
-/// An unclassed tool makes the cce-claude popup ask before every call.
+/// An unclassed tool makes the cce-code-agent popup ask before every call.
 #[test]
 fn every_mcp_tool_is_classed() {
     let server = crate::api::mcp_server();
